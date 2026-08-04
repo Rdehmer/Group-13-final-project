@@ -1,0 +1,70 @@
+import type { ReactNode } from "react";
+
+const TONE: Record<string, string> = {
+  success: "badge-success",
+  warning: "badge-warning",
+  error: "badge-error",
+  info: "badge-info",
+  neutral: "badge-ghost",
+  critical: "badge-error",
+};
+
+export function StatusBadge({
+  label,
+  tone = "neutral",
+}: {
+  label: string;
+  tone?: keyof typeof TONE;
+}) {
+  return <span className={`badge badge-sm ${TONE[tone]}`}>{label}</span>;
+}
+
+export function statusTone(status: string): keyof typeof TONE {
+  const s = status.toLowerCase();
+  if (["critical", "past due", "disputed", "out of service", "canceled"].some((x) => s.includes(x)))
+    return "error";
+  if (["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue"].some((x) => s.includes(x)))
+    return "warning";
+  if (["completed", "paid", "active", "approved", "operational", "renewed"].some((x) => s.includes(x)))
+    return "success";
+  if (["draft", "requested", "scheduled", "sent"].some((x) => s.includes(x))) return "info";
+  return "neutral";
+}
+
+export function EmptyState({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="rounded-box border border-dashed border-base-300 bg-base-200/40 p-10 text-center">
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-2 text-sm opacity-70">{description}</p>
+      {action ? <div className="mt-4">{action}</div> : null}
+    </div>
+  );
+}
+
+export function StatCard({
+  label,
+  value,
+  hint,
+  danger,
+}: {
+  label: string;
+  value: string | number;
+  hint?: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className={`stat rounded-box bg-base-100 shadow ${danger ? "border border-error/40" : ""}`}>
+      <div className="stat-title">{label}</div>
+      <div className={`stat-value text-2xl ${danger ? "text-error" : ""}`}>{value}</div>
+      {hint ? <div className="stat-desc">{hint}</div> : null}
+    </div>
+  );
+}

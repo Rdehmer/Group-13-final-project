@@ -1,0 +1,246 @@
+export type UserRole =
+  | "administrator"
+  | "service_manager"
+  | "technician"
+  | "billing"
+  | "customer";
+
+export type Profile = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: UserRole;
+  customer_id: string | null;
+  hourly_cost_rate: number | null;
+  hourly_billing_rate: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Customer = {
+  id: string;
+  name: string;
+  primary_contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  billing_address: string | null;
+  service_address: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
+  status: "Active" | "Inactive" | "On Hold";
+  payment_terms: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Equipment = {
+  id: string;
+  customer_id: string;
+  name: string;
+  category: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  serial_number: string | null;
+  installation_date: string | null;
+  location: string | null;
+  operating_status: "Operational" | "Needs Service" | "Out of Service" | "Retired";
+  warranty_status: "Under Warranty" | "Warranty Expired" | "Not Covered" | "Unknown";
+  warranty_expiration_date: string | null;
+  last_service_date: string | null;
+  next_scheduled_service_date: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceContract = {
+  id: string;
+  customer_id: string;
+  name: string;
+  contract_type: string;
+  start_date: string;
+  end_date: string;
+  renewal_option: string | null;
+  billing_method: string;
+  contract_price: number;
+  payment_terms: string | null;
+  included_service_visits: number;
+  service_frequency: string | null;
+  included_labor_hours: number;
+  included_replacement_parts: number;
+  emergency_response_commitment: string | null;
+  warranty_terms: string | null;
+  cancellation_terms: string | null;
+  approval_requirements: string | null;
+  status: string;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkOrder = {
+  id: string;
+  work_order_number: string;
+  customer_id: string;
+  equipment_id: string | null;
+  contract_id: string | null;
+  work_order_type: string;
+  priority: "Low" | "Normal" | "High" | "Critical";
+  assigned_technician_id: string | null;
+  scheduled_date: string | null;
+  scheduled_start_time: string | null;
+  problem_description: string | null;
+  requested_service: string | null;
+  customer_approval_required: boolean;
+  estimated_labor_hours: number | null;
+  estimated_parts_cost: number | null;
+  estimated_total_cost: number | null;
+  warranty_coverage: string;
+  billing_status: string;
+  status: string;
+  technician_notes: string | null;
+  manager_notes: string | null;
+  work_performed: string | null;
+  equipment_condition: string | null;
+  arrival_at: string | null;
+  started_at: string | null;
+  paused_at: string | null;
+  completion_date: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  performed_before_approval: boolean;
+  under_expired_contract: boolean;
+  costs_after_billing: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Part = {
+  id: string;
+  part_number: string;
+  name: string;
+  category: string | null;
+  description: string | null;
+  quantity_on_hand: number;
+  reorder_level: number;
+  unit_cost: number;
+  standard_customer_price: number;
+  warranty_eligible: boolean;
+  supplier: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TechnicianLabor = {
+  id: string;
+  work_order_id: string;
+  technician_id: string;
+  work_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  regular_hours: number;
+  overtime_hours: number;
+  hourly_cost_rate: number;
+  overtime_cost_rate: number;
+  customer_billing_rate: number;
+  billable_status: string;
+  invoiced: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkOrderPart = {
+  id: string;
+  work_order_id: string;
+  part_id: string;
+  quantity_used: number;
+  unit_cost: number;
+  customer_price: number;
+  warranty_covered_amount: number;
+  billable_amount: number;
+  date_used: string;
+  manager_override: boolean;
+  invoiced: boolean;
+  created_at: string;
+};
+
+export type AdditionalWorkRequest = {
+  id: string;
+  work_order_id: string;
+  description: string;
+  recommended_repair: string | null;
+  estimated_labor_hours: number | null;
+  estimated_parts: number | null;
+  estimated_additional_charge: number | null;
+  supporting_notes: string | null;
+  approval_status: string;
+  requested_by: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Invoice = {
+  id: string;
+  invoice_number: string;
+  customer_id: string;
+  contract_id: string | null;
+  work_order_id: string | null;
+  invoice_date: string;
+  due_date: string;
+  billing_period: string | null;
+  labor_charges: number;
+  parts_charges: number;
+  recurring_service_charge: number;
+  additional_charges: number;
+  warranty_deductions: number;
+  discounts: number;
+  tax: number;
+  invoice_total: number;
+  amount_paid: number;
+  remaining_balance: number;
+  status: string;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Payment = {
+  id: string;
+  payment_number: string;
+  customer_id: string;
+  invoice_id: string;
+  payment_date: string;
+  payment_method: string;
+  payment_amount: number;
+  reference_number: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type CompanySettings = {
+  id: string;
+  company_name: string;
+  support_email: string | null;
+  default_tax_rate: number;
+  overtime_multiplier: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  administrator: "Administrator",
+  service_manager: "Service Manager",
+  technician: "Technician",
+  billing: "Billing Employee",
+  customer: "Customer",
+};
