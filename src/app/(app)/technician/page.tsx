@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { ProofOfCompletion } from "@/components/ProofOfCompletion";
 import type { Part, Profile, TechnicianLabor, WorkOrder, WorkOrderPart, AdditionalWorkRequest } from "@/lib/types";
 
 const FIXED_BILLING_RATE = 75;
@@ -32,6 +33,7 @@ export default function TechnicianPage() {
   const [partEditError, setPartEditError] = useState<string | null>(null);
   const [partMessage, setPartMessage] = useState<string | null>(null);
   const [awrForm, setAwrForm] = useState({ description: "" });
+  const [showCompletionProof, setShowCompletionProof] = useState(false);
   const [busy, setBusy] = useState(false);
 
   async function loadProfile() {
@@ -224,10 +226,26 @@ export default function TechnicianPage() {
     setBusy(false);
   }
 
+  async function handleCompleted() {
+    if (!selectedId) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "completed_with_proof",
+      recordType: "work_order",
+      recordId: selectedId,
+      newValue: "Completed",
+    });
+    setShowCompletionProof(false);
+    setSelectedId(null);
+    await loadWorkOrders(profile?.id, profile?.role);
+  }
+
   function selectWorkOrder(workOrderId: string) {
     setEditingPartUsage(null);
     setPartEditError(null);
     setPartMessage(null);
+    setShowCompletionProof(false);
     setSelectedId(workOrderId);
   }
 
@@ -291,6 +309,16 @@ export default function TechnicianPage() {
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => woAction("start")} disabled={busy}>Start Work</button>
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => woAction("pause")} disabled={busy}>Pause</button>
                     <button type="button" className="btn btn-primary btn-sm" onClick={() => woAction("ready")} disabled={busy}>Ready for Review</button>
+                    {profile?.role === "technician" && selected.assigned_technician_id === profile.id ? (
+                      <button
+                        type="button"
+                        className="btn btn-success btn-sm"
+                        onClick={() => setShowCompletionProof(true)}
+                        disabled={busy}
+                      >
+                        Mark as Completed
+                      </button>
+                    ) : null}
                     <Link href={`/work-orders/${selected.id}`} className="btn btn-ghost btn-sm">Full Detail</Link>
                   </div>
                 </div>
@@ -407,6 +435,16 @@ export default function TechnicianPage() {
                   ) : null}
                 </div>
               </div>
+
+              {showCompletionProof && profile ? (
+                <ProofOfCompletion
+                  jobId={selected.id}
+                  technicianId={profile.id}
+                  requirement={selected.completion_proof_requirement ?? "photo_or_signature"}
+                  onCancel={() => setShowCompletionProof(false)}
+                  onCompleted={handleCompleted}
+                />
+              ) : null}
             </>
           )}
         </div>
