@@ -12,6 +12,8 @@ import {
   Package,
   Clock,
   CheckCircle2,
+  Save,
+  Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
@@ -67,13 +69,17 @@ export default function JobDetailPage() {
   const [techNotes, setTechNotes] = useState("");
   const [assignTech, setAssignTech] = useState("");
   const [scheduleDate, setScheduleDate] = useState("");
-  const [laborForm, setLaborForm] = useState({ regular_hours: "1", overtime_hours: "0", notes: "" });
+  const [problemDescription, setProblemDescription] = useState("");
+  const [requestedService, setRequestedService] = useState("");
+  const [workOrderType, setWorkOrderType] = useState("Preventive Maintenance");
+  const [priority, setPriority] = useState<WorkOrder["priority"]>("Normal");
+  const [laborForm, setLaborForm] = useState({ regular_hours: "1", overtime_hours: "0", notes: "", billing_rate: "95" });
   const [partForm, setPartForm] = useState({ part_id: "", quantity_used: "1" });
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "labor" | "parts" | "approvals" | "billing">("overview");
-
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
   async function load() {
     const [{ data }, { data: { user } }, { data: settings }] = await Promise.all([
       supabase
@@ -93,6 +99,10 @@ export default function JobDetailPage() {
       setTechNotes(w.technician_notes ?? "");
       setAssignTech(w.assigned_technician_id ?? "");
       setScheduleDate(w.scheduled_date ?? "");
+      setProblemDescription(w.problem_description ?? "");
+      setRequestedService(w.requested_service ?? "");
+      setWorkOrderType(w.work_order_type || "Preventive Maintenance");
+      setPriority(w.priority || "Normal");
     }
     if (settings?.default_tax_rate) setTaxRate(Number(settings.default_tax_rate));
 
@@ -140,13 +150,20 @@ export default function JobDetailPage() {
   }, [id]);
 
   const isManager = profile?.role === "administrator" || profile?.role === "service_manager";
-  const isBilling = profile?.role === "billing" || profile?.role === "administrator";
+  const isBillingRole = profile?.role === "billing";
+  const isBilling = isBillingRole || profile?.role === "administrator";
   const isTech =
     profile?.role === "technician" ||
     profile?.role === "administrator" ||
     profile?.role === "service_manager";
   const canEditField = isManager || profile?.role === "technician";
-
+  const canEditJobDetails = isManager || isBillingRole;
+  const openForField = wo ? !["Completed", "Closed", "Canceled"].includes(wo.status) : false;
+  const canEditLines = wo
+    ? (isManager || isBillingRole
+        ? !["Closed", "Canceled"].includes(wo.status)
+        : profile?.role === "technician" && openForField)
+    : false;
   async function patchJob(updates: Record<string, unknown>, activity: string, newValue?: string) {
     setSaving(true);
     setError(null);
@@ -170,6 +187,29 @@ export default function JobDetailPage() {
     await load();
     setSaving(false);
     return true;
+  }
+
+  async function saveJobDetails() {
+    await patchJob(
+      {
+        problem_description: problemDescription || null,
+        requested_service: requestedService || null,
+        work_order_type: workOrderType,
+        priority,
+        assigned_technician_id: assignTech || null,
+        scheduled_date: scheduleDate || null,
+        status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
+          ? wo?.status
+          : assignTech && scheduleDate
+            ? "Scheduled"
+            : assignTech
+              ? "Assigned"
+              : wo?.status ?? "Requested",
+      },
+      "job_details_saved",
+      workOrderType,
+    );
+    setSavedMsg("Job details saved");
   }
 
   async function saveAssignment() {
@@ -253,11 +293,19 @@ export default function JobDetailPage() {
     e.preventDefault();
     if (!profile) return;
     setSaving(true);
-    const rate = profile.hourly_cost_rate ?? 45;
-    const billing = profile.hourly_billing_rate ?? 95;
-    await supabase.from("technician_labor").insert({
+    setError(null);
+    const techId =
+      profile.role === "technician"
+        ? profile.id
+        : assignTech || wo?.assigned_technician_id || profile.id;
+    const techProfile =
+      technicians.find((t) => t.id === techId) ||
+      (techId === profile.id ? profile : null);
+    const rate = techProfile?.hourly_cost_rate ?? profile.hourly_cost_rate ?? 45;
+    const billing = Number(laborForm.billing_rate) || techProfile?.hourly_billing_rate || profile.hourly_billing_rate || 95;
+    const { error: insertError } = await supabase.from("technician_labor").insert({
       work_order_id: id,
-      technician_id: profile.id,
+      technician_id: techId,
       work_date: new Date().toISOString().slice(0, 10),
       regular_hours: Number(laborForm.regular_hours),
       overtime_hours: Number(laborForm.overtime_hours),
@@ -265,7 +313,13 @@ export default function JobDetailPage() {
       overtime_cost_rate: rate * 1.5,
       customer_billing_rate: billing,
       notes: laborForm.notes || null,
+      invoiced: false,
     });
+    if (insertError) {
+      setError(insertError.message);
+      setSaving(false);
+      return;
+    }
     const { data: { user } } = await supabase.auth.getUser();
     await logActivity(supabase, {
       userId: user?.id ?? null,
@@ -274,7 +328,67 @@ export default function JobDetailPage() {
       recordId: id,
       newValue: `${laborForm.regular_hours}h`,
     });
-    setLaborForm({ regular_hours: "1", overtime_hours: "0", notes: "" });
+    setLaborForm({ regular_hours: "1", overtime_hours: "0", notes: "", billing_rate: String(billing) });
+    await load();
+    setSaving(false);
+  }
+
+  function patchLaborLocal(laborId: string, patch: Partial<TechnicianLabor>) {
+    setLabor((rows) => rows.map((r) => (r.id === laborId ? { ...r, ...patch } : r)));
+  }
+
+  async function saveLaborRow(row: TechnicianLabor) {
+    if (row.invoiced) return;
+    setSaving(true);
+    setError(null);
+    const { error: updError } = await supabase
+      .from("technician_labor")
+      .update({
+        work_date: row.work_date,
+        regular_hours: Number(row.regular_hours),
+        overtime_hours: Number(row.overtime_hours),
+        customer_billing_rate: Number(row.customer_billing_rate),
+        notes: row.notes || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id);
+    if (updError) {
+      setError(updError.message);
+      setSaving(false);
+      return;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "labor_updated",
+      recordType: "work_order",
+      recordId: id,
+      newValue: row.id,
+    });
+    setSavedMsg("Labor row saved");
+    await load();
+    setSaving(false);
+  }
+
+  async function deleteLaborRow(row: TechnicianLabor) {
+    if (row.invoiced) return;
+    if (!window.confirm("Delete this labor entry?")) return;
+    setSaving(true);
+    setError(null);
+    const { error: delError } = await supabase.from("technician_labor").delete().eq("id", row.id);
+    if (delError) {
+      setError(delError.message);
+      setSaving(false);
+      return;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "labor_deleted",
+      recordType: "work_order",
+      recordId: id,
+      newValue: row.id,
+    });
     await load();
     setSaving(false);
   }
@@ -283,21 +397,34 @@ export default function JobDetailPage() {
     e.preventDefault();
     if (!partForm.part_id) return;
     setSaving(true);
+    setError(null);
     const part = inventory.find((p) => p.id === partForm.part_id);
     if (!part) {
       setSaving(false);
       return;
     }
     const qty = Number(partForm.quantity_used);
+    if (part.quantity_on_hand < qty) {
+      setError(`Not enough stock for ${part.name} (on hand: ${part.quantity_on_hand}).`);
+      setSaving(false);
+      return;
+    }
     const billable = part.standard_customer_price * qty;
-    await supabase.from("work_order_parts").insert({
+    const { error: insertError } = await supabase.from("work_order_parts").insert({
       work_order_id: id,
       part_id: part.id,
       quantity_used: qty,
       unit_cost: part.unit_cost,
       customer_price: part.standard_customer_price,
+      warranty_covered_amount: 0,
       billable_amount: billable,
+      invoiced: false,
     });
+    if (insertError) {
+      setError(insertError.message);
+      setSaving(false);
+      return;
+    }
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
     const { data: { user } } = await supabase.auth.getUser();
     await logActivity(supabase, {
@@ -308,6 +435,117 @@ export default function JobDetailPage() {
       newValue: part.name,
     });
     setPartForm({ part_id: "", quantity_used: "1" });
+    await load();
+    setSaving(false);
+  }
+
+  function patchPartLocal(partRowId: string, patch: Partial<WorkOrderPart>) {
+    setParts((rows) =>
+      rows.map((r) => {
+        if (r.id !== partRowId) return r;
+        const next = { ...r, ...patch };
+        if (
+          "quantity_used" in patch ||
+          "customer_price" in patch ||
+          "warranty_covered_amount" in patch
+        ) {
+          const qty = Number(next.quantity_used);
+          const price = Number(next.customer_price);
+          const warranty = Number(next.warranty_covered_amount) || 0;
+          next.billable_amount = Math.max(0, qty * price - warranty);
+        } else if ("billable_amount" in patch) {
+          next.billable_amount = Number(patch.billable_amount);
+        }
+        return next;
+      }),
+    );
+  }
+
+  async function savePartRow(row: WorkOrderPart & { parts?: Part }) {
+    if (row.invoiced) return;
+    setSaving(true);
+    setError(null);
+    const stock = inventory.find((p) => p.id === row.part_id);
+    const { data: existing } = await supabase
+      .from("work_order_parts")
+      .select("quantity_used")
+      .eq("id", row.id)
+      .single();
+    const oldQty = Number(existing?.quantity_used ?? row.quantity_used);
+    const newQty = Number(row.quantity_used);
+    const delta = oldQty - newQty;
+
+    if (stock && delta < 0 && stock.quantity_on_hand < -delta && !row.manager_override && !isManager) {
+      setError(`Not enough stock to increase qty (on hand: ${stock.quantity_on_hand}).`);
+      setSaving(false);
+      return;
+    }
+
+    const warranty = Number(row.warranty_covered_amount) || 0;
+    const billable = Number(row.billable_amount);
+
+    const { error: updError } = await supabase
+      .from("work_order_parts")
+      .update({
+        quantity_used: newQty,
+        customer_price: Number(row.customer_price),
+        warranty_covered_amount: warranty,
+        billable_amount: billable,
+        manager_override: row.manager_override || (delta < 0 && isManager),
+      })
+      .eq("id", row.id);
+    if (updError) {
+      setError(updError.message);
+      setSaving(false);
+      return;
+    }
+
+    if (stock && delta !== 0) {
+      await supabase
+        .from("parts")
+        .update({ quantity_on_hand: stock.quantity_on_hand + delta })
+        .eq("id", row.part_id);
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "part_updated",
+      recordType: "work_order",
+      recordId: id,
+      newValue: row.parts?.name ?? row.part_id,
+    });
+    setSavedMsg("Parts row saved");
+    await load();
+    setSaving(false);
+  }
+
+  async function deletePartRow(row: WorkOrderPart & { parts?: Part }) {
+    if (row.invoiced) return;
+    if (!window.confirm("Delete this parts usage and return quantity to stock?")) return;
+    setSaving(true);
+    setError(null);
+    const stock = inventory.find((p) => p.id === row.part_id);
+    const { error: delError } = await supabase.from("work_order_parts").delete().eq("id", row.id);
+    if (delError) {
+      setError(delError.message);
+      setSaving(false);
+      return;
+    }
+    if (stock) {
+      await supabase
+        .from("parts")
+        .update({ quantity_on_hand: stock.quantity_on_hand + Number(row.quantity_used) })
+        .eq("id", row.part_id);
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "part_deleted",
+      recordType: "work_order",
+      recordId: id,
+      newValue: row.parts?.name ?? row.part_id,
+    });
     await load();
     setSaving(false);
   }
@@ -389,7 +627,6 @@ export default function JobDetailPage() {
   const partsTotal = sumPartsCharges(parts as WorkOrderPart[]);
   const estBillable = laborTotal + partsTotal;
   const urgent = isJobUrgent(wo);
-  const openForField = !["Completed", "Closed", "Canceled"].includes(wo.status);
 
   return (
     <div>
@@ -414,6 +651,7 @@ export default function JobDetailPage() {
       </div>
 
       {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}
+      {savedMsg ? <div className="alert alert-success mb-4 text-sm">{savedMsg}</div> : null}
 
       {urgent ? (
         <div role="alert" className="alert alert-error mb-4">
@@ -524,13 +762,110 @@ export default function JobDetailPage() {
                       <p className="font-medium">{wo.equipment?.name ?? "Not linked"}</p>
                       {wo.equipment?.location ? <p className="opacity-70">{wo.equipment.location}</p> : null}
                     </div>
-                    <div>
-                      <p className="opacity-60">Problem / request</p>
-                      <p>{wo.problem_description ?? wo.requested_service ?? "—"}</p>
-                    </div>
                   </div>
                 </div>
               </div>
+
+              {canEditJobDetails && wo.status !== "Canceled" ? (
+                <div className="card bg-base-100 shadow">
+                  <div className="card-body space-y-3">
+                    <h2 className="card-title text-base gap-2">
+                      <Wrench className="h-4 w-4" /> Job details
+                    </h2>
+                    <p className="text-xs opacity-60">
+                      Managers and billing can update problem, type, priority, schedule, and assignment.
+                    </p>
+                    <FormRow label="Problem description">
+                      <textarea
+                        className="textarea textarea-bordered w-full"
+                        rows={2}
+                        value={problemDescription}
+                        onChange={(e) => setProblemDescription(e.target.value)}
+                        disabled={wo.status === "Closed"}
+                      />
+                    </FormRow>
+                    <FormRow label="Requested service">
+                      <input
+                        className="input input-bordered w-full"
+                        value={requestedService}
+                        onChange={(e) => setRequestedService(e.target.value)}
+                        disabled={wo.status === "Closed"}
+                      />
+                    </FormRow>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FormRow label="Work order type">
+                        <select
+                          className="select select-bordered w-full"
+                          value={workOrderType}
+                          onChange={(e) => setWorkOrderType(e.target.value)}
+                          disabled={wo.status === "Closed"}
+                        >
+                          <option>Preventive Maintenance</option>
+                          <option>Repair</option>
+                          <option>Emergency</option>
+                          <option>Inspection</option>
+                          <option>Install</option>
+                          <option>Other</option>
+                        </select>
+                      </FormRow>
+                      <FormRow label="Priority">
+                        <select
+                          className="select select-bordered w-full"
+                          value={priority}
+                          onChange={(e) => setPriority(e.target.value as WorkOrder["priority"])}
+                          disabled={wo.status === "Closed"}
+                        >
+                          <option value="Low">Low</option>
+                          <option value="Normal">Normal</option>
+                          <option value="High">High</option>
+                          <option value="Critical">Critical</option>
+                        </select>
+                      </FormRow>
+                      <FormRow label="Technician">
+                        <select
+                          className="select select-bordered w-full"
+                          value={assignTech}
+                          onChange={(e) => setAssignTech(e.target.value)}
+                          disabled={wo.status === "Closed"}
+                        >
+                          <option value="">Unassigned</option>
+                          {technicians.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.full_name ?? t.email}
+                            </option>
+                          ))}
+                        </select>
+                      </FormRow>
+                      <FormRow label="Schedule date">
+                        <input
+                          type="date"
+                          className="input input-bordered w-full"
+                          value={scheduleDate}
+                          onChange={(e) => setScheduleDate(e.target.value)}
+                          disabled={wo.status === "Closed"}
+                        />
+                      </FormRow>
+                    </div>
+                    {wo.status !== "Closed" ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm gap-1"
+                        onClick={saveJobDetails}
+                        disabled={saving}
+                      >
+                        <Save className="h-4 w-4" /> Save job details
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="card bg-base-100 shadow">
+                  <div className="card-body text-sm">
+                    <p className="opacity-60">Problem / request</p>
+                    <p>{wo.problem_description ?? wo.requested_service ?? "—"}</p>
+                  </div>
+                </div>
+              )}
 
               <div className="card bg-base-100 shadow">
                 <div className="card-body space-y-3">
@@ -594,7 +929,7 @@ export default function JobDetailPage() {
                 <h2 className="card-title text-base gap-2">
                   <Clock className="h-4 w-4" /> Labor
                 </h2>
-                {isTech && openForField ? (
+                {canEditLines ? (
                   <form onSubmit={addLabor} className="mb-4 grid gap-3 sm:grid-cols-2">
                     <FormRow label="Regular hrs">
                       <input
@@ -616,6 +951,16 @@ export default function JobDetailPage() {
                         onChange={(e) => setLaborForm({ ...laborForm, overtime_hours: e.target.value })}
                       />
                     </FormRow>
+                    <FormRow label="Billing rate">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="input input-bordered w-full"
+                        value={laborForm.billing_rate}
+                        onChange={(e) => setLaborForm({ ...laborForm, billing_rate: e.target.value })}
+                      />
+                    </FormRow>
                     <FormRow label="Notes">
                       <input
                         className="input input-bordered w-full"
@@ -623,7 +968,7 @@ export default function JobDetailPage() {
                         onChange={(e) => setLaborForm({ ...laborForm, notes: e.target.value })}
                       />
                     </FormRow>
-                    <div className="flex items-end">
+                    <div className="flex items-end sm:col-span-2">
                       <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
                         Add labor
                       </button>
@@ -631,7 +976,7 @@ export default function JobDetailPage() {
                   </form>
                 ) : null}
                 {labor.length === 0 ? (
-                  <EmptyState title="No labor logged" description="Technicians add hours from the field or here." />
+                  <EmptyState title="No labor logged" description="Technicians, managers, or billing can add hours here." />
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="table table-sm">
@@ -643,6 +988,7 @@ export default function JobDetailPage() {
                           <th>Rate</th>
                           <th className="text-right">Billable</th>
                           <th>Notes</th>
+                          {canEditLines ? <th>Actions</th> : null}
                         </tr>
                       </thead>
                       <tbody>
@@ -650,14 +996,110 @@ export default function JobDetailPage() {
                           const amount =
                             Number(l.regular_hours) * Number(l.customer_billing_rate) +
                             Number(l.overtime_hours) * Number(l.customer_billing_rate) * 1.5;
+                          const locked = Boolean(l.invoiced);
                           return (
                             <tr key={l.id}>
-                              <td>{l.work_date}</td>
-                              <td>{l.regular_hours}</td>
-                              <td>{l.overtime_hours}</td>
-                              <td>{formatMoney(l.customer_billing_rate)}</td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="date"
+                                    className="input input-bordered input-xs w-[9.5rem]"
+                                    value={l.work_date}
+                                    onChange={(e) => patchLaborLocal(l.id, { work_date: e.target.value })}
+                                  />
+                                ) : (
+                                  l.work_date
+                                )}
+                              </td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.25"
+                                    className="input input-bordered input-xs w-20"
+                                    value={l.regular_hours}
+                                    onChange={(e) =>
+                                      patchLaborLocal(l.id, { regular_hours: Number(e.target.value) })
+                                    }
+                                  />
+                                ) : (
+                                  l.regular_hours
+                                )}
+                              </td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.25"
+                                    className="input input-bordered input-xs w-20"
+                                    value={l.overtime_hours}
+                                    onChange={(e) =>
+                                      patchLaborLocal(l.id, { overtime_hours: Number(e.target.value) })
+                                    }
+                                  />
+                                ) : (
+                                  l.overtime_hours
+                                )}
+                              </td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="input input-bordered input-xs w-24"
+                                    value={l.customer_billing_rate}
+                                    onChange={(e) =>
+                                      patchLaborLocal(l.id, { customer_billing_rate: Number(e.target.value) })
+                                    }
+                                  />
+                                ) : (
+                                  formatMoney(l.customer_billing_rate)
+                                )}
+                              </td>
                               <td className="text-right">{formatMoney(amount)}</td>
-                              <td className="max-w-[10rem] truncate">{l.notes ?? "—"}</td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    className="input input-bordered input-xs w-full min-w-[6rem]"
+                                    value={l.notes ?? ""}
+                                    onChange={(e) => patchLaborLocal(l.id, { notes: e.target.value })}
+                                  />
+                                ) : (
+                                  <span className="max-w-[10rem] truncate inline-block">{l.notes ?? "—"}</span>
+                                )}
+                                {locked ? <span className="badge badge-ghost badge-xs ml-1">Invoiced</span> : null}
+                              </td>
+                              {canEditLines ? (
+                                <td>
+                                  {locked ? (
+                                    <span className="text-xs opacity-50">Locked</span>
+                                  ) : (
+                                    <div className="flex gap-1">
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        disabled={saving}
+                                        onClick={() => saveLaborRow(l)}
+                                        aria-label="Save labor"
+                                      >
+                                        <Save className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs text-error"
+                                        disabled={saving}
+                                        onClick={() => deleteLaborRow(l)}
+                                        aria-label="Delete labor"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              ) : null}
                             </tr>
                           );
                         })}
@@ -668,7 +1110,7 @@ export default function JobDetailPage() {
                             Labor total
                           </td>
                           <td className="text-right font-bold">{formatMoney(laborTotal)}</td>
-                          <td />
+                          <td colSpan={canEditLines ? 2 : 1} />
                         </tr>
                       </tfoot>
                     </table>
@@ -684,7 +1126,7 @@ export default function JobDetailPage() {
                 <h2 className="card-title text-base gap-2">
                   <Package className="h-4 w-4" /> Parts & materials
                 </h2>
-                {isTech && openForField ? (
+                {canEditLines ? (
                   <form onSubmit={addPart} className="mb-4 grid gap-3 sm:grid-cols-2">
                     <FormRow label="Part">
                       <select
@@ -726,24 +1168,126 @@ export default function JobDetailPage() {
                         <tr>
                           <th>Part</th>
                           <th>Qty</th>
+                          <th>Unit price</th>
+                          <th>Warranty</th>
                           <th className="text-right">Billable</th>
+                          {canEditLines ? <th>Actions</th> : null}
                         </tr>
                       </thead>
                       <tbody>
-                        {parts.map((p) => (
-                          <tr key={p.id}>
-                            <td>{p.parts?.name ?? p.part_id}</td>
-                            <td>{p.quantity_used}</td>
-                            <td className="text-right">{formatMoney(p.billable_amount)}</td>
-                          </tr>
-                        ))}
+                        {parts.map((p) => {
+                          const locked = Boolean(p.invoiced);
+                          return (
+                            <tr key={p.id}>
+                              <td>
+                                {p.parts?.name ?? p.part_id}
+                                {locked ? <span className="badge badge-ghost badge-xs ml-1">Invoiced</span> : null}
+                              </td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    className="input input-bordered input-xs w-20"
+                                    value={p.quantity_used}
+                                    onChange={(e) =>
+                                      patchPartLocal(p.id, { quantity_used: Number(e.target.value) })
+                                    }
+                                  />
+                                ) : (
+                                  p.quantity_used
+                                )}
+                              </td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="input input-bordered input-xs w-24"
+                                    value={p.customer_price}
+                                    onChange={(e) =>
+                                      patchPartLocal(p.id, { customer_price: Number(e.target.value) })
+                                    }
+                                  />
+                                ) : (
+                                  formatMoney(p.customer_price)
+                                )}
+                              </td>
+                              <td>
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="input input-bordered input-xs w-24"
+                                    value={p.warranty_covered_amount}
+                                    onChange={(e) =>
+                                      patchPartLocal(p.id, {
+                                        warranty_covered_amount: Number(e.target.value),
+                                      })
+                                    }
+                                  />
+                                ) : (
+                                  formatMoney(p.warranty_covered_amount)
+                                )}
+                              </td>
+                              <td className="text-right">
+                                {canEditLines && !locked ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="input input-bordered input-xs w-24 text-right"
+                                    value={p.billable_amount}
+                                    onChange={(e) =>
+                                      patchPartLocal(p.id, { billable_amount: Number(e.target.value) })
+                                    }
+                                  />
+                                ) : (
+                                  formatMoney(p.billable_amount)
+                                )}
+                              </td>
+                              {canEditLines ? (
+                                <td>
+                                  {locked ? (
+                                    <span className="text-xs opacity-50">Locked</span>
+                                  ) : (
+                                    <div className="flex gap-1">
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        disabled={saving}
+                                        onClick={() => savePartRow(p)}
+                                        aria-label="Save part"
+                                      >
+                                        <Save className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs text-error"
+                                        disabled={saving}
+                                        onClick={() => deletePartRow(p)}
+                                        aria-label="Delete part"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              ) : null}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr>
-                          <td colSpan={2} className="font-medium">
+                          <td colSpan={4} className="font-medium">
                             Parts total
                           </td>
                           <td className="text-right font-bold">{formatMoney(partsTotal)}</td>
+                          {canEditLines ? <td /> : null}
                         </tr>
                       </tfoot>
                     </table>
@@ -895,7 +1439,7 @@ export default function JobDetailPage() {
               <h2 className="card-title text-base gap-2">
                 <Calendar className="h-4 w-4" /> Dispatch
               </h2>
-              {isManager && openForField ? (
+              {canEditJobDetails && openForField ? (
                 <>
                   <FormRow label="Technician">
                     <select

@@ -52,6 +52,7 @@ export default function InvoiceDetailPage() {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [notes, setNotes] = useState("");
+  const [addKind, setAddKind] = useState<EditableInvoiceLine["kind"]>("additional");
 
   async function load() {
     const [{ data }, { data: pay }, { data: settings }] = await Promise.all([
@@ -324,11 +325,30 @@ export default function InvoiceDetailPage() {
       {savedMsg ? <div className="alert alert-success mb-4 text-sm">{savedMsg}</div> : null}
 
       {canEdit ? (
-        <div className="alert alert-info mb-4 text-sm">
-          <span>
-            This invoice is unsent. Edit line items below, then <strong>Save</strong> or <strong>Send</strong>.
-            Tax is recalculated at {(taxRate * 100).toFixed(2)}%.
-          </span>
+        <div className="alert alert-info mb-4 sticky top-16 z-20 text-sm shadow-sm">
+          <div>
+            <p className="font-semibold">Edit draft invoice</p>
+            <p>
+              You can change line items below. Qty × Rate auto-fills Amount (or type Amount directly). Totals and tax
+              update live at {(taxRate * 100).toFixed(2)}%. Use <strong>Save line items</strong> or <strong>Send</strong>.
+              After send, lines are locked unless you <strong>Revert to draft</strong>.
+            </p>
+          </div>
+        </div>
+      ) : inv.status !== "Canceled" && inv.status !== "Paid" ? (
+        <div className="alert alert-warning mb-4 text-sm">
+          <div>
+            <p className="font-semibold">Line items locked</p>
+            <p>
+              This invoice is <strong>{inv.status}</strong>, so line items cannot be edited.
+              {(inv.status === "Sent" || inv.status === "Partially Paid") ? (
+                <>
+                  {" "}
+                  Click <strong>Revert to draft</strong> above to unlock editing, then save and send again when ready.
+                </>
+              ) : null}
+            </p>
+          </div>
         </div>
       ) : null}
 
@@ -408,20 +428,31 @@ export default function InvoiceDetailPage() {
 
         <div className="px-6 py-4 sm:px-8">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">Line items</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">
+              Line items {canEdit ? <span className="badge badge-info badge-sm ml-2 normal-case">Editable</span> : null}
+            </h2>
             {canEdit ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="select select-bordered select-xs"
+                  value={addKind}
+                  onChange={(e) => setAddKind(e.target.value as EditableInvoiceLine["kind"])}
+                  aria-label="Line type to add"
+                >
+                  {EDITABLE_LINE_KINDS.map((k) => (
+                    <option key={k.value} value={k.value}>
+                      {k.label}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="btn btn-primary btn-xs gap-1" onClick={() => addLine(addKind)}>
+                  <Plus className="h-3 w-3" /> Add line
+                </button>
                 <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => addLine("labor")}>
                   <Plus className="h-3 w-3" /> Labor
                 </button>
                 <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => addLine("parts")}>
                   <Plus className="h-3 w-3" /> Parts
-                </button>
-                <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => addLine("additional")}>
-                  <Plus className="h-3 w-3" /> Charge
-                </button>
-                <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => addLine("discount")}>
-                  <Plus className="h-3 w-3" /> Discount
                 </button>
               </div>
             ) : null}
@@ -557,11 +588,14 @@ export default function InvoiceDetailPage() {
           {canEdit ? (
             <p className="mt-2 text-xs opacity-60">
               Tip: enter Qty and Rate to auto-calc amount, or type Amount directly. Warranty and discounts reduce the
-              subtotal.
+              subtotal. Keep at least one line; $0 lines are allowed until you adjust them.
             </p>
           ) : null}
 
-          <div className="mt-6 ml-auto max-w-xs space-y-2 text-sm">
+          <div className="mt-6 ml-auto max-w-sm rounded-box border border-base-300 bg-base-200/40 p-4 space-y-2 text-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide opacity-70">
+              {canEdit ? "Live totals (unsaved until you save)" : "Totals"}
+            </p>
             {liveTotals ? (
               <>
                 <div className="flex justify-between text-xs opacity-70">
