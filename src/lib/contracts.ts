@@ -41,6 +41,8 @@ export const EMERGENCY_SLA_OPTIONS = [
   "Standard (best effort)",
 ] as const;
 
+export type ContractTierId = "gold" | "silver" | "bronze";
+
 export type ContractRequestFormState = {
   contract_type: string;
   start_date: string;
@@ -57,6 +59,124 @@ export type ContractRequestFormState = {
   approval_requirements: string;
   notes: string;
 };
+
+export type ContractTier = {
+  id: ContractTierId;
+  name: string;
+  tagline: string;
+  coverages: string[];
+  recommended?: boolean;
+  formDefaults: Partial<Omit<ContractRequestFormState, "equipment_ids" | "start_date" | "end_date">>;
+};
+
+export const CONTRACT_TIERS: ContractTier[] = [
+  {
+    id: "gold",
+    name: "Gold",
+    tagline: "Full uptime protection",
+    recommended: true,
+    coverages: [
+      "12 scheduled visits per year (monthly PM)",
+      "48 included labor hours",
+      "$2,500 parts allowance",
+      "4 business hour emergency response",
+      "Priority dispatch and after-hours coverage",
+      "Corrective repairs within allowance",
+      "Wear parts and consumables on PM visits",
+      "OEM warranty coordination",
+      "Unlimited covered equipment on account",
+      "Annual performance summary",
+      "Auto-renew eligible",
+    ],
+    formDefaults: {
+      contract_type: "Full-Service Maintenance",
+      renewal_option: "Auto-renew",
+      included_service_visits: "12",
+      service_frequency: "Monthly",
+      included_labor_hours: "48",
+      included_replacement_parts: "2500",
+      emergency_response_commitment: "4 business hours",
+      billing_method: "Monthly Recurring Charge",
+      payment_terms: "Net 30",
+      approval_requirements: "Manager approval for extras beyond allowance",
+    },
+  },
+  {
+    id: "silver",
+    name: "Silver",
+    tagline: "Balanced PM and limited repair",
+    coverages: [
+      "4 scheduled visits per year (quarterly PM)",
+      "16 included labor hours",
+      "$800 parts allowance",
+      "Next business day emergency response",
+      "PM inspections, cleaning, and tune-ups",
+      "Limited corrective work within allowance",
+      "Standard business-hours dispatch",
+      "Consumables on PM visits only",
+      "Manager approval for work exceeding allowance",
+    ],
+    formDefaults: {
+      contract_type: "Preventive Maintenance",
+      renewal_option: "Manual renewal",
+      included_service_visits: "4",
+      service_frequency: "Quarterly",
+      included_labor_hours: "16",
+      included_replacement_parts: "800",
+      emergency_response_commitment: "Next business day",
+      billing_method: "Monthly Recurring Charge",
+      payment_terms: "Net 30",
+      approval_requirements: "Manager approval for extras over $500",
+    },
+  },
+  {
+    id: "bronze",
+    name: "Bronze",
+    tagline: "Essential inspections only",
+    coverages: [
+      "2 scheduled visits per year (semi-annual PM)",
+      "4 included labor hours",
+      "No included parts — billed separately",
+      "Standard (best effort) emergency response",
+      "Semi-annual inspections and basic tune-ups",
+      "Corrective work billed time and materials",
+      "Business-hours scheduling only",
+      "Customer approval required before non-PM dispatch",
+    ],
+    formDefaults: {
+      contract_type: "Preventive Maintenance",
+      renewal_option: "Manual renewal",
+      included_service_visits: "2",
+      service_frequency: "Semi-Annual",
+      included_labor_hours: "4",
+      included_replacement_parts: "0",
+      emergency_response_commitment: "Standard (best effort)",
+      billing_method: "Per-Service Charge",
+      payment_terms: "Net 30",
+      approval_requirements: "Customer approval required before non-PM dispatch",
+    },
+  },
+];
+
+export function getContractTier(tierId: ContractTierId): ContractTier {
+  const tier = CONTRACT_TIERS.find((t) => t.id === tierId);
+  if (!tier) throw new Error(`Unknown contract tier: ${tierId}`);
+  return tier;
+}
+
+export function applyTierToFormState(
+  tierId: ContractTierId,
+  form: ContractRequestFormState,
+): ContractRequestFormState {
+  const tier = getContractTier(tierId);
+  return {
+    ...form,
+    ...tier.formDefaults,
+    equipment_ids: form.equipment_ids,
+    start_date: form.start_date,
+    end_date: form.end_date,
+  };
+}
 
 export function defaultContractFormState(): ContractRequestFormState {
   const today = new Date();
@@ -81,23 +201,29 @@ export function defaultContractFormState(): ContractRequestFormState {
   };
 }
 
-export function buildContractName(contractType: string, startDate: string): string {
+export function buildContractName(
+  contractType: string,
+  startDate: string,
+  tierId?: ContractTierId,
+): string {
   const year = startDate.slice(0, 4) || new Date().getFullYear().toString();
   const shortType = contractType.replace(" Plan", "").replace(" Agreement", "");
-  return `${shortType} Request ${year}`;
+  const tierPrefix = tierId ? `${getContractTier(tierId).name} ` : "";
+  return `${tierPrefix}${shortType} Request ${year}`;
 }
 
 type BuildSubmissionInput = {
   customerId: string;
   userId: string | null;
   form: ContractRequestFormState;
+  tierId?: ContractTierId;
 };
 
 export function buildContractSubmission(input: BuildSubmissionInput) {
-  const { customerId, userId, form } = input;
+  const { customerId, userId, form, tierId } = input;
   return {
     customer_id: customerId,
-    name: buildContractName(form.contract_type, form.start_date),
+    name: buildContractName(form.contract_type, form.start_date, tierId),
     contract_type: form.contract_type,
     start_date: form.start_date,
     end_date: form.end_date,

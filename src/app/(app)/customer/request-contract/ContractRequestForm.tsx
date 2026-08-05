@@ -1,20 +1,23 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { logActivity } from "@/lib/activity";
 import {
+  applyTierToFormState,
   BILLING_METHODS,
   buildContractSubmission,
   CONTRACT_TYPE_HELP,
   CONTRACT_TYPES,
   defaultContractFormState,
   EMERGENCY_SLA_OPTIONS,
+  getContractTier,
   PAYMENT_TERMS,
   RENEWAL_OPTIONS,
   SERVICE_FREQUENCIES,
   type ContractRequestFormState,
+  type ContractTierId,
 } from "@/lib/contracts";
 import { FormRow } from "@/components/PageHeader";
 import type { Equipment } from "@/lib/types";
@@ -23,6 +26,7 @@ type Props = {
   supabase: SupabaseClient;
   customerId: string;
   equipment: Equipment[];
+  selectedTier: ContractTierId;
   onSuccess: () => void;
   onEquipmentAdded?: (equipment: Equipment) => void;
 };
@@ -30,14 +34,30 @@ type Props = {
 const STEPS = ["Agreement", "Equipment", "Service scope", "Billing"] as const;
 const BILLING_STEP = STEPS.length - 1;
 
-export function ContractRequestForm({ supabase, customerId, equipment, onSuccess, onEquipmentAdded }: Props) {
+export function ContractRequestForm({
+  supabase,
+  customerId,
+  equipment,
+  selectedTier,
+  onSuccess,
+  onEquipmentAdded,
+}: Props) {
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState<ContractRequestFormState>(defaultContractFormState);
+  const [form, setForm] = useState<ContractRequestFormState>(() =>
+    applyTierToFormState("silver", defaultContractFormState()),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showAddEquipment, setShowAddEquipment] = useState(false);
   const submitIntentRef = useRef(false);
+  const tierRef = useRef(selectedTier);
+
+  useEffect(() => {
+    if (tierRef.current === selectedTier) return;
+    tierRef.current = selectedTier;
+    setForm((prev) => applyTierToFormState(selectedTier, prev));
+  }, [selectedTier]);
 
   function update(patch: Partial<ContractRequestFormState>) {
     setForm((prev) => ({ ...prev, ...patch }));
@@ -72,6 +92,9 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
     }
     if (currentStep === 2 && Number(form.included_service_visits) < 0) {
       return "Included service visits cannot be negative.";
+    }
+    if (currentStep === BILLING_STEP && form.equipment_ids.length === 0) {
+      return "Select at least one piece of equipment to cover.";
     }
     return null;
   }
@@ -112,6 +135,7 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
       customerId,
       userId: user?.id ?? null,
       form,
+      tierId: selectedTier,
     });
 
     const { data: contract, error: insertError } = await supabase
@@ -148,11 +172,10 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
       recordType: "contract",
       recordId: contract.id,
       newValue: payload.name,
+    }).catch(() => {
+      /* activity log is best-effort; contract submission already succeeded */
     });
 
-    setForm(defaultContractFormState());
-    setStep(0);
-    setMessage("Contract request submitted. A service manager will review pricing and activate your agreement.");
     setBusy(false);
     onSuccess();
   }
@@ -171,6 +194,7 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
   }
 
   const onBillingStep = step === BILLING_STEP;
+  const activeTier = getContractTier(selectedTier);
 
   return (
     <div>
@@ -186,6 +210,10 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
       <div className="space-y-3" onKeyDown={handleFormKeyDown}>
         {step === 0 ? (
           <>
+            <div className="rounded-box bg-base-200 px-4 py-3 text-sm">
+              <span className="font-medium">Selected plan:</span>{" "}
+              {activeTier.name} — {activeTier.tagline}
+            </div>
             <FormRow label="Contract type" required>
               <select
                 className="select select-bordered w-full"
@@ -287,6 +315,11 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
             </FormRow>
             <p className="text-xs opacity-70">
               Review your billing preferences, then click Submit Contract Request when you are ready.
+              {form.equipment_ids.length === 0 ? (
+                <span className="mt-1 block text-warning">
+                  Go back to the Equipment step and select at least one item to cover.
+                </span>
+              ) : null}
             </p>
           </>
         ) : null}
@@ -310,7 +343,7 @@ export function ContractRequestForm({ supabase, customerId, equipment, onSuccess
           <button
             type="button"
             className={`btn btn-primary btn-sm ${onBillingStep ? "" : "hidden pointer-events-none"}`}
-            disabled={busy || equipment.length === 0}
+            disabled={busy || form.equipment_ids.length === 0}
             onClick={handleSubmitClick}
             tabIndex={onBillingStep ? 0 : -1}
             aria-hidden={!onBillingStep}
