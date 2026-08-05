@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, Download } from "lucide-react";
-import { downloadInvoicePdf, type InvoicePdfCustomer } from "@/lib/invoicePdf";
+import type { InvoicePdfCustomer } from "@/lib/invoices";
 import {
   formatServiceDate,
   invoicePaymentMessage,
@@ -12,7 +12,6 @@ import {
   pickDownloadableInvoice,
   type ServiceHistoryWorkOrder,
 } from "@/lib/invoices";
-import { formatMoney } from "@/lib/calculations";
 import { StatusBadge, statusTone } from "@/components/ui";
 
 type Props = {
@@ -31,13 +30,20 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 export function ServiceHistoryRow({ workOrder, customer }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const invoice = pickDownloadableInvoice(workOrder.invoices ?? undefined);
   const inProgress = isWorkOrderInProgress(workOrder.status);
   const completed = isWorkOrderCompleted(workOrder.status);
 
-  function handleDownload() {
-    if (!invoice) return;
-    downloadInvoicePdf(invoice, workOrder, customer);
+  async function handleDownload() {
+    if (!invoice || downloading) return;
+    setDownloading(true);
+    try {
+      const { downloadInvoicePdf } = await import("@/lib/invoicePdf");
+      await downloadInvoicePdf(invoice, workOrder, customer);
+    } finally {
+      setDownloading(false);
+    }
   }
 
   const completionLabel = workOrder.completion_date
@@ -57,6 +63,7 @@ export function ServiceHistoryRow({ workOrder, customer }: Props) {
               title={`Download ${invoice.invoice_number}`}
               aria-label={`Download invoice ${invoice.invoice_number}`}
               onClick={handleDownload}
+              disabled={downloading}
             >
               <Download className="h-4 w-4" />
             </button>
@@ -118,10 +125,7 @@ export function ServiceHistoryRow({ workOrder, customer }: Props) {
               ) : null}
               <StatusBadge label={workOrder.status} tone={statusTone(workOrder.status)} />
               {invoice ? (
-                <>
-                  <StatusBadge label={invoice.status} tone={statusTone(invoice.status)} />
-                  <span className="text-sm font-medium">{formatMoney(invoice.invoice_total)}</span>
-                </>
+                <StatusBadge label={invoice.status} tone={statusTone(invoice.status)} />
               ) : null}
               <ChevronDown
                 className={`h-4 w-4 opacity-50 transition-transform ${expanded ? "rotate-180" : ""}`}
@@ -144,20 +148,16 @@ export function ServiceHistoryRow({ workOrder, customer }: Props) {
 
           {invoice ? (
             <div className="mt-4 rounded-box bg-base-100 p-3">
-              <p className="mb-2 text-sm font-medium">Invoice {invoice.invoice_number}</p>
-              <dl className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <DetailRow label="Labor" value={formatMoney(invoice.labor_charges)} />
-                <DetailRow label="Parts" value={formatMoney(invoice.parts_charges)} />
-                <DetailRow label="Tax" value={formatMoney(invoice.tax)} />
-                <DetailRow label="Total" value={formatMoney(invoice.invoice_total)} />
-                <DetailRow label="Paid" value={formatMoney(invoice.amount_paid)} />
-                <DetailRow label="Balance" value={formatMoney(invoice.remaining_balance)} />
-              </dl>
-              <p className="mt-2 text-sm opacity-80">{invoicePaymentMessage(invoice)}</p>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium">Invoice {invoice.invoice_number}</p>
+                <StatusBadge label={invoice.status} tone={statusTone(invoice.status)} />
+              </div>
+              <p className="text-sm opacity-80">{invoicePaymentMessage(invoice)}</p>
               <button
                 type="button"
                 className="btn btn-outline btn-xs mt-3 gap-1"
                 onClick={handleDownload}
+                disabled={downloading}
               >
                 <Download className="h-3 w-3" />
                 Download PDF
