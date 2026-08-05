@@ -1,18 +1,25 @@
 /**
- * ServiceTitan-style accounting batch helpers.
- *
- * Lifecycle: Open (add/remove) → Posted (locked for review integrity) → Exported (GL handoff).
- * Invoices and payments may each appear in at most one batch.
+ * Accounting batches — Open → Posted → Exported.
+ * Stored in the browser (localStorage). Invoices/payments still load from Supabase.
+ * No cloud batch tables required.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AccountingBatch,
   AccountingBatchStatus,
-  AccountingBatchType,
   Invoice,
   Payment,
 } from "@/lib/types";
+import {
+  batchPrefix,
+  batchTypeFromCounts,
+  defaultBatchName,
+  nextBatchNumberSync,
+} from "@/lib/batches-shared";
+import * as local from "@/lib/batches-local";
+
+export { batchPrefix, batchTypeFromCounts, defaultBatchName, nextBatchNumberSync };
 
 export const BATCH_STATUSES: AccountingBatchStatus[] = ["Open", "Posted", "Exported"];
 
@@ -22,44 +29,51 @@ export const BATCH_STATUS_HINT: Record<AccountingBatchStatus, string> = {
   Exported: "Handed off — journal entry exported",
 };
 
-/** Invoices eligible to enter an accounting batch (customer-facing / finalized). */
+export function isSchemaError(_message?: string | null): boolean {
+  return false;
+}
+
+export function isUsingLocalBatchStore(): boolean {
+  return true;
+}
+
+export async function detectBatchStorageMode(_supabase?: SupabaseClient): Promise<"local"> {
+  return "local";
+}
+
+/** Finalized / collectible invoices only. */
 export function isBatchableInvoiceStatus(status: string): boolean {
   const s = (status || "").toLowerCase().trim();
   if (!s) return false;
-  const blocked = ["draft", "canceled", "cancelled", "void", "needs review", "on hold", "unsent"];
+  const blocked = [
+    "draft",
+    "canceled",
+    "cancelled",
+    "void",
+    "needs review",
+    "reviewed",
+    "on hold",
+    "unsent",
+    "disputed",
+  ];
   if (blocked.some((x) => s === x || s.includes(x))) return false;
   return true;
 }
 
-export function nextBatchNumber(prefix: "INVB" | "PAYB" | "MIXB" = "INVB"): string {
-  const t = Date.now().toString(36).toUpperCase();
-  const r = Math.random().toString(36).slice(2, 5).toUpperCase();
-  return `${prefix}-${t.slice(-5)}${r}`;
+export function isOpenArInvoice(inv: Pick<Invoice, "status" | "remaining_balance">): boolean {
+  return isBatchableInvoiceStatus(inv.status) && Number(inv.remaining_balance) > 0.005;
 }
 
-export function batchTypeFromCounts(invoiceCount: number, paymentCount: number): AccountingBatchType {
-  if (invoiceCount > 0 && paymentCount > 0) return "mixed";
-  if (paymentCount > 0) return "payment";
-  return "invoice";
+export function isPaidInvoice(inv: Pick<Invoice, "status" | "remaining_balance">): boolean {
+  if (!isBatchableInvoiceStatus(inv.status)) return false;
+  return Number(inv.remaining_balance) <= 0.005 || (inv.status || "").toLowerCase().includes("paid");
 }
 
-export function batchPrefix(type: AccountingBatchType): "INVB" | "PAYB" | "MIXB" {
-  if (type === "payment") return "PAYB";
-  if (type === "mixed") return "MIXB";
-  return "INVB";
-}
-
-export function defaultBatchName(opts: {
-  type: AccountingBatchType;
-  date: string;
-  paymentMethod?: string | null;
-}): string {
-  const d = opts.date;
-  if (opts.type === "payment") {
-    return opts.paymentMethod ? `${opts.paymentMethod} payments · ${d}` : `Payment deposit · ${d}`;
-  }
-  if (opts.type === "mixed") return `Mixed close · ${d}`;
-  return `Invoice batch · ${d}`;
+export async function nextBatchNumber(
+  _supabase: SupabaseClient,
+  prefix: "INVB" | "PAYB" | "MIXB" = "INVB",
+): Promise<string> {
+  return nextBatchNumberSync(prefix);
 }
 
 export type BatchWithMeta = AccountingBatch & {
@@ -76,22 +90,6 @@ export type PaymentForBatch = Payment & {
   customers?: { name: string } | null;
   invoices?: { invoice_number: string } | null;
 };
-
-/** Detect missing tables / RLS for friendly setup UI. */
-export function isSchemaError(message: string | null | undefined): boolean {
-  if (!message) return false;
-  const m = message.toLowerCase();
-  return (
-    m.includes("does not exist") ||
-    m.includes("schema cache") ||
-    m.includes("could not find the table") ||
-    m.includes("could not find the relationship") ||
-    m.includes("accounting_batches") && m.includes("not find") ||
-    (m.includes("relation") && m.includes("does not exist")) ||
-    m.includes("pgrst205") ||
-    m.includes("42p01")
-  );
-}
 
 async function selectInvoices(supabase: SupabaseClient, ids?: string[]) {
   const rich = "*, customers(name), work_orders(work_order_number)";
@@ -126,70 +124,52 @@ async function selectPayments(supabase: SupabaseClient, ids?: string[]) {
 }
 
 export async function listBatches(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   statusFilter?: AccountingBatchStatus | "all",
 ): Promise<{ data: BatchWithMeta[]; error: string | null }> {
-  let q = supabase
-    .from("accounting_batches")
-    .select("*")
-    .order("batch_date", { ascending: false })
-    .order("created_at", { ascending: false });
-  if (statusFilter && statusFilter !== "all") {
-    q = q.eq("status", statusFilter);
-  }
-  const { data, error } = await q;
-  if (error) {
-    return { data: [], error: error.message };
-  }
-  return { data: (data as BatchWithMeta[]) ?? [], error: null };
+  let data = local.localListBatches() as BatchWithMeta[];
+  if (statusFilter && statusFilter !== "all") data = data.filter((b) => b.status === statusFilter);
+  return { data, error: null };
 }
 
 export async function getBatch(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   id: string,
 ): Promise<{ batch: AccountingBatch | null; error: string | null }> {
-  const { data, error } = await supabase.from("accounting_batches").select("*").eq("id", id).maybeSingle();
-  if (error) return { batch: null, error: error.message };
-  return { batch: (data as AccountingBatch) ?? null, error: null };
+  return { batch: local.localGetBatch(id), error: null };
 }
 
-/** Invoice IDs already sitting in any batch. */
-export async function batchedInvoiceIds(supabase: SupabaseClient): Promise<{ ids: Set<string>; error: string | null }> {
-  const { data, error } = await supabase.from("accounting_batch_invoices").select("invoice_id");
-  if (error) return { ids: new Set(), error: error.message };
-  return { ids: new Set((data ?? []).map((r: { invoice_id: string }) => r.invoice_id)), error: null };
+export async function batchedInvoiceIds(
+  _supabase: SupabaseClient,
+): Promise<{ ids: Set<string>; error: string | null }> {
+  return { ids: local.localBatchedInvoiceIds(), error: null };
 }
 
-export async function batchedPaymentIds(supabase: SupabaseClient): Promise<{ ids: Set<string>; error: string | null }> {
-  const { data, error } = await supabase.from("accounting_batch_payments").select("payment_id");
-  if (error) return { ids: new Set(), error: error.message };
-  return { ids: new Set((data ?? []).map((r: { payment_id: string }) => r.payment_id)), error: null };
+export async function batchedPaymentIds(
+  _supabase: SupabaseClient,
+): Promise<{ ids: Set<string>; error: string | null }> {
+  return { ids: local.localBatchedPaymentIds(), error: null };
 }
 
 export async function loadUnbatchedInvoices(
   supabase: SupabaseClient,
 ): Promise<{ data: InvoiceForBatch[]; error: string | null }> {
-  const { ids: inBatch, error: batchErr } = await batchedInvoiceIds(supabase);
-  if (batchErr) return { data: [], error: batchErr };
-
+  const { ids: inBatch } = await batchedInvoiceIds(supabase);
   const { data, error } = await selectInvoices(supabase);
   if (error) return { data: [], error: error.message };
-
-  const rows = data.filter((i) => isBatchableInvoiceStatus(i.status) && !inBatch.has(i.id));
-  return { data: rows, error: null };
+  return {
+    data: data.filter((i) => isBatchableInvoiceStatus(i.status) && !inBatch.has(i.id)),
+    error: null,
+  };
 }
 
 export async function loadUnbatchedPayments(
   supabase: SupabaseClient,
 ): Promise<{ data: PaymentForBatch[]; error: string | null }> {
-  const { ids: inBatch, error: batchErr } = await batchedPaymentIds(supabase);
-  if (batchErr) return { data: [], error: batchErr };
-
+  const { ids: inBatch } = await batchedPaymentIds(supabase);
   const { data, error } = await selectPayments(supabase);
   if (error) return { data: [], error: error.message };
-
-  const rows = data.filter((p) => !inBatch.has(p.id));
-  return { data: rows, error: null };
+  return { data: data.filter((p) => !inBatch.has(p.id)), error: null };
 }
 
 export async function loadBatchDetail(supabase: SupabaseClient, batchId: string) {
@@ -200,21 +180,13 @@ export async function loadBatchDetail(supabase: SupabaseClient, batchId: string)
     error: null as string | null,
   };
 
-  const { batch, error: batchError } = await getBatch(supabase, batchId);
-  if (batchError || !batch) {
-    return { ...empty, error: batchError ?? "Batch not found" };
-  }
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { ...empty, error: "Batch not found" };
 
-  const [{ data: invLines, error: invLineErr }, { data: payLines, error: payLineErr }] = await Promise.all([
-    supabase.from("accounting_batch_invoices").select("id, invoice_id, amount").eq("batch_id", batchId),
-    supabase.from("accounting_batch_payments").select("id, payment_id, amount").eq("batch_id", batchId),
-  ]);
-
-  if (invLineErr) return { ...empty, batch, error: invLineErr.message };
-  if (payLineErr) return { ...empty, batch, error: payLineErr.message };
-
-  const invIds = (invLines ?? []).map((l: { invoice_id: string }) => l.invoice_id);
-  const payIds = (payLines ?? []).map((l: { payment_id: string }) => l.payment_id);
+  const invLines = local.localListInvoiceLines(batchId);
+  const payLines = local.localListPaymentLines(batchId);
+  const invIds = invLines.map((l) => l.invoice_id);
+  const payIds = payLines.map((l) => l.payment_id);
 
   let invoices: (InvoiceForBatch & { lineId: string; lineAmount: number })[] = [];
   let payments: (PaymentForBatch & { lineId: string; lineAmount: number })[] = [];
@@ -223,10 +195,25 @@ export async function loadBatchDetail(supabase: SupabaseClient, batchId: string)
     const { data, error } = await selectInvoices(supabase, invIds);
     if (error) return { batch, invoices: [], payments: [], error: error.message };
     const map = new Map(data.map((i) => [i.id, i]));
-    invoices = (invLines ?? [])
-      .map((l: { id: string; invoice_id: string; amount: number }) => {
+    invoices = invLines
+      .map((l) => {
         const inv = map.get(l.invoice_id);
-        if (!inv) return null;
+        if (!inv) {
+          return {
+            id: l.invoice_id,
+            invoice_number: "Invoice",
+            invoice_date: "",
+            status: "Sent",
+            invoice_total: l.amount,
+            remaining_balance: 0,
+            amount_paid: 0,
+            tax: 0,
+            customers: null,
+            work_orders: null,
+            lineId: l.id,
+            lineAmount: Number(l.amount),
+          } as InvoiceForBatch & { lineId: string; lineAmount: number };
+        }
         return { ...inv, lineId: l.id, lineAmount: Number(l.amount) };
       })
       .filter(Boolean) as (InvoiceForBatch & { lineId: string; lineAmount: number })[];
@@ -236,59 +223,28 @@ export async function loadBatchDetail(supabase: SupabaseClient, batchId: string)
     const { data, error } = await selectPayments(supabase, payIds);
     if (error) return { batch, invoices, payments: [], error: error.message };
     const map = new Map(data.map((p) => [p.id, p]));
-    payments = (payLines ?? [])
-      .map((l: { id: string; payment_id: string; amount: number }) => {
+    payments = payLines
+      .map((l) => {
         const p = map.get(l.payment_id);
-        if (!p) return null;
+        if (!p) {
+          return {
+            id: l.payment_id,
+            payment_number: "Payment",
+            payment_date: "",
+            payment_method: "",
+            payment_amount: l.amount,
+            customers: null,
+            invoices: null,
+            lineId: l.id,
+            lineAmount: Number(l.amount),
+          } as PaymentForBatch & { lineId: string; lineAmount: number };
+        }
         return { ...p, lineId: l.id, lineAmount: Number(l.amount) };
       })
       .filter(Boolean) as (PaymentForBatch & { lineId: string; lineAmount: number })[];
   }
 
-  // Keep header totals in sync with actual lines (self-heal stale counts)
-  const liveInvTotal = invoices.reduce((s, i) => s + Number(i.lineAmount), 0);
-  const livePayTotal = payments.reduce((s, p) => s + Number(p.lineAmount), 0);
-  if (
-    invoices.length !== batch.invoice_count ||
-    payments.length !== batch.payment_count ||
-    Math.abs(liveInvTotal - Number(batch.invoice_total)) > 0.02 ||
-    Math.abs(livePayTotal - Number(batch.payment_total)) > 0.02
-  ) {
-    await recountBatch(supabase, batchId);
-    const refreshed = await getBatch(supabase, batchId);
-    return {
-      batch: refreshed.batch ?? batch,
-      invoices,
-      payments,
-      error: null as string | null,
-    };
-  }
-
   return { batch, invoices, payments, error: null as string | null };
-}
-
-async function recountBatch(supabase: SupabaseClient, batchId: string) {
-  const [{ data: invs }, { data: pays }] = await Promise.all([
-    supabase.from("accounting_batch_invoices").select("amount").eq("batch_id", batchId),
-    supabase.from("accounting_batch_payments").select("amount").eq("batch_id", batchId),
-  ]);
-  const invoice_count = invs?.length ?? 0;
-  const payment_count = pays?.length ?? 0;
-  const invoice_total = (invs ?? []).reduce((s, r: { amount: number }) => s + Number(r.amount), 0);
-  const payment_total = (pays ?? []).reduce((s, r: { amount: number }) => s + Number(r.amount), 0);
-  const batch_type = batchTypeFromCounts(invoice_count, payment_count);
-  await supabase
-    .from("accounting_batches")
-    .update({
-      invoice_count,
-      payment_count,
-      invoice_total,
-      payment_total,
-      batch_type,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", batchId);
-  return { invoice_count, payment_count, invoice_total, payment_total, batch_type };
 }
 
 export type CreateBatchInput = {
@@ -308,13 +264,12 @@ export async function createBatch(supabase: SupabaseClient, input: CreateBatchIn
     return { batch: null, error: "Select at least one invoice or payment." };
   }
 
-  const [biRes, bpRes] = await Promise.all([batchedInvoiceIds(supabase), batchedPaymentIds(supabase)]);
-  if (biRes.error) return { batch: null, error: biRes.error };
-  if (bpRes.error) return { batch: null, error: bpRes.error };
-  if (invIds.some((id) => biRes.ids.has(id))) {
+  const usedInv = local.localBatchedInvoiceIds();
+  const usedPay = local.localBatchedPaymentIds();
+  if (invIds.some((id) => usedInv.has(id))) {
     return { batch: null, error: "One or more invoices are already in a batch." };
   }
-  if (payIds.some((id) => bpRes.ids.has(id))) {
+  if (payIds.some((id) => usedPay.has(id))) {
     return { batch: null, error: "One or more payments are already in a batch." };
   }
 
@@ -325,9 +280,8 @@ export async function createBatch(supabase: SupabaseClient, input: CreateBatchIn
     const { data, error } = await supabase.from("invoices").select("id, invoice_total, status").in("id", invIds);
     if (error) return { batch: null, error: error.message };
     const loaded = data ?? [];
-    const notBatchable = loaded.filter((r: { status: string }) => !isBatchableInvoiceStatus(r.status));
-    if (notBatchable.length) {
-      return { batch: null, error: "Some invoices are still Draft / On Hold and cannot be batched." };
+    if (loaded.filter((r: { status: string }) => !isBatchableInvoiceStatus(r.status)).length) {
+      return { batch: null, error: "Some invoices cannot be batched (draft / hold / canceled)." };
     }
     invoiceRows = loaded.map((r: { id: string; invoice_total: number }) => ({
       id: r.id,
@@ -337,6 +291,7 @@ export async function createBatch(supabase: SupabaseClient, input: CreateBatchIn
       return { batch: null, error: "Some invoices could not be loaded." };
     }
   }
+
   if (payIds.length) {
     const { data, error } = await supabase
       .from("payments")
@@ -353,90 +308,24 @@ export async function createBatch(supabase: SupabaseClient, input: CreateBatchIn
     }
   }
 
-  const type = batchTypeFromCounts(invoiceRows.length, paymentRows.length);
-  const method =
-    input.paymentMethod ||
-    (type === "payment" && paymentRows.length
-      ? paymentRows.every((p) => p.payment_method === paymentRows[0].payment_method)
-        ? paymentRows[0].payment_method
-        : "Mixed"
-      : null);
-
-  const batch_number = nextBatchNumber(batchPrefix(type));
-  const name =
-    input.name?.trim() ||
-    defaultBatchName({ type, date: input.batchDate, paymentMethod: method });
-
-  const invoice_total = invoiceRows.reduce((s, r) => s + r.invoice_total, 0);
-  const payment_total = paymentRows.reduce((s, r) => s + r.payment_amount, 0);
-
-  const { data: batch, error: createError } = await supabase
-    .from("accounting_batches")
-    .insert({
-      batch_number,
-      batch_type: type,
-      name,
-      status: "Open",
-      batch_date: input.batchDate,
-      payment_method: method,
-      notes: input.notes?.trim() || null,
-      invoice_total,
-      payment_total,
-      invoice_count: invoiceRows.length,
-      payment_count: paymentRows.length,
-      created_by: input.userId,
-    })
-    .select("*")
-    .single();
-
-  if (createError || !batch) {
-    return { batch: null, error: createError?.message ?? "Could not create batch" };
-  }
-
-  if (invoiceRows.length) {
-    const { error } = await supabase.from("accounting_batch_invoices").insert(
-      invoiceRows.map((r) => ({
-        batch_id: batch.id,
-        invoice_id: r.id,
-        amount: r.invoice_total,
-      })),
-    );
-    if (error) {
-      await supabase.from("accounting_batches").delete().eq("id", batch.id);
-      return { batch: null, error: error.message };
-    }
-  }
-
-  if (paymentRows.length) {
-    const { error } = await supabase.from("accounting_batch_payments").insert(
-      paymentRows.map((r) => ({
-        batch_id: batch.id,
-        payment_id: r.id,
-        amount: r.payment_amount,
-      })),
-    );
-    if (error) {
-      // Cascade removes invoice lines with the header
-      await supabase.from("accounting_batches").delete().eq("id", batch.id);
-      return { batch: null, error: error.message };
-    }
-  }
-
-  return { batch: batch as AccountingBatch, error: null };
+  return local.localCreateBatch({
+    batchDate: input.batchDate,
+    name: input.name,
+    notes: input.notes,
+    paymentMethod: input.paymentMethod,
+    invoiceRows,
+    paymentRows,
+    userId: input.userId,
+  });
 }
 
-export async function addInvoicesToBatch(
-  supabase: SupabaseClient,
-  batchId: string,
-  invoiceIds: string[],
-) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
+export async function addInvoicesToBatch(supabase: SupabaseClient, batchId: string, invoiceIds: string[]) {
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { error: "Batch not found" };
   if (batch.status !== "Open") return { error: "Only open batches can be edited." };
 
-  const { ids: bi, error: biErr } = await batchedInvoiceIds(supabase);
-  if (biErr) return { error: biErr };
-  const fresh = invoiceIds.filter((id) => !bi.has(id));
+  const used = local.localBatchedInvoiceIds();
+  const fresh = invoiceIds.filter((id) => !used.has(id));
   if (!fresh.length) return { error: "All selected invoices are already batched." };
 
   const { data, error: loadError } = await supabase
@@ -447,152 +336,119 @@ export async function addInvoicesToBatch(
   const usable = (data ?? []).filter((r: { status: string }) => isBatchableInvoiceStatus(r.status));
   if (!usable.length) return { error: "Selected invoices are not ready to batch." };
 
-  const { error: insError } = await supabase.from("accounting_batch_invoices").insert(
+  return local.localAddInvoices(
+    batchId,
     usable.map((r: { id: string; invoice_total: number }) => ({
-      batch_id: batchId,
-      invoice_id: r.id,
-      amount: Number(r.invoice_total),
+      id: r.id,
+      invoice_total: Number(r.invoice_total),
     })),
   );
-  if (insError) return { error: insError.message };
-  await recountBatch(supabase, batchId);
-  return { error: null };
 }
 
-export async function addPaymentsToBatch(
-  supabase: SupabaseClient,
-  batchId: string,
-  paymentIds: string[],
-) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
+export async function addPaymentsToBatch(supabase: SupabaseClient, batchId: string, paymentIds: string[]) {
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { error: "Batch not found" };
   if (batch.status !== "Open") return { error: "Only open batches can be edited." };
 
-  const { ids: bp, error: bpErr } = await batchedPaymentIds(supabase);
-  if (bpErr) return { error: bpErr };
-  const fresh = paymentIds.filter((id) => !bp.has(id));
+  const used = local.localBatchedPaymentIds();
+  const fresh = paymentIds.filter((id) => !used.has(id));
   if (!fresh.length) return { error: "All selected payments are already batched." };
 
-  const { data, error: loadError } = await supabase
-    .from("payments")
-    .select("id, payment_amount")
-    .in("id", fresh);
+  const { data, error: loadError } = await supabase.from("payments").select("id, payment_amount").in("id", fresh);
   if (loadError) return { error: loadError.message };
   if (!data?.length) return { error: "Payments could not be loaded." };
 
-  const { error: insError } = await supabase.from("accounting_batch_payments").insert(
+  return local.localAddPayments(
+    batchId,
     data.map((r: { id: string; payment_amount: number }) => ({
-      batch_id: batchId,
-      payment_id: r.id,
-      amount: Number(r.payment_amount),
+      id: r.id,
+      payment_amount: Number(r.payment_amount),
     })),
   );
-  if (insError) return { error: insError.message };
-  await recountBatch(supabase, batchId);
-  return { error: null };
 }
 
-export async function removeInvoiceLine(supabase: SupabaseClient, batchId: string, lineId: string) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
-  if (batch.status !== "Open") return { error: "Only open batches can be edited." };
-  const { error: delError } = await supabase
-    .from("accounting_batch_invoices")
-    .delete()
-    .eq("id", lineId)
-    .eq("batch_id", batchId);
-  if (delError) return { error: delError.message };
-  await recountBatch(supabase, batchId);
-  return { error: null };
+export async function removeInvoiceLine(_supabase: SupabaseClient, batchId: string, lineId: string) {
+  return local.localRemoveInvoiceLine(batchId, lineId);
 }
 
-export async function removePaymentLine(supabase: SupabaseClient, batchId: string, lineId: string) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
-  if (batch.status !== "Open") return { error: "Only open batches can be edited." };
-  const { error: delError } = await supabase
-    .from("accounting_batch_payments")
-    .delete()
-    .eq("id", lineId)
-    .eq("batch_id", batchId);
-  if (delError) return { error: delError.message };
-  await recountBatch(supabase, batchId);
-  return { error: null };
+export async function removePaymentLine(_supabase: SupabaseClient, batchId: string, lineId: string) {
+  return local.localRemovePaymentLine(batchId, lineId);
 }
 
-export async function postBatch(supabase: SupabaseClient, batchId: string, userId: string | null) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
+export async function postBatch(_supabase: SupabaseClient, batchId: string, userId: string | null) {
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { error: "Batch not found" };
   if (batch.status !== "Open") return { error: "Only open batches can be posted." };
-
-  // Recount from lines so stale header cannot allow empty posts
-  const counts = await recountBatch(supabase, batchId);
-  if (counts.invoice_count + counts.payment_count === 0) {
+  if (batch.invoice_count + batch.payment_count === 0) {
     return { error: "Add at least one transaction before posting." };
   }
-
-  const { error: upError } = await supabase
-    .from("accounting_batches")
-    .update({
-      status: "Posted",
-      posted_by: userId,
-      posted_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", batchId)
-    .eq("status", "Open");
-  return { error: upError?.message ?? null };
+  return local.localSetStatus(batchId, "Posted", {
+    posted_by: userId,
+    posted_at: new Date().toISOString(),
+  });
 }
 
-export async function unpostBatch(supabase: SupabaseClient, batchId: string) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
-  if (batch.status === "Exported") {
-    return { error: "Exported batches cannot be unposted." };
-  }
+export async function unpostBatch(_supabase: SupabaseClient, batchId: string) {
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { error: "Batch not found" };
+  if (batch.status === "Exported") return { error: "Exported batches cannot be unposted." };
   if (batch.status !== "Posted") return { error: "Only posted batches can be unposted." };
-  const { error: upError } = await supabase
-    .from("accounting_batches")
-    .update({
-      status: "Open",
-      posted_by: null,
-      posted_at: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", batchId)
-    .eq("status", "Posted");
-  return { error: upError?.message ?? null };
+  return local.localSetStatus(batchId, "Open", { posted_by: null, posted_at: null });
 }
 
-export async function exportBatch(supabase: SupabaseClient, batchId: string, userId: string | null) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
+export async function exportBatch(_supabase: SupabaseClient, batchId: string, userId: string | null) {
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { error: "Batch not found" };
   if (batch.status === "Open") return { error: "Post the batch before exporting." };
   if (batch.status === "Exported") return { error: null };
-  const { error: upError } = await supabase
-    .from("accounting_batches")
-    .update({
-      status: "Exported",
-      exported_by: userId,
-      exported_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", batchId)
-    .eq("status", "Posted");
-  return { error: upError?.message ?? null };
+  return local.localSetStatus(batchId, "Exported", {
+    exported_by: userId,
+    exported_at: new Date().toISOString(),
+  });
 }
 
-export async function deleteEmptyOpenBatch(supabase: SupabaseClient, batchId: string) {
-  const { batch, error } = await getBatch(supabase, batchId);
-  if (error || !batch) return { error: error ?? "Batch not found" };
-  if (batch.status !== "Open") return { error: "Only open batches can be deleted." };
+export async function unexportBatch(_supabase: SupabaseClient, batchId: string) {
+  const batch = local.localGetBatch(batchId);
+  if (!batch) return { error: "Batch not found" };
+  if (batch.status !== "Exported") return { error: "Only exported batches can be returned to Posted." };
+  return local.localSetStatus(batchId, "Posted", { exported_by: null, exported_at: null });
+}
 
-  const counts = await recountBatch(supabase, batchId);
-  if (counts.invoice_count + counts.payment_count > 0) {
-    return { error: "Remove all transactions before deleting the batch." };
+export async function deleteEmptyOpenBatch(_supabase: SupabaseClient, batchId: string) {
+  return local.localDeleteEmptyOpenBatch(batchId);
+}
+
+export async function postBatches(
+  supabase: SupabaseClient,
+  batchIds: string[],
+  userId: string | null,
+): Promise<{ posted: number; errors: string[] }> {
+  let posted = 0;
+  const errors: string[] = [];
+  for (const id of batchIds) {
+    const r = await postBatch(supabase, id, userId);
+    if (r.error) errors.push(r.error);
+    else posted += 1;
   }
-  const { error: delError } = await supabase.from("accounting_batches").delete().eq("id", batchId).eq("status", "Open");
-  return { error: delError?.message ?? null };
+  return { posted, errors };
+}
+
+export type BatchLookup = {
+  batchId: string;
+  batchNumber: string;
+  status: AccountingBatchStatus;
+};
+
+export async function loadInvoiceBatchMap(
+  _supabase: SupabaseClient,
+): Promise<{ map: Map<string, BatchLookup>; error: string | null }> {
+  return { map: local.localInvoiceBatchMap(), error: null };
+}
+
+export async function loadPaymentBatchMap(
+  _supabase: SupabaseClient,
+): Promise<{ map: Map<string, BatchLookup>; error: string | null }> {
+  return { map: local.localPaymentBatchMap(), error: null };
 }
 
 export function exportBatchCsv(
@@ -600,17 +456,11 @@ export function exportBatchCsv(
   invoices: (InvoiceForBatch & { lineAmount: number })[],
   payments: (PaymentForBatch & { lineAmount: number })[],
 ) {
-  const escape = (v: string | number | null | undefined) => {
-    const s = String(v ?? "");
-    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  const lines: string[] = [
-    ["Type", "Number", "Date", "Customer", "Reference", "Method", "Amount", "Batch", "Batch date"].join(","),
-  ];
-  for (const inv of invoices) {
-    lines.push(
-      [
+  downloadCsv(
+    `${batch.batch_number}_transactions.csv`,
+    ["Type", "Number", "Date", "Customer", "Reference", "Method", "Debit", "Credit", "Amount", "Batch", "Batch date", "Status"],
+    [
+      ...invoices.map((inv) => [
         "Invoice",
         inv.invoice_number,
         inv.invoice_date,
@@ -618,35 +468,90 @@ export function exportBatchCsv(
         inv.work_orders?.work_order_number ?? "",
         "",
         inv.lineAmount,
+        "",
+        inv.lineAmount,
         batch.batch_number,
         batch.batch_date,
-      ]
-        .map(escape)
-        .join(","),
-    );
-  }
-  for (const p of payments) {
-    lines.push(
-      [
+        inv.status,
+      ]),
+      ...payments.map((p) => [
         "Payment",
         p.payment_number,
         p.payment_date,
         p.customers?.name ?? "",
         p.invoices?.invoice_number ?? p.reference_number ?? "",
         p.payment_method,
+        "",
+        p.lineAmount,
         p.lineAmount,
         batch.batch_number,
         batch.batch_date,
-      ]
-        .map(escape)
-        .join(","),
-    );
+        p.payment_method,
+      ]),
+    ],
+  );
+}
+
+export function exportBatchJournalCsv(
+  batch: AccountingBatch,
+  invoices: (InvoiceForBatch & { lineAmount: number })[],
+  payments: (PaymentForBatch & { lineAmount: number })[],
+) {
+  const invTotal = invoices.reduce((s, i) => s + Number(i.lineAmount), 0);
+  const payTotal = payments.reduce((s, p) => s + Number(p.lineAmount), 0);
+  const taxTotal = invoices.reduce((s, i) => s + Number(i.tax ?? 0), 0);
+  const serviceRev = invTotal - taxTotal;
+  const rows: (string | number)[][] = [
+    ["Journal", "Account", "Memo", "Debit", "Credit", "Batch", "Date"],
+    ["AR", "Accounts Receivable", `Invoices ${batch.batch_number}`, invTotal, 0, batch.batch_number, batch.batch_date],
+    [
+      "REV",
+      "Service Revenue",
+      `Recognized sales ${batch.batch_number}`,
+      0,
+      Math.max(0, serviceRev),
+      batch.batch_number,
+      batch.batch_date,
+    ],
+  ];
+  if (taxTotal > 0.005) {
+    rows.push(["TAX", "Sales Tax Payable", `Tax on ${batch.batch_number}`, 0, taxTotal, batch.batch_number, batch.batch_date]);
   }
+  if (payTotal > 0.005) {
+    rows.push([
+      "CASH",
+      "Undeposited Funds / Cash",
+      `Collections ${batch.batch_number}`,
+      payTotal,
+      0,
+      batch.batch_number,
+      batch.batch_date,
+    ]);
+    rows.push([
+      "AR",
+      "Accounts Receivable",
+      `Apply payments ${batch.batch_number}`,
+      0,
+      payTotal,
+      batch.batch_number,
+      batch.batch_date,
+    ]);
+  }
+  downloadCsv(`${batch.batch_number}_journal.csv`, rows[0] as string[], rows.slice(1));
+}
+
+function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]) {
+  const escape = (v: string | number | null | undefined) => {
+    const s = String(v ?? "");
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [headers.map(escape).join(","), ...rows.map((r) => r.map(escape).join(","))];
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${batch.batch_number}_export.csv`;
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -669,7 +574,6 @@ export function groupPaymentsByMethod(payments: PaymentForBatch[]) {
     .sort((a, b) => b.total - a.total);
 }
 
-/** True when payment_date is on or before asOf, or missing (treated as eligible). */
 export function paymentOnOrBefore(paymentDate: string | null | undefined, asOf: string): boolean {
   if (!paymentDate) return true;
   return paymentDate.slice(0, 10) <= asOf;
@@ -678,4 +582,15 @@ export function paymentOnOrBefore(paymentDate: string | null | undefined, asOf: 
 export function invoiceOnOrBefore(invoiceDate: string | null | undefined, asOf: string): boolean {
   if (!invoiceDate) return false;
   return invoiceDate.slice(0, 10) <= asOf;
+}
+
+export type UnbatchedInvoiceBucket = "all" | "open_ar" | "paid";
+
+export function filterUnbatchedInvoices(
+  invoices: InvoiceForBatch[],
+  bucket: UnbatchedInvoiceBucket,
+): InvoiceForBatch[] {
+  if (bucket === "open_ar") return invoices.filter(isOpenArInvoice);
+  if (bucket === "paid") return invoices.filter(isPaidInvoice);
+  return invoices;
 }

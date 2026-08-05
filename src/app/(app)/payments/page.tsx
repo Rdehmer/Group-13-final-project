@@ -7,8 +7,10 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
-import { formatMoney, remainingBalance } from "@/lib/calculations";
+import { formatMoney } from "@/lib/calculations";
 import { daysPastDue, calendarMonthsForYear, formatMonthLabel, monthKeyFromDate } from "@/lib/billing";
+import { loadPaymentBatchMap, type BatchLookup } from "@/lib/batches";
+import { applyInvoicePayment } from "@/lib/payments";
 import type { Invoice, Payment } from "@/lib/types";
 
 type AgingBucket = "current" | "d30" | "d60" | "d90";
@@ -51,9 +53,10 @@ export default function PaymentsPage() {
   const [busy, setBusy] = useState(false);
   const [selectedBucket, setSelectedBucket] = useState<AgingBucket | null>(null);
   const [paymentMonth, setPaymentMonth] = useState<string>("all");
+  const [paymentBatchMap, setPaymentBatchMap] = useState<Map<string, BatchLookup>>(new Map());
 
   async function load() {
-    const [{ data: inv }, { data: pay }] = await Promise.all([
+    const [{ data: inv }, { data: pay }, batchRes] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, customers(name), work_orders(work_order_number)")
@@ -64,10 +67,12 @@ export default function PaymentsPage() {
         .select("*, customers(name)")
         .order("payment_date", { ascending: false })
         .limit(200),
+      loadPaymentBatchMap(supabase),
     ]);
     const openInvoices = (inv as OpenInvoice[]) ?? [];
     setInvoices(openInvoices);
     setPayments((pay as PaymentRow[]) ?? []);
+    setPaymentBatchMap(batchRes.map);
     if (preselectedInvoice) {
       const match = openInvoices.find((i) => i.id === preselectedInvoice);
       if (match) {
@@ -140,31 +145,30 @@ export default function PaymentsPage() {
       return;
     }
     const { data: { user } } = await supabase.auth.getUser();
-    const paymentNumber = `PAY-${Date.now().toString().slice(-8)}`;
-
-    const { error: payError } = await supabase.from("payments").insert({
-      payment_number: paymentNumber,
-      customer_id: inv.customer_id,
-      invoice_id: inv.id,
-      payment_date: new Date().toISOString().slice(0, 10),
-      payment_method: form.payment_method,
-      payment_amount: amount,
-      reference_number: form.reference_number || null,
-      created_by: user?.id ?? null,
+    const result = await applyInvoicePayment(supabase, {
+      invoiceId: inv.id,
+      customerId: inv.customer_id,
+      invoiceTotal: Number(inv.invoice_total),
+      amountPaidSoFar: Number(inv.amount_paid),
+      remaining: Number(inv.remaining_balance),
+      amount,
+      paymentMethod: form.payment_method,
+      referenceNumber: form.reference_number || null,
+      userId: user?.id ?? null,
     });
-    if (payError) { setError(payError.message); setBusy(false); return; }
+    if (!result.ok) {
+      setError(result.error);
+      setBusy(false);
+      return;
+    }
 
-    const newPaid = Number(inv.amount_paid) + amount;
-    const newBalance = remainingBalance(Number(inv.invoice_total), newPaid);
-    const status = newBalance <= 0 ? "Paid" : "Partially Paid";
-
-    await supabase.from("invoices").update({
-      amount_paid: newPaid,
-      remaining_balance: newBalance,
-      status,
-    }).eq("id", inv.id);
-
-    await logActivity(supabase, { userId: user?.id ?? null, action: "recorded", recordType: "payment", recordId: inv.id, newValue: paymentNumber });
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "recorded",
+      recordType: "payment",
+      recordId: inv.id,
+      newValue: result.paymentNumber,
+    });
     setShowForm(false);
     setForm({ invoice_id: "", payment_method: "Check", payment_amount: "", reference_number: "" });
     await load();
@@ -372,9 +376,21 @@ export default function PaymentsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Payment #</th><th>Invoice</th><th>Customer</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Payment #</th>
+                    <th>Invoice</th>
+                    <th>Customer</th>
+                    <th>Date</th>
+                    <th>Method</th>
+                    <th>Batch</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {filteredPayments.map((p) => (
+                  {filteredPayments.map((p) => {
+                    const batchInfo = paymentBatchMap.get(p.id);
+                    return (
                     <tr key={p.id}>
                       <td className="font-medium">{p.payment_number}</td>
                       <td>
@@ -397,9 +413,23 @@ export default function PaymentsPage() {
                       </td>
                       <td>{p.payment_date}</td>
                       <td>{p.payment_method}</td>
+                      <td>
+                        {batchInfo ? (
+                          <Link
+                            href={`/batches/${batchInfo.batchId}`}
+                            className="badge badge-primary badge-outline badge-sm"
+                            title={batchInfo.status}
+                          >
+                            {batchInfo.batchNumber}
+                          </Link>
+                        ) : (
+                          <span className="text-xs opacity-40">—</span>
+                        )}
+                      </td>
                       <td>{formatMoney(p.payment_amount)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

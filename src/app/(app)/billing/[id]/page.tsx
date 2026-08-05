@@ -25,6 +25,7 @@ import {
 import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
+import { loadInvoiceBatchMap, type BatchLookup } from "@/lib/batches";
 import type { Invoice, Payment, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
 
 type InvoiceDetail = Invoice & {
@@ -61,9 +62,10 @@ export default function InvoiceDetailPage() {
   const [dirty, setDirty] = useState(false);
   const [notes, setNotes] = useState("");
   const [addKind, setAddKind] = useState<EditableInvoiceLine["kind"]>("additional");
+  const [invoiceBatch, setInvoiceBatch] = useState<BatchLookup | null>(null);
 
   async function load() {
-    const [{ data }, { data: pay }, { data: settings }, { data: members }] = await Promise.all([
+    const [{ data }, { data: pay }, { data: settings }, { data: members }, batchRes] = await Promise.all([
       supabase
         .from("invoices")
         .select(
@@ -79,12 +81,14 @@ export default function InvoiceDetailPage() {
         .in("role", ["billing", "administrator", "service_manager"])
         .eq("is_active", true)
         .order("full_name"),
+      loadInvoiceBatchMap(supabase),
     ]);
 
     const invoice = data as InvoiceDetail | null;
     setInv(invoice);
     setPayments((pay as Payment[]) ?? []);
     setTeam((members as typeof team) ?? []);
+    setInvoiceBatch(invoice ? batchRes.map.get(invoice.id) ?? null : null);
     if (settings?.default_tax_rate) setTaxRate(Number(settings.default_tax_rate));
     if (!invoice) return;
 
@@ -575,12 +579,21 @@ export default function InvoiceDetailPage() {
                 Ridley Equipment Services
               </p>
               <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{inv.invoice_number}</h1>
-              <div className="mt-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
-                {bucket === "past_due" ? (
-                  <span className="ml-2 text-sm text-error">{overdueDays} days past due</span>
+                {invoiceBatch ? (
+                  <Link
+                    href={`/batches/${invoiceBatch.batchId}`}
+                    className="badge badge-primary badge-outline badge-sm"
+                    title={`Batch ${invoiceBatch.status}`}
+                  >
+                    Batch {invoiceBatch.batchNumber}
+                  </Link>
                 ) : null}
-                {dirty ? <span className="badge badge-warning badge-sm ml-2">Unsaved edits</span> : null}
+                {bucket === "past_due" ? (
+                  <span className="text-sm text-error">{overdueDays} days past due</span>
+                ) : null}
+                {dirty ? <span className="badge badge-warning badge-sm">Unsaved edits</span> : null}
               </div>
             </div>
             <div className="text-sm sm:text-right">
