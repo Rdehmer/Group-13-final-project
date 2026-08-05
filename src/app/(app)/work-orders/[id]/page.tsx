@@ -20,9 +20,12 @@ import { logActivity } from "@/lib/activity";
 import { FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
+import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { formatMoney } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
+import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
+import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
 import type {
   AdditionalWorkRequest,
   Invoice,
@@ -41,7 +44,7 @@ type JobDetail = WorkOrder & {
     email?: string | null;
     service_address?: string | null;
   };
-  equipment?: { id: string; name: string; location?: string | null; operating_status?: string } | null;
+  equipment?: EquipmentOption | null;
 };
 
 /**
@@ -62,6 +65,7 @@ export default function JobDetailPage() {
   const [additional, setAdditional] = useState<AdditionalWorkRequest[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [inventory, setInventory] = useState<Part[]>([]);
+  const [customerEquipment, setCustomerEquipment] = useState<EquipmentOption[]>([]);
   const [taxRate, setTaxRate] = useState(0.0825);
 
   const [managerNotes, setManagerNotes] = useState("");
@@ -84,7 +88,9 @@ export default function JobDetailPage() {
     const [{ data }, { data: { user } }, { data: settings }] = await Promise.all([
       supabase
         .from("work_orders")
-        .select("*, customers(name, billing_address, phone, email, service_address), equipment(id, name, location, operating_status)")
+        .select(
+          "*, customers(name, billing_address, phone, email, service_address), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
+        )
         .eq("id", id)
         .single(),
       supabase.auth.getUser(),
@@ -128,6 +134,19 @@ export default function JobDetailPage() {
     setAdditional((awr as AdditionalWorkRequest[]) ?? []);
     setInvoices((inv as Invoice[]) ?? []);
     setInventory((stock as Part[]) ?? []);
+
+    if (w?.customer_id) {
+      const { data: eqList } = await supabase
+        .from("equipment")
+        .select(
+          "id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id",
+        )
+        .eq("customer_id", w.customer_id)
+        .order("name");
+      setCustomerEquipment((eqList as EquipmentOption[]) ?? []);
+    } else {
+      setCustomerEquipment([]);
+    }
 
     if (w?.assigned_technician_id) {
       const found = techs.find((t) => t.id === w.assigned_technician_id);
@@ -589,6 +608,7 @@ export default function JobDetailPage() {
         customer_id: wo.customer_id,
         work_order_id: wo.id,
         contract_id: wo.contract_id,
+        equipment_id: wo.equipment_id,
         due_date: due.toISOString().slice(0, 10),
         labor_charges: preview.laborCharges,
         parts_charges: preview.partsCharges,
@@ -603,12 +623,52 @@ export default function JobDetailPage() {
       .single();
 
     if (insertError) {
+      // Retry without equipment_id if column not migrated yet.
+      if (insertError.message.includes("equipment_id")) {
+        const retry = await supabase
+          .from("invoices")
+          .insert({
+            invoice_number: invoiceNumber,
+            customer_id: wo.customer_id,
+            work_order_id: wo.id,
+            contract_id: wo.contract_id,
+            due_date: due.toISOString().slice(0, 10),
+            labor_charges: preview.laborCharges,
+            parts_charges: preview.partsCharges,
+            warranty_deductions: preview.warrantyDeductions,
+            tax: preview.tax,
+            invoice_total: preview.total,
+            remaining_balance: preview.total,
+            status: asDraft ? "Draft" : "Sent",
+            created_by: user?.id ?? null,
+          })
+          .select()
+          .single();
+        if (retry.error) {
+          setError(retry.error.message);
+          setSaving(false);
+          return;
+        }
+        await supabase.from("work_orders").update({ billing_status: "Billed", updated_at: new Date().toISOString() }).eq("id", wo.id);
+        await logActivity(supabase, {
+          userId: user?.id ?? null,
+          action: "created",
+          recordType: "invoice",
+          recordId: retry.data.id,
+          newValue: invoiceNumber,
+        });
+        await linkWorkOrderPosToInvoice(supabase, wo.id, retry.data.id);
+        setSaving(false);
+        router.push(`/billing/${retry.data.id}`);
+        return;
+      }
       setError(insertError.message);
       setSaving(false);
       return;
     }
 
     await supabase.from("work_orders").update({ billing_status: "Billed", updated_at: new Date().toISOString() }).eq("id", wo.id);
+    await linkWorkOrderPosToInvoice(supabase, wo.id, inv.id);
     await logActivity(supabase, {
       userId: user?.id ?? null,
       action: "created",
@@ -618,6 +678,31 @@ export default function JobDetailPage() {
     });
     setSaving(false);
     router.push(`/billing/${inv.id}`);
+  }
+
+  async function attachEquipment(equipmentId: string) {
+    if (!wo) return;
+    setSaving(true);
+    setError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error: updError } = await supabase
+      .from("work_orders")
+      .update({ equipment_id: equipmentId || null, updated_at: new Date().toISOString() })
+      .eq("id", wo.id);
+    if (updError) {
+      setError(updError.message);
+      setSaving(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "equipment_attached",
+      recordType: "work_order",
+      recordId: wo.id,
+      newValue: equipmentId || "none",
+    });
+    await load();
+    setSaving(false);
   }
 
   if (!wo) return <div className="p-8 text-center opacity-60">Loading job…</div>;
@@ -698,15 +783,14 @@ export default function JobDetailPage() {
             </div>
             <div className="rounded-box bg-base-200/60 p-3">
               <p className="opacity-60">Equipment</p>
-              <p className="font-medium">
-                {wo.equipment?.name ? (
-                  <Link href="/equipment" className="link link-hover">
-                    {wo.equipment.name}
-                  </Link>
-                ) : (
-                  "—"
-                )}
-              </p>
+              <p className="font-medium">{wo.equipment?.name ?? "—"}</p>
+              {wo.equipment?.model || wo.equipment?.serial_number ? (
+                <p className="mt-0.5 text-xs opacity-70">
+                  {wo.equipment.model ? `Model ${wo.equipment.model}` : ""}
+                  {wo.equipment.model && wo.equipment.serial_number ? " · " : ""}
+                  {wo.equipment.serial_number ? `S/N ${wo.equipment.serial_number}` : ""}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -784,18 +868,25 @@ export default function JobDetailPage() {
                         {wo.customers?.service_address || wo.customers?.billing_address || "—"}
                       </p>
                     </div>
-                    <div>
-                      <p className="opacity-60">Equipment</p>
-                      <p className="font-medium">
-                        {wo.equipment?.name ? (
-                          <Link href="/equipment" className="link link-hover">
-                            {wo.equipment.name}
-                          </Link>
-                        ) : (
-                          "Not linked"
-                        )}
-                      </p>
-                      {wo.equipment?.location ? <p className="opacity-70">{wo.equipment.location}</p> : null}
+                    <div className="sm:col-span-2">
+                      <p className="mb-2 opacity-60">Equipment worked on</p>
+                      <EquipmentIdentityCard equipment={wo.equipment} />
+                      {openForField || isBilling || profile?.role === "service_manager" || profile?.role === "administrator" ? (
+                        <div className="mt-3">
+                          <EquipmentAttachPanel
+                            customerId={wo.customer_id}
+                            equipment={customerEquipment}
+                            selectedId={wo.equipment_id ?? ""}
+                            disabled={saving}
+                            onSelect={attachEquipment}
+                            onCreated={(row) =>
+                              setCustomerEquipment((prev) =>
+                                prev.some((e) => e.id === row.id) ? prev : [...prev, row],
+                              )
+                            }
+                          />
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -901,6 +992,16 @@ export default function JobDetailPage() {
                   </div>
                 </div>
               )}
+
+              <div className="card bg-base-100 shadow">
+                <div className="card-body">
+                  <PurchaseOrderPanel
+                    workOrderId={wo.id}
+                    invoiceId={invoices[0]?.id}
+                    canEdit={openForField || isBilling || profile?.role === "service_manager" || profile?.role === "administrator" || profile?.role === "technician"}
+                  />
+                </div>
+              </div>
 
               <div className="card bg-base-100 shadow">
                 <div className="card-body space-y-3">

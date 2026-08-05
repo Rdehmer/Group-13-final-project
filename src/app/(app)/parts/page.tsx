@@ -11,6 +11,9 @@ import {
   Wrench,
   ArrowDownToLine,
   ExternalLink,
+  Pencil,
+  Save,
+  X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
@@ -33,6 +36,50 @@ type UsageRow = WorkOrderPart & {
 
 type StockFilter = "all" | "low" | "ok" | "inactive";
 
+type PartForm = {
+  part_number: string;
+  name: string;
+  category: string;
+  description: string;
+  quantity_on_hand: string;
+  reorder_level: string;
+  unit_cost: string;
+  standard_customer_price: string;
+  supplier: string;
+  warranty_eligible: boolean;
+  is_active: boolean;
+};
+
+const EMPTY_FORM: PartForm = {
+  part_number: "",
+  name: "",
+  category: "",
+  description: "",
+  quantity_on_hand: "0",
+  reorder_level: "5",
+  unit_cost: "0",
+  standard_customer_price: "0",
+  supplier: "",
+  warranty_eligible: false,
+  is_active: true,
+};
+
+function partToForm(p: Part): PartForm {
+  return {
+    part_number: p.part_number,
+    name: p.name,
+    category: p.category ?? "",
+    description: p.description ?? "",
+    quantity_on_hand: String(p.quantity_on_hand),
+    reorder_level: String(p.reorder_level),
+    unit_cost: String(p.unit_cost),
+    standard_customer_price: String(p.standard_customer_price),
+    supplier: p.supplier ?? "",
+    warranty_eligible: Boolean(p.warranty_eligible),
+    is_active: Boolean(p.is_active),
+  };
+}
+
 /**
  * This business faces inventory shrinkage / negative stock risk.
  * Our app reduces the risk by tracking on-hand qty, low-stock alerts, and field usage.
@@ -50,19 +97,14 @@ export default function PartsPage() {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(deepPart);
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<PartForm>(EMPTY_FORM);
   const [receiveQty, setReceiveQty] = useState("1");
+  const [adjustQty, setAdjustQty] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({
-    part_number: "",
-    name: "",
-    category: "",
-    quantity_on_hand: "0",
-    reorder_level: "5",
-    unit_cost: "0",
-    standard_customer_price: "0",
-    supplier: "",
-  });
+  const [form, setForm] = useState<PartForm>(EMPTY_FORM);
 
   async function load() {
     const [{ data: partRows }, { data: useRows }] = await Promise.all([
@@ -111,6 +153,13 @@ export default function PartsPage() {
 
   const selected = parts.find((p) => p.id === selectedId) ?? null;
 
+  useEffect(() => {
+    if (selected && !editing) {
+      setEditForm(partToForm(selected));
+      setAdjustQty(String(selected.quantity_on_hand));
+    }
+  }, [selectedId, selected?.updated_at]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return parts.filter((p) => {
@@ -155,14 +204,16 @@ export default function PartsPage() {
     setBusy(true);
     const { data: { user } } = await supabase.auth.getUser();
     const payload = {
-      part_number: form.part_number,
-      name: form.name,
-      category: form.category || null,
-      quantity_on_hand: Number(form.quantity_on_hand),
-      reorder_level: Number(form.reorder_level),
-      unit_cost: Number(form.unit_cost),
-      standard_customer_price: Number(form.standard_customer_price),
-      supplier: form.supplier || null,
+      part_number: form.part_number.trim(),
+      name: form.name.trim(),
+      category: form.category.trim() || null,
+      description: form.description.trim() || null,
+      quantity_on_hand: Number(form.quantity_on_hand) || 0,
+      reorder_level: Number(form.reorder_level) || 0,
+      unit_cost: Number(form.unit_cost) || 0,
+      standard_customer_price: Number(form.standard_customer_price) || 0,
+      supplier: form.supplier.trim() || null,
+      warranty_eligible: form.warranty_eligible,
       is_active: true,
     };
     const { data, error: insertError } = await supabase.from("parts").insert(payload).select().single();
@@ -179,18 +230,63 @@ export default function PartsPage() {
       newValue: form.name,
     });
     setShowForm(false);
-    setForm({
-      part_number: "",
-      name: "",
-      category: "",
-      quantity_on_hand: "0",
-      reorder_level: "5",
-      unit_cost: "0",
-      standard_customer_price: "0",
-      supplier: "",
-    });
+    setForm(EMPTY_FORM);
     await load();
     setSelectedId(data.id);
+    setBusy(false);
+  }
+
+  function startEdit() {
+    if (!selected) return;
+    setError(null);
+    setSavedMsg(null);
+    setEditForm(partToForm(selected));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    if (selected) setEditForm(partToForm(selected));
+    setEditing(false);
+    setError(null);
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setSavedMsg(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const payload = {
+      part_number: editForm.part_number.trim(),
+      name: editForm.name.trim(),
+      category: editForm.category.trim() || null,
+      description: editForm.description.trim() || null,
+      quantity_on_hand: Math.max(0, Number(editForm.quantity_on_hand) || 0),
+      reorder_level: Math.max(0, Number(editForm.reorder_level) || 0),
+      unit_cost: Math.max(0, Number(editForm.unit_cost) || 0),
+      standard_customer_price: Math.max(0, Number(editForm.standard_customer_price) || 0),
+      supplier: editForm.supplier.trim() || null,
+      warranty_eligible: editForm.warranty_eligible,
+      is_active: editForm.is_active,
+      updated_at: new Date().toISOString(),
+    };
+    const { error: updError } = await supabase.from("parts").update(payload).eq("id", selected.id);
+    if (updError) {
+      setError(updError.message);
+      setBusy(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "updated",
+      recordType: "part",
+      recordId: selected.id,
+      newValue: `${payload.part_number} · qty ${payload.quantity_on_hand}`,
+    });
+    setEditing(false);
+    setSavedMsg("Part saved");
+    await load();
     setBusy(false);
   }
 
@@ -200,6 +296,7 @@ export default function PartsPage() {
     if (!qty || qty <= 0) return;
     setBusy(true);
     setError(null);
+    setSavedMsg(null);
     const { data: { user } } = await supabase.auth.getUser();
     const next = Number(selected.quantity_on_hand) + qty;
     const { error: updError } = await supabase
@@ -219,6 +316,65 @@ export default function PartsPage() {
       newValue: `+${qty} → ${next}`,
     });
     setReceiveQty("1");
+    setSavedMsg(`Received ${qty} units`);
+    await load();
+    setBusy(false);
+  }
+
+  async function setStockAbsolute() {
+    if (!selected) return;
+    const next = Math.max(0, Number(adjustQty));
+    if (Number.isNaN(next)) return;
+    setBusy(true);
+    setError(null);
+    setSavedMsg(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const prev = selected.quantity_on_hand;
+    const { error: updError } = await supabase
+      .from("parts")
+      .update({ quantity_on_hand: next, updated_at: new Date().toISOString() })
+      .eq("id", selected.id);
+    if (updError) {
+      setError(updError.message);
+      setBusy(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "stock_adjusted",
+      recordType: "part",
+      recordId: selected.id,
+      previousValue: String(prev),
+      newValue: String(next),
+    });
+    setSavedMsg(`On hand set to ${next}`);
+    await load();
+    setBusy(false);
+  }
+
+  async function toggleActive() {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const next = !selected.is_active;
+    const { error: updError } = await supabase
+      .from("parts")
+      .update({ is_active: next, updated_at: new Date().toISOString() })
+      .eq("id", selected.id);
+    if (updError) {
+      setError(updError.message);
+      setBusy(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: next ? "activated" : "deactivated",
+      recordType: "part",
+      recordId: selected.id,
+      newValue: String(next),
+    });
+    setSavedMsg(next ? "Part activated" : "Part marked inactive");
     await load();
     setBusy(false);
   }
@@ -294,6 +450,7 @@ export default function PartsPage() {
       ) : null}
 
       {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}
+      {savedMsg ? <div className="alert alert-success mb-4 text-sm">{savedMsg}</div> : null}
 
       {showForm ? (
         <dialog className="modal modal-open">
@@ -321,6 +478,14 @@ export default function PartsPage() {
                   className="input input-bordered w-full"
                   value={form.category}
                   onChange={(e) => setForm({ ...form, category: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Description">
+                <textarea
+                  className="textarea textarea-bordered w-full"
+                  rows={2}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
                 />
               </FormRow>
               <FormRow label="Supplier">
@@ -368,6 +533,15 @@ export default function PartsPage() {
                   onChange={(e) => setForm({ ...form, standard_customer_price: e.target.value })}
                 />
               </FormRow>
+              <label className="label cursor-pointer justify-start gap-3">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={form.warranty_eligible}
+                  onChange={(e) => setForm({ ...form, warranty_eligible: e.target.checked })}
+                />
+                <span className="label-text">Warranty eligible</span>
+              </label>
               <div className="modal-action">
                 <button type="button" className="btn" onClick={() => setShowForm(false)}>
                   Cancel
@@ -441,7 +615,11 @@ export default function PartsPage() {
                         <tr
                           key={p.id}
                           className={`cursor-pointer hover:bg-base-200/80 ${low ? "bg-warning/10" : ""} ${active ? "bg-primary/10" : ""}`}
-                          onClick={() => setSelectedId(p.id)}
+                          onClick={() => {
+                            setSelectedId(p.id);
+                            setEditing(false);
+                            setSavedMsg(null);
+                          }}
                         >
                           <td className="font-mono text-xs">{p.part_number}</td>
                           <td className="font-medium">{p.name}</td>
@@ -473,112 +651,283 @@ export default function PartsPage() {
                       <h3 className="text-xl font-bold">{selected.name}</h3>
                       <p className="font-mono text-sm opacity-70">{selected.part_number}</p>
                     </div>
-                    <StatusBadge label={stockLabel(selected)} tone={stockTone(selected)} />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div className="rounded-box bg-base-200/60 p-3">
-                      <p className="opacity-60">On hand</p>
-                      <p className="text-lg font-bold">{selected.quantity_on_hand}</p>
-                    </div>
-                    <div className="rounded-box bg-base-200/60 p-3">
-                      <p className="opacity-60">Reorder at</p>
-                      <p className="text-lg font-bold">{selected.reorder_level}</p>
-                    </div>
-                    <div className="rounded-box bg-base-200/60 p-3">
-                      <p className="opacity-60">Unit cost</p>
-                      <p className="font-medium">{formatMoney(selected.unit_cost)}</p>
-                    </div>
-                    <div className="rounded-box bg-base-200/60 p-3">
-                      <p className="opacity-60">Customer price</p>
-                      <p className="font-medium">{formatMoney(selected.standard_customer_price)}</p>
-                    </div>
-                  </div>
-
-                  {selected.category || selected.supplier ? (
-                    <div className="text-sm">
-                      {selected.category ? (
-                        <p>
-                          <span className="opacity-60">Category:</span> {selected.category}
-                        </p>
-                      ) : null}
-                      {selected.supplier ? (
-                        <p>
-                          <span className="opacity-60">Supplier:</span> {selected.supplier}
-                        </p>
+                    <div className="flex flex-col items-end gap-2">
+                      <StatusBadge label={stockLabel(selected)} tone={stockTone(selected)} />
+                      {!editing ? (
+                        <button type="button" className="btn btn-outline btn-xs gap-1" onClick={startEdit} disabled={busy}>
+                          <Pencil className="h-3.5 w-3.5" /> Edit
+                        </button>
                       ) : null}
                     </div>
-                  ) : null}
-
-                  <div className="rounded-box border border-base-300 p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">
-                      Receive stock
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        type="number"
-                        min="1"
-                        className="input input-bordered input-sm w-24"
-                        value={receiveQty}
-                        onChange={(e) => setReceiveQty(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-outline btn-sm gap-1"
-                        disabled={busy}
-                        onClick={receiveStock}
-                      >
-                        <ArrowDownToLine className="h-4 w-4" /> Receive
-                      </button>
-                    </div>
                   </div>
 
-                  <div>
-                    <div className="mb-2 flex items-center justify-between">
-                      <p className="text-xs font-semibold uppercase tracking-wide opacity-60">
-                        Field usage (this part)
-                      </p>
-                      <Link href="/technician" className="btn btn-ghost btn-xs gap-1">
-                        Tech schedule <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    </div>
-                    {selectedUsage.length === 0 ? (
-                      <p className="text-sm opacity-60">Not used on recent jobs.</p>
-                    ) : (
-                      <ul className="max-h-52 space-y-2 overflow-y-auto text-sm">
-                        {selectedUsage.map((u) => (
-                          <li key={u.id} className="rounded-box bg-base-200/60 p-2">
-                            <div className="flex flex-wrap items-center justify-between gap-1">
-                              <span>
-                                Qty <strong>{u.quantity_used}</strong> · {formatMoney(u.billable_amount)}
-                              </span>
-                              {u.work_orders?.id ? (
-                                <Link
-                                  href={`/work-orders/${u.work_orders.id}`}
-                                  className="link link-primary text-xs"
-                                >
-                                  {u.work_orders.work_order_number}
-                                </Link>
-                              ) : null}
-                            </div>
-                            <p className="text-xs opacity-70">
-                              {u.work_orders?.customer_id && u.work_orders.customers?.name ? (
-                                <Link href={`/customers/${u.work_orders.customer_id}`} className="link link-hover">
-                                  {u.work_orders.customers.name}
-                                </Link>
-                              ) : (
-                                u.work_orders?.customers?.name ?? "Job"
-                              )}
-                              {u.work_orders?.assigned_technician_id
-                                ? ` · ${techNames[u.work_orders.assigned_technician_id] ?? "Tech"}`
-                                : ""}
-                              {u.date_used ? ` · ${u.date_used}` : ""}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+                  {editing ? (
+                    <form onSubmit={saveEdit} className="space-y-3">
+                      <FormRow label="Part #" required>
+                        <input
+                          className="input input-bordered input-sm w-full font-mono"
+                          value={editForm.part_number}
+                          onChange={(e) => setEditForm({ ...editForm, part_number: e.target.value })}
+                          required
+                          disabled={busy}
+                        />
+                      </FormRow>
+                      <FormRow label="Name" required>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          value={editForm.name}
+                          onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                          required
+                          disabled={busy}
+                        />
+                      </FormRow>
+                      <FormRow label="Category">
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          value={editForm.category}
+                          onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                          disabled={busy}
+                        />
+                      </FormRow>
+                      <FormRow label="Description">
+                        <textarea
+                          className="textarea textarea-bordered textarea-sm w-full"
+                          rows={2}
+                          value={editForm.description}
+                          onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                          disabled={busy}
+                        />
+                      </FormRow>
+                      <FormRow label="Supplier">
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          value={editForm.supplier}
+                          onChange={(e) => setEditForm({ ...editForm, supplier: e.target.value })}
+                          disabled={busy}
+                        />
+                      </FormRow>
+                      <div className="grid grid-cols-2 gap-2">
+                        <FormRow label="On hand">
+                          <input
+                            type="number"
+                            min="0"
+                            className="input input-bordered input-sm w-full"
+                            value={editForm.quantity_on_hand}
+                            onChange={(e) => setEditForm({ ...editForm, quantity_on_hand: e.target.value })}
+                            disabled={busy}
+                          />
+                        </FormRow>
+                        <FormRow label="Reorder">
+                          <input
+                            type="number"
+                            min="0"
+                            className="input input-bordered input-sm w-full"
+                            value={editForm.reorder_level}
+                            onChange={(e) => setEditForm({ ...editForm, reorder_level: e.target.value })}
+                            disabled={busy}
+                          />
+                        </FormRow>
+                        <FormRow label="Unit cost">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="input input-bordered input-sm w-full"
+                            value={editForm.unit_cost}
+                            onChange={(e) => setEditForm({ ...editForm, unit_cost: e.target.value })}
+                            disabled={busy}
+                          />
+                        </FormRow>
+                        <FormRow label="Price">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="input input-bordered input-sm w-full"
+                            value={editForm.standard_customer_price}
+                            onChange={(e) =>
+                              setEditForm({ ...editForm, standard_customer_price: e.target.value })
+                            }
+                            disabled={busy}
+                          />
+                        </FormRow>
+                      </div>
+                      <label className="label cursor-pointer justify-start gap-3 py-1">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm"
+                          checked={editForm.warranty_eligible}
+                          onChange={(e) => setEditForm({ ...editForm, warranty_eligible: e.target.checked })}
+                          disabled={busy}
+                        />
+                        <span className="label-text text-sm">Warranty eligible</span>
+                      </label>
+                      <label className="label cursor-pointer justify-start gap-3 py-1">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm"
+                          checked={editForm.is_active}
+                          onChange={(e) => setEditForm({ ...editForm, is_active: e.target.checked })}
+                          disabled={busy}
+                        />
+                        <span className="label-text text-sm">Active in inventory</span>
+                      </label>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button type="button" className="btn btn-ghost btn-sm gap-1" disabled={busy} onClick={cancelEdit}>
+                          <X className="h-4 w-4" /> Cancel
+                        </button>
+                        <button type="submit" className="btn btn-primary btn-sm gap-1" disabled={busy}>
+                          <Save className="h-4 w-4" /> {busy ? "Saving…" : "Save changes"}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div className="rounded-box bg-base-200/60 p-3">
+                          <p className="opacity-60">On hand</p>
+                          <p className="text-lg font-bold">{selected.quantity_on_hand}</p>
+                        </div>
+                        <div className="rounded-box bg-base-200/60 p-3">
+                          <p className="opacity-60">Reorder at</p>
+                          <p className="text-lg font-bold">{selected.reorder_level}</p>
+                        </div>
+                        <div className="rounded-box bg-base-200/60 p-3">
+                          <p className="opacity-60">Unit cost</p>
+                          <p className="font-medium">{formatMoney(selected.unit_cost)}</p>
+                        </div>
+                        <div className="rounded-box bg-base-200/60 p-3">
+                          <p className="opacity-60">Customer price</p>
+                          <p className="font-medium">{formatMoney(selected.standard_customer_price)}</p>
+                        </div>
+                      </div>
+
+                      {selected.description ? (
+                        <p className="text-sm opacity-80">{selected.description}</p>
+                      ) : null}
+
+                      <div className="text-sm space-y-1">
+                        {selected.category ? (
+                          <p>
+                            <span className="opacity-60">Category:</span> {selected.category}
+                          </p>
+                        ) : null}
+                        {selected.supplier ? (
+                          <p>
+                            <span className="opacity-60">Supplier:</span> {selected.supplier}
+                          </p>
+                        ) : null}
+                        <p>
+                          <span className="opacity-60">Warranty:</span>{" "}
+                          {selected.warranty_eligible ? "Eligible" : "Not eligible"}
+                        </p>
+                      </div>
+
+                      <div className="rounded-box border border-base-300 p-3 space-y-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide opacity-60">
+                          Stock actions
+                        </p>
+                        <div className="flex flex-wrap items-end gap-2">
+                          <label className="form-control">
+                            <span className="label-text text-xs">Receive (+)</span>
+                            <input
+                              type="number"
+                              min="1"
+                              className="input input-bordered input-sm w-24"
+                              value={receiveQty}
+                              onChange={(e) => setReceiveQty(e.target.value)}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-sm gap-1"
+                            disabled={busy}
+                            onClick={receiveStock}
+                          >
+                            <ArrowDownToLine className="h-4 w-4" /> Receive
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap items-end gap-2">
+                          <label className="form-control">
+                            <span className="label-text text-xs">Set on hand to</span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="input input-bordered input-sm w-24"
+                              value={adjustQty}
+                              onChange={(e) => setAdjustQty(e.target.value)}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-sm"
+                            disabled={busy}
+                            onClick={setStockAbsolute}
+                          >
+                            Adjust stock
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className={`btn btn-sm w-full ${selected.is_active ? "btn-ghost" : "btn-primary"}`}
+                          disabled={busy}
+                          onClick={toggleActive}
+                        >
+                          {selected.is_active ? "Mark inactive" : "Reactivate part"}
+                        </button>
+                      </div>
+
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <p className="text-xs font-semibold uppercase tracking-wide opacity-60">
+                            Field usage (this part)
+                          </p>
+                          <Link href="/technician" className="btn btn-ghost btn-xs gap-1">
+                            Tech schedule <ExternalLink className="h-3 w-3" />
+                          </Link>
+                        </div>
+                        {selectedUsage.length === 0 ? (
+                          <p className="text-sm opacity-60">Not used on recent jobs.</p>
+                        ) : (
+                          <ul className="max-h-52 space-y-2 overflow-y-auto text-sm">
+                            {selectedUsage.map((u) => (
+                              <li key={u.id} className="rounded-box bg-base-200/60 p-2">
+                                <div className="flex flex-wrap items-center justify-between gap-1">
+                                  <span>
+                                    Qty <strong>{u.quantity_used}</strong> · {formatMoney(u.billable_amount)}
+                                  </span>
+                                  {u.work_orders?.id ? (
+                                    <Link
+                                      href={`/work-orders/${u.work_orders.id}`}
+                                      className="link link-primary text-xs"
+                                    >
+                                      {u.work_orders.work_order_number}
+                                    </Link>
+                                  ) : null}
+                                </div>
+                                <p className="text-xs opacity-70">
+                                  {u.work_orders?.customer_id && u.work_orders.customers?.name ? (
+                                    <Link
+                                      href={`/customers/${u.work_orders.customer_id}`}
+                                      className="link link-hover"
+                                    >
+                                      {u.work_orders.customers.name}
+                                    </Link>
+                                  ) : (
+                                    u.work_orders?.customers?.name ?? "Job"
+                                  )}
+                                  {u.work_orders?.assigned_technician_id
+                                    ? ` · ${techNames[u.work_orders.assigned_technician_id] ?? "Tech"}`
+                                    : ""}
+                                  {u.date_used ? ` · ${u.date_used}` : ""}
+                                </p>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
                 <EmptyState title="Select a part" description="Click a row to see stock and field usage." />
