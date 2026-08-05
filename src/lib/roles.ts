@@ -15,7 +15,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     href: "/customers",
     label: "Customers",
-    roles: ["administrator", "service_manager"],
+    roles: ["administrator", "service_manager", "billing"],
   },
   {
     href: "/equipment",
@@ -29,7 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/work-orders",
-    label: "Work Orders",
+    label: "Jobs",
     roles: ["administrator", "service_manager", "billing"],
   },
   {
@@ -50,6 +50,11 @@ export const NAV_ITEMS: NavItem[] = [
   {
     href: "/payments",
     label: "Payments",
+    roles: ["administrator", "billing"],
+  },
+  {
+    href: "/batches",
+    label: "Batches",
     roles: ["administrator", "billing"],
   },
   {

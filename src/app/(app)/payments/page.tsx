@@ -1,12 +1,39 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
-import { EmptyState, StatCard } from "@/components/ui";
+import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, remainingBalance } from "@/lib/calculations";
+import { daysPastDue, calendarMonthsForYear, formatMonthLabel, monthKeyFromDate } from "@/lib/billing";
 import type { Invoice, Payment } from "@/lib/types";
+
+type AgingBucket = "current" | "d30" | "d60" | "d90";
+
+type OpenInvoice = Invoice & {
+  customers?: { name: string };
+  work_orders?: { work_order_number: string } | null;
+};
+
+type PaymentRow = Payment & { customers?: { name: string } };
+
+const BUCKET_LABELS: Record<AgingBucket, string> = {
+  current: "Current",
+  d30: "1–30 Days",
+  d60: "31–60 Days",
+  d90: "61+ Days",
+};
+
+function agingBucketFor(inv: Invoice, today = new Date()): AgingBucket {
+  const days = daysPastDue(inv, today);
+  if (days <= 0) return "current";
+  if (days <= 30) return "d30";
+  if (days <= 60) return "d60";
+  return "d90";
+}
 
 /**
  * This business faces cash flow visibility risk when AR aging is unclear.
@@ -14,34 +41,85 @@ import type { Invoice, Payment } from "@/lib/types";
  */
 export default function PaymentsPage() {
   const supabase = createClient();
-  const [invoices, setInvoices] = useState<(Invoice & { customers?: { name: string } })[]>([]);
-  const [payments, setPayments] = useState<(Payment & { customers?: { name: string } })[]>([]);
+  const searchParams = useSearchParams();
+  const preselectedInvoice = searchParams.get("invoice");
+  const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ invoice_id: "", payment_method: "Check", payment_amount: "", reference_number: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [selectedBucket, setSelectedBucket] = useState<AgingBucket | null>(null);
+  const [paymentMonth, setPaymentMonth] = useState<string>("all");
 
   async function load() {
     const [{ data: inv }, { data: pay }] = await Promise.all([
-      supabase.from("invoices").select("*, customers(name)").gt("remaining_balance", 0).not("status", "eq", "Canceled"),
-      supabase.from("payments").select("*, customers(name)").order("created_at", { ascending: false }).limit(20),
+      supabase
+        .from("invoices")
+        .select("*, customers(name), work_orders(work_order_number)")
+        .gt("remaining_balance", 0)
+        .not("status", "eq", "Canceled"),
+      supabase
+        .from("payments")
+        .select("*, customers(name)")
+        .order("payment_date", { ascending: false })
+        .limit(200),
     ]);
-    setInvoices((inv as typeof invoices) ?? []);
-    setPayments((pay as typeof payments) ?? []);
+    const openInvoices = (inv as OpenInvoice[]) ?? [];
+    setInvoices(openInvoices);
+    setPayments((pay as PaymentRow[]) ?? []);
+    if (preselectedInvoice) {
+      const match = openInvoices.find((i) => i.id === preselectedInvoice);
+      if (match) {
+        setForm((f) => ({
+          ...f,
+          invoice_id: match.id,
+          payment_amount: String(match.remaining_balance),
+        }));
+        setShowForm(true);
+      }
+    }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [preselectedInvoice]);
 
-  const today = new Date();
-  const aging = { current: 0, d30: 0, d60: 0, d90: 0 };
-  for (const inv of invoices) {
-    const due = new Date(inv.due_date);
-    const days = Math.floor((today.getTime() - due.getTime()) / 86400000);
-    const bal = Number(inv.remaining_balance);
-    if (days <= 0) aging.current += bal;
-    else if (days <= 30) aging.d30 += bal;
-    else if (days <= 60) aging.d60 += bal;
-    else aging.d90 += bal;
+  const { aging, byBucket, today } = useMemo(() => {
+    const now = new Date();
+    const totals = { current: 0, d30: 0, d60: 0, d90: 0 };
+    const groups: Record<AgingBucket, OpenInvoice[]> = {
+      current: [],
+      d30: [],
+      d60: [],
+      d90: [],
+    };
+    for (const inv of invoices) {
+      const bucket = agingBucketFor(inv, now);
+      const bal = Number(inv.remaining_balance);
+      totals[bucket] += bal;
+      groups[bucket].push(inv);
+    }
+    for (const key of Object.keys(groups) as AgingBucket[]) {
+      groups[key].sort((a, b) => a.due_date.localeCompare(b.due_date));
+    }
+    return { aging: totals, byBucket: groups, today: now };
+  }, [invoices]);
+
+  const drillInvoices = selectedBucket ? byBucket[selectedBucket] : [];
+
+  const paymentMonthOptions = useMemo(() => calendarMonthsForYear(new Date().getFullYear()), []);
+
+  const filteredPayments = useMemo(() => {
+    if (paymentMonth === "all") return payments;
+    return payments.filter((p) => monthKeyFromDate(p.payment_date) === paymentMonth);
+  }, [payments, paymentMonth]);
+
+  const paymentMonthTotal = useMemo(
+    () => filteredPayments.reduce((sum, p) => sum + Number(p.payment_amount), 0),
+    [filteredPayments],
+  );
+
+  function toggleBucket(bucket: AgingBucket) {
+    setSelectedBucket((prev) => (prev === bucket ? null : bucket));
   }
 
   async function recordPayment(e: React.FormEvent) {
@@ -51,6 +129,16 @@ export default function PaymentsPage() {
     const inv = invoices.find((i) => i.id === form.invoice_id);
     if (!inv) { setBusy(false); return; }
     const amount = Number(form.payment_amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Enter a valid payment amount.");
+      setBusy(false);
+      return;
+    }
+    if (amount > Number(inv.remaining_balance) + 0.001) {
+      setError(`Amount cannot exceed the remaining balance (${formatMoney(inv.remaining_balance)}).`);
+      setBusy(false);
+      return;
+    }
     const { data: { user } } = await supabase.auth.getUser();
     const paymentNumber = `PAY-${Date.now().toString().slice(-8)}`;
 
@@ -58,6 +146,7 @@ export default function PaymentsPage() {
       payment_number: paymentNumber,
       customer_id: inv.customer_id,
       invoice_id: inv.id,
+      payment_date: new Date().toISOString().slice(0, 10),
       payment_method: form.payment_method,
       payment_amount: amount,
       reference_number: form.reference_number || null,
@@ -85,15 +174,116 @@ export default function PaymentsPage() {
   return (
     <div>
       <PageHeader title="Payments" description="Record payments and monitor AR aging" actions={
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)} disabled={invoices.length === 0}>Record Payment</button>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/billing" className="btn btn-outline btn-sm">Invoices</Link>
+          <Link href="/batches" className="btn btn-outline btn-sm">Batches</Link>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)} disabled={invoices.length === 0}>Record Payment</button>
+        </div>
       } />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Current" value={formatMoney(aging.current)} />
-        <StatCard label="1–30 Days" value={formatMoney(aging.d30)} hint="Past due" />
-        <StatCard label="31–60 Days" value={formatMoney(aging.d60)} danger={aging.d60 > 0} />
-        <StatCard label="61+ Days" value={formatMoney(aging.d90)} danger={aging.d90 > 0} />
+        <StatCard
+          label="Current"
+          value={formatMoney(aging.current)}
+          onClick={() => toggleBucket("current")}
+          active={selectedBucket === "current"}
+        />
+        <StatCard
+          label="1–30 Days"
+          value={formatMoney(aging.d30)}
+          hint="Past due"
+          onClick={() => toggleBucket("d30")}
+          active={selectedBucket === "d30"}
+        />
+        <StatCard
+          label="31–60 Days"
+          value={formatMoney(aging.d60)}
+          danger={aging.d60 > 0}
+          onClick={() => toggleBucket("d60")}
+          active={selectedBucket === "d60"}
+        />
+        <StatCard
+          label="61+ Days"
+          value={formatMoney(aging.d90)}
+          danger={aging.d90 > 0}
+          onClick={() => toggleBucket("d90")}
+          active={selectedBucket === "d90"}
+        />
       </div>
+
+      {selectedBucket ? (
+        <div className="card bg-base-100 shadow mb-6">
+          <div className="card-body">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="card-title text-base">
+                {BUCKET_LABELS[selectedBucket]} — open invoices
+              </h2>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedBucket(null)}>
+                Clear
+              </button>
+            </div>
+            {drillInvoices.length === 0 ? (
+              <EmptyState
+                title="No invoices in this bucket"
+                description="Open invoices in other aging buckets may still need attention."
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Invoice #</th>
+                      <th>Customer</th>
+                      <th>Work order</th>
+                      <th>Invoice date</th>
+                      <th>Due date</th>
+                      <th>Days past due</th>
+                      <th>Balance</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillInvoices.map((inv) => {
+                      const days = daysPastDue(inv, today);
+                      const woNumber = inv.work_orders?.work_order_number;
+                      return (
+                        <tr key={inv.id}>
+                          <td>
+                            <Link href={`/billing/${inv.id}`} className="link link-primary font-medium">
+                              {inv.invoice_number}
+                            </Link>
+                          </td>
+                          <td>{inv.customers?.name ?? "—"}</td>
+                          <td>
+                            {inv.work_order_id && woNumber ? (
+                              <Link href={`/work-orders/${inv.work_order_id}`} className="link link-primary">
+                                {woNumber}
+                              </Link>
+                            ) : inv.work_order_id ? (
+                              <Link href={`/work-orders/${inv.work_order_id}`} className="link link-primary">
+                                View WO
+                              </Link>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td>{inv.invoice_date}</td>
+                          <td>{inv.due_date}</td>
+                          <td>{days <= 0 ? "Current" : days}</td>
+                          <td>{formatMoney(inv.remaining_balance)}</td>
+                          <td>
+                            <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {showForm ? (
         <dialog className="modal modal-open">
@@ -133,18 +323,78 @@ export default function PaymentsPage() {
 
       <div className="card bg-base-100 shadow">
         <div className="card-body">
-          <h2 className="card-title text-base">Recent Payments</h2>
-          {payments.length === 0 ? (
-            <EmptyState title="No payments recorded" description="Record a simulated payment against an open invoice." />
+          <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="card-title text-base">Payments received</h2>
+              <p className="text-sm opacity-60">
+                {paymentMonth === "all" ? (
+                  <>
+                    All months · Received {formatMoney(paymentMonthTotal)} · {filteredPayments.length}{" "}
+                    {filteredPayments.length === 1 ? "payment" : "payments"}
+                  </>
+                ) : (
+                  <>
+                    {formatMonthLabel(paymentMonth)} · Received {formatMoney(paymentMonthTotal)} ·{" "}
+                    {filteredPayments.length} {filteredPayments.length === 1 ? "payment" : "payments"}
+                  </>
+                )}
+              </p>
+            </div>
+            <label className="form-control w-full sm:max-w-[14rem]">
+              <select
+                className="select select-bordered select-sm w-full"
+                value={paymentMonth}
+                onChange={(e) => setPaymentMonth(e.target.value)}
+                aria-label="Payment month"
+              >
+                <option value="all">All months</option>
+                {paymentMonthOptions.map((key) => (
+                  <option key={key} value={key}>
+                    {formatMonthLabel(key)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {filteredPayments.length === 0 ? (
+            <EmptyState
+              title={
+                paymentMonth !== "all"
+                  ? `No payments in ${formatMonthLabel(paymentMonth)}`
+                  : "No payments recorded"
+              }
+              description={
+                paymentMonth !== "all"
+                  ? "Try All months or another month, or record a simulated payment against an open invoice."
+                  : "Record a simulated payment against an open invoice."
+              }
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Payment #</th><th>Customer</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead>
+                <thead><tr><th>Payment #</th><th>Invoice</th><th>Customer</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead>
                 <tbody>
-                  {payments.map((p) => (
+                  {filteredPayments.map((p) => (
                     <tr key={p.id}>
-                      <td>{p.payment_number}</td>
-                      <td>{p.customers?.name ?? "—"}</td>
+                      <td className="font-medium">{p.payment_number}</td>
+                      <td>
+                        {p.invoice_id ? (
+                          <Link href={`/billing/${p.invoice_id}`} className="link link-primary">
+                            View invoice
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        {p.customer_id ? (
+                          <Link href={`/customers/${p.customer_id}`} className="link link-hover">
+                            {p.customers?.name ?? "—"}
+                          </Link>
+                        ) : (
+                          p.customers?.name ?? "—"
+                        )}
+                      </td>
                       <td>{p.payment_date}</td>
                       <td>{p.payment_method}</td>
                       <td>{formatMoney(p.payment_amount)}</td>

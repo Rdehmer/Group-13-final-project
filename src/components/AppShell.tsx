@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
 import { ThemeSelector } from "@/components/ThemeSelector";
-import { NAV_ITEMS } from "@/lib/roles";
+import { NAV_ITEMS, homeForRole } from "@/lib/roles";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 
@@ -37,10 +37,10 @@ export function AppShell({
             </label>
           </div>
           <div className="flex-1">
-            <div>
+            <Link href={homeForRole(profile.role)} className="block hover:opacity-80">
               <p className="text-xs uppercase tracking-wide opacity-60">Equipment Service Manager</p>
               <p className="font-semibold leading-tight">Ridley Equipment Services</p>
-            </div>
+            </Link>
           </div>
           <div className="hidden items-center gap-3 md:flex">
             <div className="text-right text-sm">
@@ -75,7 +75,9 @@ export function AppShell({
         <nav className="menu min-h-full w-72 bg-base-100 p-4 text-base-content">
           <div className="mb-6 flex items-center gap-2 px-2">
             <Wrench className="h-6 w-6 text-primary" />
-            <span className="font-bold">ESM</span>
+            <Link href={homeForRole(profile.role)} className="font-bold hover:opacity-80">
+              ESM
+            </Link>
           </div>
           {navItems.map((item) => {
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
