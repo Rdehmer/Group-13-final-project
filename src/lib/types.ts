@@ -29,6 +29,10 @@ export type Customer = {
   city: string | null;
   state: string | null;
   zip_code: string | null;
+  /** Optional; used for global location filters and forms. */
+  region: string | null;
+  /** Optional; used for global location filters and forms. */
+  country: string | null;
   status: "Active" | "Inactive" | "On Hold";
   payment_terms: string | null;
   notes: string | null;
