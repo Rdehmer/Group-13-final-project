@@ -53,6 +53,11 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["administrator", "billing"],
   },
   {
+    href: "/batches",
+    label: "Batches",
+    roles: ["administrator", "billing"],
+  },
+  {
     href: "/reports",
     label: "Reports",
     roles: ["administrator", "service_manager", "billing"],

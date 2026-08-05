@@ -129,6 +129,16 @@ export default function PaymentsPage() {
     const inv = invoices.find((i) => i.id === form.invoice_id);
     if (!inv) { setBusy(false); return; }
     const amount = Number(form.payment_amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Enter a valid payment amount.");
+      setBusy(false);
+      return;
+    }
+    if (amount > Number(inv.remaining_balance) + 0.001) {
+      setError(`Amount cannot exceed the remaining balance (${formatMoney(inv.remaining_balance)}).`);
+      setBusy(false);
+      return;
+    }
     const { data: { user } } = await supabase.auth.getUser();
     const paymentNumber = `PAY-${Date.now().toString().slice(-8)}`;
 
@@ -136,6 +146,7 @@ export default function PaymentsPage() {
       payment_number: paymentNumber,
       customer_id: inv.customer_id,
       invoice_id: inv.id,
+      payment_date: new Date().toISOString().slice(0, 10),
       payment_method: form.payment_method,
       payment_amount: amount,
       reference_number: form.reference_number || null,
@@ -165,6 +176,7 @@ export default function PaymentsPage() {
       <PageHeader title="Payments" description="Record payments and monitor AR aging" actions={
         <div className="flex flex-wrap gap-2">
           <Link href="/billing" className="btn btn-outline btn-sm">Invoices</Link>
+          <Link href="/batches" className="btn btn-outline btn-sm">Batches</Link>
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)} disabled={invoices.length === 0}>Record Payment</button>
         </div>
       } />

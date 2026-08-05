@@ -444,6 +444,16 @@ export default function BillingPage() {
       <PageHeader
         title="Invoices"
         description="Status queues, team assignment, and posting customer invoices"
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link href="/batches" className="btn btn-outline btn-sm">
+              Batches
+            </Link>
+            <Link href="/payments" className="btn btn-outline btn-sm">
+              Payments
+            </Link>
+          </div>
+        }
       />
 
       {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}

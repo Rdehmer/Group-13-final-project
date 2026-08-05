@@ -270,6 +270,48 @@ export type Payment = {
   created_at: string;
 };
 
+/** Accounting batch lifecycle: Open (editable) → Posted (locked) → Exported (to GL). */
+export type AccountingBatchStatus = "Open" | "Posted" | "Exported";
+export type AccountingBatchType = "invoice" | "payment" | "mixed";
+
+export type AccountingBatch = {
+  id: string;
+  batch_number: string;
+  batch_type: AccountingBatchType;
+  name: string | null;
+  status: AccountingBatchStatus;
+  batch_date: string;
+  payment_method: string | null;
+  notes: string | null;
+  invoice_total: number;
+  payment_total: number;
+  invoice_count: number;
+  payment_count: number;
+  created_by: string | null;
+  posted_by: string | null;
+  posted_at: string | null;
+  exported_by: string | null;
+  exported_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountingBatchInvoice = {
+  id: string;
+  batch_id: string;
+  invoice_id: string;
+  amount: number;
+  added_at: string;
+};
+
+export type AccountingBatchPayment = {
+  id: string;
+  batch_id: string;
+  payment_id: string;
+  amount: number;
+  added_at: string;
+};
+
 export type CompanySettings = {
   id: string;
   company_name: string;

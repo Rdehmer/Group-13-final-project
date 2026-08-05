@@ -29,9 +29,13 @@ export function statusTone(status: string): keyof typeof TONE {
     )
   )
     return "warning";
-  if (["completed", "paid", "active", "approved", "operational", "renewed", "reviewed"].some((x) => s.includes(x)))
+  if (
+    ["completed", "paid", "active", "approved", "operational", "renewed", "reviewed", "exported", "posted"].some((x) =>
+      s.includes(x),
+    )
+  )
     return "success";
-  if (["draft", "requested", "scheduled", "sent"].some((x) => s.includes(x))) return "info";
+  if (["draft", "requested", "scheduled", "sent", "open"].some((x) => s.includes(x))) return "info";
   return "neutral";
 }
 
