@@ -1,3 +1,5 @@
+import type { ServiceContract } from "@/lib/types";
+
 export const CONTRACT_TYPES = [
   "Preventive Maintenance",
   "Full-Service Maintenance",
@@ -252,3 +254,255 @@ export const CONTRACT_TYPE_HELP: Record<string, string> = {
   "Time and Materials": "Pay per visit — best for occasional or unpredictable service needs.",
   "Custom Service Agreement": "Non-standard scope such as multi-site or seasonal coverage.",
 };
+
+export type CustomerContractEquipment = {
+  id: string;
+  name: string;
+  category: string | null;
+  location: string | null;
+};
+
+export type CustomerContract = ServiceContract & {
+  equipment: CustomerContractEquipment[];
+};
+
+export type ContractFilterTab = "all" | "active" | "pending" | "expired";
+
+const TIER_BADGE_CLASS: Record<ContractTierId, string> = {
+  gold: "badge-warning",
+  silver: "badge-ghost",
+  bronze: "badge-neutral",
+};
+
+export function inferContractTier(name: string): ContractTierId | null {
+  const lower = name.toLowerCase();
+  if (lower.includes("gold")) return "gold";
+  if (lower.includes("silver")) return "silver";
+  if (lower.includes("bronze")) return "bronze";
+  return null;
+}
+
+export function tierBadgeClass(tierId: ContractTierId): string {
+  return TIER_BADGE_CLASS[tierId];
+}
+
+export function contractStatusMessage(status: string): string {
+  const s = status.toLowerCase();
+  if (s.includes("pending")) {
+    return "Ridley is reviewing your request. You'll be notified when it's active.";
+  }
+  if (s === "active") {
+    return "This agreement is active and coverage applies to listed equipment.";
+  }
+  if (s.includes("expired")) {
+    return "This agreement has ended. Request a new contract to restore coverage.";
+  }
+  if (s.includes("draft")) {
+    return "This agreement is being prepared and is not yet active.";
+  }
+  if (s.includes("renewed")) {
+    return "This agreement was renewed from a prior term.";
+  }
+  return "Contact Ridley Equipment Services if you have questions about this agreement.";
+}
+
+export function daysUntilEnd(endDate: string): number | null {
+  if (!endDate) return null;
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(end.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+export function isExpiringSoon(endDate: string, withinDays = 60): boolean {
+  const days = daysUntilEnd(endDate);
+  return days !== null && days >= 0 && days <= withinDays;
+}
+
+export function formatContractTerm(startDate: string, endDate: string): string {
+  const fmt = (d: string) => {
+    const date = new Date(`${d}T00:00:00`);
+    return Number.isNaN(date.getTime())
+      ? d
+      : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  };
+  return `${fmt(startDate)} – ${fmt(endDate)}`;
+}
+
+export function formatRenewalNote(renewalOption: string | null): string | null {
+  if (!renewalOption) return null;
+  const lower = renewalOption.toLowerCase();
+  if (lower.includes("auto")) return "Auto-renews";
+  if (lower.includes("manual")) return "Manual renewal";
+  if (lower.includes("none") || lower.includes("no renewal")) return "No auto-renewal";
+  return renewalOption;
+}
+
+export function formatCoverageSummary(contract: Pick<
+  ServiceContract,
+  "included_service_visits" | "service_frequency" | "included_labor_hours" | "emergency_response_commitment"
+>): string {
+  const parts: string[] = [];
+  if (contract.included_service_visits > 0) {
+    const freq = contract.service_frequency?.toLowerCase() ?? "";
+    parts.push(`${contract.included_service_visits} ${freq ? `${freq} ` : ""}visits`.replace("  ", " "));
+  }
+  if (contract.included_labor_hours > 0) {
+    parts.push(`${contract.included_labor_hours} labor hrs`);
+  }
+  if (contract.emergency_response_commitment) {
+    parts.push(contract.emergency_response_commitment);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "Coverage details on file";
+}
+
+export function contractFilterTab(contract: ServiceContract, tab: ContractFilterTab): boolean {
+  if (tab === "all") return true;
+  const status = contract.status.toLowerCase();
+  if (tab === "active") return status === "active" || status === "renewed";
+  if (tab === "pending") return status.includes("pending") || status === "draft";
+  if (tab === "expired") return status.includes("expired") || (daysUntilEnd(contract.end_date) ?? 1) < 0;
+  return true;
+}
+
+export function parseCustomerContracts(
+  rows: Array<
+    ServiceContract & {
+      contract_equipment?: Array<{ equipment: CustomerContractEquipment | null }>;
+    }
+  >,
+): CustomerContract[] {
+  return rows.map((row) => {
+    const { contract_equipment, ...contract } = row;
+    const equipment = (contract_equipment ?? [])
+      .map((ce) => ce.equipment)
+      .filter((eq): eq is CustomerContractEquipment => eq != null);
+    return { ...contract, equipment };
+  });
+}
+
+export function formatEquipmentPreview(equipment: CustomerContractEquipment[], max = 3): string {
+  if (equipment.length === 0) return "No equipment listed";
+  const names = equipment.slice(0, max).map((eq) => eq.name);
+  const remaining = equipment.length - max;
+  if (remaining > 0) return `${names.join(", ")} +${remaining} more`;
+  return names.join(", ");
+}
+
+export function suggestTier(equipmentCount: number, hasActiveContract: boolean): ContractTierId {
+  if (equipmentCount >= 5 || hasActiveContract) return "gold";
+  if (equipmentCount >= 3) return "silver";
+  return "bronze";
+}
+
+export function contractNamePreview(form: ContractRequestFormState, tierId: ContractTierId): string {
+  return buildContractName(form.contract_type, form.start_date, tierId);
+}
+
+export type EquipmentOverlap = {
+  equipmentId: string;
+  equipmentName: string;
+  contractName: string;
+};
+
+export function findOverlappingEquipment(
+  activeContracts: CustomerContract[],
+  selectedEquipmentIds: string[],
+  equipmentNames: Map<string, string>,
+): EquipmentOverlap[] {
+  const selected = new Set(selectedEquipmentIds);
+  const overlaps: EquipmentOverlap[] = [];
+  for (const contract of activeContracts) {
+    const status = contract.status.toLowerCase();
+    if (status !== "active" && status !== "renewed") continue;
+    for (const eq of contract.equipment) {
+      if (selected.has(eq.id)) {
+        overlaps.push({
+          equipmentId: eq.id,
+          equipmentName: equipmentNames.get(eq.id) ?? eq.name,
+          contractName: contract.name,
+        });
+      }
+    }
+  }
+  return overlaps;
+}
+
+export type ContractRequestPreviewData = {
+  tierName: string;
+  tierTagline: string;
+  contractName: string;
+  contractType: string;
+  term: string;
+  renewal: string | null;
+  coverageSummary: string;
+  tierCoverages: string[];
+  equipmentNames: string[];
+  billingMethod: string;
+  paymentTerms: string;
+  notes: string | null;
+  approvalRequirements: string | null;
+};
+
+type PreviewEquipment = { id: string; name: string };
+
+export function buildContractPreview(
+  form: ContractRequestFormState,
+  tierId: ContractTierId,
+  equipment: PreviewEquipment[],
+): ContractRequestPreviewData {
+  const tier = getContractTier(tierId);
+  const selected = equipment.filter((eq) => form.equipment_ids.includes(eq.id));
+  const visits = Number(form.included_service_visits) || 0;
+  const labor = Number(form.included_labor_hours) || 0;
+
+  return {
+    tierName: tier.name,
+    tierTagline: tier.tagline,
+    contractName: contractNamePreview(form, tierId),
+    contractType: form.contract_type,
+    term: formatContractTerm(form.start_date, form.end_date),
+    renewal: formatRenewalNote(form.renewal_option || null),
+    coverageSummary: formatCoverageSummary({
+      included_service_visits: visits,
+      service_frequency: form.service_frequency || null,
+      included_labor_hours: labor,
+      emergency_response_commitment: form.emergency_response_commitment || null,
+    }),
+    tierCoverages: tier.coverages,
+    equipmentNames: selected.map((eq) => eq.name),
+    billingMethod: form.billing_method,
+    paymentTerms: form.payment_terms,
+    notes: form.notes.trim() || null,
+    approvalRequirements: form.approval_requirements.trim() || null,
+  };
+}
+
+const DRAFT_KEY_PREFIX = "esm-contract-draft-";
+
+export function saveContractDraft(customerId: string, data: { form: ContractRequestFormState; tierId: ContractTierId; step: number }) {
+  try {
+    sessionStorage.setItem(`${DRAFT_KEY_PREFIX}${customerId}`, JSON.stringify(data));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+export function loadContractDraft(customerId: string): { form: ContractRequestFormState; tierId: ContractTierId; step: number } | null {
+  try {
+    const raw = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}${customerId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as { form: ContractRequestFormState; tierId: ContractTierId; step: number };
+  } catch {
+    return null;
+  }
+}
+
+export function clearContractDraft(customerId: string) {
+  try {
+    sessionStorage.removeItem(`${DRAFT_KEY_PREFIX}${customerId}`);
+  } catch {
+    /* ignore */
+  }
+}

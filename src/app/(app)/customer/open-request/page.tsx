@@ -85,7 +85,7 @@ export default function OpenRequestPage() {
   return (
     <div>
       <PageHeader
-        title="Open Request"
+        title="Open Requests"
         description="Track the status of your service requests and see where each one is in the process."
         actions={
           <Link href="/customer" className="btn btn-outline btn-sm">

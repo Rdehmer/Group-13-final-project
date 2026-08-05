@@ -156,18 +156,25 @@ export default function CustomerPortalPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showAddEquipment, setShowAddEquipment] = useState(false);
+  const [customerPhone, setCustomerPhone] = useState("");
 
   const loadData = useCallback(async (customerId: string) => {
-    const [{ data: eq }, { data: wo }, { data: sc }] = await Promise.all([
+    const [{ data: eq }, { data: wo }, { data: sc }, { data: customer }] = await Promise.all([
       supabase.from("equipment").select("*").eq("customer_id", customerId).order("name"),
       supabase.from("work_orders").select("*").eq("customer_id", customerId).order("created_at", { ascending: false }),
       supabase.from("service_contracts").select("id, status").eq("customer_id", customerId),
+      supabase.from("customers").select("phone").eq("id", customerId).single(),
     ]);
     setEquipment((eq as Equipment[]) ?? []);
     setWorkOrders((wo as WorkOrder[]) ?? []);
     const contracts = sc ?? [];
     setContractCount(contracts.length);
     setActiveContractCount(contracts.filter((c) => c.status === "Active").length);
+    const phone = customer?.phone ?? "";
+    setCustomerPhone(phone);
+    if (phone) {
+      setForm((prev) => (prev.contact_phone ? prev : { ...prev, contact_phone: phone }));
+    }
   }, [supabase]);
 
   useEffect(() => {
@@ -178,9 +185,6 @@ export default function CustomerPortalPage() {
       setProfile(p as Profile);
       if (!p?.customer_id) return;
       await loadData(p.customer_id);
-      if (p.phone) {
-        setForm((prev) => (prev.contact_phone ? prev : { ...prev, contact_phone: p.phone ?? "" }));
-      }
     })();
   }, [loadData, supabase]);
 
@@ -194,7 +198,7 @@ export default function CustomerPortalPage() {
   function resetWizard() {
     setForm((prev) => ({
       ...EMPTY_FORM,
-      contact_phone: prev.contact_phone || profile?.phone || "",
+      contact_phone: prev.contact_phone || customerPhone || "",
     }));
     setPhotoFile(null);
     setStep("type");
@@ -350,7 +354,7 @@ export default function CustomerPortalPage() {
           <StatCard label="Equipment" value={equipment.length} hint="View & register →" />
         </Link>
         <Link href="/customer/open-request" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          <StatCard label="Open Request" value={openRequests} hint="View status & stage →" />
+          <StatCard label="Open Requests" value={openRequests} hint="View status & stage →" />
         </Link>
         <Link href="/customer/order-history" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           <StatCard label="Order History" value={workOrders.length} hint="View history →" />

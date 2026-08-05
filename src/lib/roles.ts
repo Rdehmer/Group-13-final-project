@@ -72,6 +72,16 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["customer"],
       },
       {
+        href: "/customer/request-contract",
+        label: "Request Contract",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/open-request",
+        label: "Open Requests",
+        roles: ["customer"],
+      },
+      {
         href: "/customer/contracts",
         label: "My Contracts",
         roles: ["customer"],
@@ -82,18 +92,8 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["customer"],
       },
       {
-        href: "/customer/open-request",
-        label: "Open Request",
-        roles: ["customer"],
-      },
-      {
         href: "/customer/order-history",
         label: "Order History",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/request-contract",
-        label: "Request Contract",
         roles: ["customer"],
       },
     ],
