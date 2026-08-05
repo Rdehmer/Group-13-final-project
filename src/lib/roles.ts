@@ -4,6 +4,8 @@ export type NavItem = {
   href: string;
   label: string;
   roles: UserRole[];
+  /** Indented sub-item in the sidebar (e.g. under My Portal). */
+  indent?: boolean;
 };
 
 export const NAV_ITEMS: NavItem[] = [
@@ -60,6 +62,11 @@ export const NAV_ITEMS: NavItem[] = [
   {
     href: "/customer",
     label: "My Portal",
+    roles: ["customer"],
+  },
+  {
+    href: "/customer/request-contract",
+    label: "Request Contract",
     roles: ["customer"],
   },
   {

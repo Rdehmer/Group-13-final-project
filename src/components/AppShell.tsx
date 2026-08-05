@@ -78,10 +78,16 @@ export function AppShell({
             <span className="font-bold">ESM</span>
           </div>
           {navItems.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active =
+              item.href === "/customer"
+                ? pathname === "/customer"
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <li key={item.href}>
-                <Link href={item.href} className={active ? "active font-medium" : ""}>
+                <Link
+                  href={item.href}
+                  className={active ? "active font-medium" : ""}
+                >
                   {item.label}
                 </Link>
               </li>
