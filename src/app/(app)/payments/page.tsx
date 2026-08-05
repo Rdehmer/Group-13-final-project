@@ -315,9 +315,17 @@ export default function PaymentsPage() {
             <div>
               <h2 className="card-title text-base">Payments received</h2>
               <p className="text-sm opacity-60">
-                {paymentMonth === "all"
-                  ? `All loaded payments · ${formatMoney(paymentMonthTotal)}`
-                  : `${formatMonthLabel(paymentMonth)} · ${formatMoney(paymentMonthTotal)} received`}
+                {paymentMonth === "all" ? (
+                  <>
+                    All months · Received {formatMoney(paymentMonthTotal)} · {filteredPayments.length}{" "}
+                    {filteredPayments.length === 1 ? "payment" : "payments"}
+                  </>
+                ) : (
+                  <>
+                    {formatMonthLabel(paymentMonth)} · Received {formatMoney(paymentMonthTotal)} ·{" "}
+                    {filteredPayments.length} {filteredPayments.length === 1 ? "payment" : "payments"}
+                  </>
+                )}
               </p>
             </div>
             <label className="form-control w-full sm:max-w-[14rem]">
@@ -338,8 +346,16 @@ export default function PaymentsPage() {
           </div>
           {filteredPayments.length === 0 ? (
             <EmptyState
-              title="No payments in this month"
-              description="Choose another payment month or record a simulated payment against an open invoice."
+              title={
+                paymentMonth !== "all"
+                  ? `No payments in ${formatMonthLabel(paymentMonth)}`
+                  : "No payments recorded"
+              }
+              description={
+                paymentMonth !== "all"
+                  ? "Try All months or another month, or record a simulated payment against an open invoice."
+                  : "Record a simulated payment against an open invoice."
+              }
             />
           ) : (
             <div className="overflow-x-auto">

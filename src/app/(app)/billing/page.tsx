@@ -300,8 +300,16 @@ export default function BillingPage() {
             {filtered.length === 0 ? (
               <div className="p-6">
                 <EmptyState
-                  title="No invoices match"
-                  description="Adjust filters or create an invoice from a completed work order above."
+                  title={
+                    invoiceMonth !== "all"
+                      ? `No invoices in ${formatMonthLabel(invoiceMonth)}`
+                      : "No invoices match"
+                  }
+                  description={
+                    invoiceMonth !== "all"
+                      ? "Try All months, or pick a different month. You can also create an invoice from a completed work order above."
+                      : "Adjust filters or create an invoice from a completed work order above."
+                  }
                 />
               </div>
             ) : (
