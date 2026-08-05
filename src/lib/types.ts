@@ -163,7 +163,8 @@ export type TruckInventory = {
   updated_at: string;
 };
 
-export type PurchaseOrder = {
+/** Technician parts replenishment request (truck inventory PO request row). */
+export type TechPartOrderRequest = {
   id: string;
   technician_id: string;
   part_id: string;
@@ -173,6 +174,9 @@ export type PurchaseOrder = {
   created_at: string;
   updated_at: string;
 };
+
+/** @deprecated Prefer TechPartOrderRequest — kept for import compatibility during rename. */
+export type PurchaseOrderRequest = TechPartOrderRequest;
 
 export type EmergencyPurchase = {
   id: string;

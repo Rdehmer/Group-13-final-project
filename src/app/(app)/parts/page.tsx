@@ -8,7 +8,7 @@ import { EmptyState, StatusBadge } from "@/components/ui";
 import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
 import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { formatMoney } from "@/lib/calculations";
-import type { Part, Profile, PurchaseOrder, TruckInventory, WorkOrder } from "@/lib/types";
+import type { Part, Profile, TechPartOrderRequest, TruckInventory, WorkOrder } from "@/lib/types";
 
 type PartForm = {
   part_number: string;
@@ -32,7 +32,7 @@ type SortKey =
 type SortDirection = "asc" | "desc";
 
 type TruckStockRow = TruckInventory & { parts?: Part };
-type PurchaseOrderRow = PurchaseOrder & { parts?: Pick<Part, "part_number" | "name"> };
+type PurchaseOrderRow = TechPartOrderRequest & { parts?: Pick<Part, "part_number" | "name"> };
 type JobOption = Pick<WorkOrder, "id" | "work_order_number" | "problem_description">;
 
 const EMPTY_FORM: PartForm = {

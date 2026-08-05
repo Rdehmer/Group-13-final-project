@@ -12,11 +12,13 @@ const TONE: Record<string, string> = {
 export function StatusBadge({
   label,
   tone = "neutral",
+  className = "",
 }: {
   label: string;
   tone?: keyof typeof TONE;
+  className?: string;
 }) {
-  return <span className={`badge badge-sm ${TONE[tone]}`}>{label}</span>;
+  return <span className={`badge badge-sm ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}>{label}</span>;
 }
 
 export function statusTone(status: string): keyof typeof TONE {
