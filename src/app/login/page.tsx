@@ -165,14 +165,33 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-6 rounded-box bg-base-100 p-4 text-sm shadow">
-            <p className="font-semibold">Demo accounts (password: DemoPass123!)</p>
-            <ul className="mt-2 space-y-1 opacity-80">
-              <li>admin@ridley-demo.test — Administrator</li>
-              <li>manager@ridley-demo.test — Service Manager</li>
-              <li>tech1@ridley-demo.test — Technician</li>
-              <li>billing@ridley-demo.test — Billing</li>
-              <li>customer1@ridley-demo.test — Customer Portal</li>
-            </ul>
+            <p className="font-semibold">Demo accounts — click to fill (password: DemoPass123!)</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {[
+                { email: "admin@ridley-demo.test", label: "Admin" },
+                { email: "manager@ridley-demo.test", label: "Manager" },
+                { email: "tech1@ridley-demo.test", label: "Technician" },
+                { email: "billing@ridley-demo.test", label: "Billing" },
+                { email: "customer1@ridley-demo.test", label: "Customer" },
+              ].map((acct) => (
+                <button
+                  key={acct.email}
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={() => {
+                    setMode("login");
+                    setEmail(acct.email);
+                    setPassword("DemoPass123!");
+                    setError(null);
+                  }}
+                >
+                  {acct.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-3 text-xs opacity-60">
+              Best demo flow: Manager job → Tech PO/labor → Billing invoice → Payments.
+            </p>
           </div>
         </div>
       </section>

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, FileText, ClipboardList, ChevronRight } from "lucide-react";
+import { Search, FileText, ClipboardList, ChevronRight, Paperclip, Clipboard } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
@@ -34,7 +34,15 @@ type InvoiceRow = Invoice & {
     model?: string | null;
     serial_number?: string | null;
   } | null;
+  po_number?: string | null;
 };
+
+type PoBadge = {
+  poCount: number;
+  receiptCount: number;
+  lastPoNumber: string | null;
+};
+
 type WoRow = WorkOrder & {
   customers?: { name: string };
   equipment?: {
@@ -70,6 +78,85 @@ export default function BillingPage() {
   const [previewBusy, setPreviewBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [poByInvoice, setPoByInvoice] = useState<Record<string, PoBadge>>({});
+  const [poByWorkOrder, setPoByWorkOrder] = useState<Record<string, PoBadge>>({});
+
+  async function loadPoBadges(invoiceList: InvoiceRow[], readyWo: WoRow[]) {
+    const invIds = invoiceList.map((i) => i.id);
+    const woIds = [
+      ...new Set([
+        ...invoiceList.map((i) => i.work_order_id).filter(Boolean),
+        ...readyWo.map((w) => w.id),
+      ]),
+    ] as string[];
+
+    if (!invIds.length && !woIds.length) {
+      setPoByInvoice({});
+      setPoByWorkOrder({});
+      return;
+    }
+
+    let query = supabase
+      .from("purchase_orders")
+      .select("id, po_number, invoice_id, work_order_id, purchase_order_attachments(id)");
+
+    // Prefer invoice ids; also load work-order-linked POs
+    if (invIds.length && woIds.length) {
+      query = query.or(
+        `invoice_id.in.(${invIds.join(",")}),work_order_id.in.(${woIds.join(",")})`,
+      );
+    } else if (invIds.length) {
+      query = query.in("invoice_id", invIds);
+    } else {
+      query = query.in("work_order_id", woIds);
+    }
+
+    const { data, error: poError } = await query;
+    if (poError || !data) {
+      setPoByInvoice({});
+      setPoByWorkOrder({});
+      return;
+    }
+
+    const byInv: Record<string, PoBadge> = {};
+    const byWo: Record<string, PoBadge> = {};
+
+    function bump(map: Record<string, PoBadge>, key: string, poNumber: string, receipts: number) {
+      const cur = map[key] ?? { poCount: 0, receiptCount: 0, lastPoNumber: null };
+      cur.poCount += 1;
+      cur.receiptCount += receipts;
+      cur.lastPoNumber = poNumber || cur.lastPoNumber;
+      map[key] = cur;
+    }
+
+    for (const row of data as {
+      id: string;
+      po_number: string;
+      invoice_id: string | null;
+      work_order_id: string | null;
+      purchase_order_attachments?: { id: string }[] | null;
+    }[]) {
+      const receipts = row.purchase_order_attachments?.length ?? 0;
+      if (row.invoice_id) bump(byInv, row.invoice_id, row.po_number, receipts);
+      if (row.work_order_id) bump(byWo, row.work_order_id, row.po_number, receipts);
+    }
+
+    // Also mark invoices that only have invoice.po_number text field
+    for (const inv of invoiceList) {
+      if (inv.po_number && !byInv[inv.id]) {
+        byInv[inv.id] = {
+          poCount: 0,
+          receiptCount: 0,
+          lastPoNumber: inv.po_number,
+        };
+      } else if (inv.po_number && byInv[inv.id] && !byInv[inv.id].lastPoNumber) {
+        byInv[inv.id].lastPoNumber = inv.po_number;
+      }
+    }
+
+    setPoByInvoice(byInv);
+    setPoByWorkOrder(byWo);
+  }
 
   async function loadWoPreview(woId: string, rate: number) {
     setPreviewBusy(true);
@@ -121,6 +208,7 @@ export default function BillingPage() {
     const map: Record<string, string> = {};
     for (const m of teamList) map[m.id] = m.full_name || m.email;
     setTeamMap(map);
+    await loadPoBadges(list, ready);
     const rate = settings?.default_tax_rate ? Number(settings.default_tax_rate) : taxRate;
     if (settings?.default_tax_rate) setTaxRate(rate);
     if (!selectedId && !deepLinkWo && list.length > 0) setSelectedId(list[0].id);
@@ -146,14 +234,17 @@ export default function BillingPage() {
       }
       if (!q) return true;
       const assignee = inv.assigned_to ? teamMap[inv.assigned_to] ?? "" : "";
+      const poBadge = poByInvoice[inv.id];
+      const poText = `${inv.po_number ?? ""} ${poBadge?.lastPoNumber ?? ""}`.toLowerCase();
       return (
         inv.invoice_number.toLowerCase().includes(q) ||
         (inv.customers?.name ?? "").toLowerCase().includes(q) ||
         inv.status.toLowerCase().includes(q) ||
-        assignee.toLowerCase().includes(q)
+        assignee.toLowerCase().includes(q) ||
+        poText.includes(q)
       );
     });
-  }, [invoices, filter, invoiceMonth, query, today, currentUserId, teamMap]);
+  }, [invoices, filter, invoiceMonth, query, today, currentUserId, teamMap, poByInvoice]);
 
   const selected = invoices.find((i) => i.id === selectedId) ?? null;
 
@@ -320,17 +411,27 @@ export default function BillingPage() {
             <span className="badge badge-primary badge-sm">{completedWo.length}</span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {completedWo.map((wo) => (
+            {completedWo.map((wo) => {
+              const missingEq = !wo.equipment_id && !wo.equipment;
+              const poInfo = poByWorkOrder[wo.id];
+              return (
               <button
                 key={wo.id}
                 type="button"
-                className={`btn btn-sm ${previewWoId === wo.id ? "btn-primary" : "btn-outline"}`}
+                className={`btn btn-sm ${previewWoId === wo.id ? "btn-primary" : missingEq ? "btn-outline border-warning" : "btn-outline"}`}
                 onClick={() => loadPreviewForWo(wo.id)}
               >
                 {wo.work_order_number}
                 <span className="opacity-70">· {wo.customers?.name ?? "Customer"}</span>
+                {missingEq ? <span className="badge badge-warning badge-xs">No equip</span> : null}
+                {poInfo?.poCount ? (
+                  <span className="badge badge-ghost badge-xs gap-0.5">
+                    <Clipboard className="h-2.5 w-2.5" /> {poInfo.poCount}
+                  </span>
+                ) : null}
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -398,6 +499,7 @@ export default function BillingPage() {
                       <th>Due</th>
                       <th className="text-right">Total</th>
                       <th className="text-right">Balance</th>
+                      <th>PO</th>
                       <th>Status</th>
                       <th>Assignee</th>
                       <th />
@@ -407,6 +509,11 @@ export default function BillingPage() {
                     {filtered.map((inv) => {
                       const active = selectedId === inv.id && !previewWoId;
                       const overdue = invoiceBucket(inv, today) === "past_due";
+                      const poBadge = poByInvoice[inv.id] ??
+                        (inv.work_order_id ? poByWorkOrder[inv.work_order_id] : undefined);
+                      const hasPo =
+                        Boolean(inv.po_number) || Boolean(poBadge?.lastPoNumber) || (poBadge?.poCount ?? 0) > 0;
+                      const hasReceipt = (poBadge?.receiptCount ?? 0) > 0;
                       return (
                         <tr
                           key={inv.id}
@@ -444,6 +551,22 @@ export default function BillingPage() {
                           <td className="text-right">{formatMoney(inv.invoice_total)}</td>
                           <td className="text-right font-medium">{formatMoney(inv.remaining_balance)}</td>
                           <td>
+                            {hasPo ? (
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="badge badge-outline badge-xs font-mono max-w-[5.5rem] truncate">
+                                  {inv.po_number || poBadge?.lastPoNumber || "PO"}
+                                </span>
+                                {hasReceipt ? (
+                                  <span className="badge badge-info badge-xs gap-0.5" title="Receipt attached">
+                                    <Paperclip className="h-2.5 w-2.5" />
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-xs opacity-40">—</span>
+                            )}
+                          </td>
+                          <td>
                             <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
                           </td>
                           <td className="max-w-[7rem] truncate text-xs">
@@ -480,6 +603,7 @@ export default function BillingPage() {
                 busy={previewBusy || busy}
                 error={error}
                 taxRate={taxRate}
+                poInfo={poByWorkOrder[previewWoId]}
                 onCancel={() => {
                   setPreviewWoId(null);
                   setWoPreview(null);
@@ -495,6 +619,10 @@ export default function BillingPage() {
                 today={today}
                 team={team}
                 assigneeName={selected.assigned_to ? teamMap[selected.assigned_to] : null}
+                poBadge={
+                  poByInvoice[selected.id] ??
+                  (selected.work_order_id ? poByWorkOrder[selected.work_order_id] : undefined)
+                }
                 busy={busy}
                 onStatusChange={(status) => updateInvoiceWorkflow(selected.id, { status })}
                 onAssignChange={(userId) => updateInvoiceWorkflow(selected.id, { assigned_to: userId })}
@@ -517,6 +645,7 @@ function InvoiceListPreview({
   today,
   team,
   assigneeName,
+  poBadge,
   busy,
   onStatusChange,
   onAssignChange,
@@ -525,12 +654,14 @@ function InvoiceListPreview({
   today: Date;
   team: TeamMember[];
   assigneeName: string | null;
+  poBadge?: PoBadge;
   busy: boolean;
   onStatusChange: (status: string) => void;
   onAssignChange: (userId: string | null) => void;
 }) {
   const overdueDays = daysPastDue(inv, today);
   const bucket = invoiceBucket(inv, today);
+  const hasPo = Boolean(inv.po_number) || Boolean(poBadge?.lastPoNumber) || (poBadge?.poCount ?? 0) > 0;
 
   return (
     <div className="space-y-4">
@@ -558,14 +689,35 @@ function InvoiceListPreview({
           ) : (
             <p className="mt-1 text-xs opacity-50">Unassigned</p>
           )}
-          {inv.po_number ? (
-            <p className="mt-1 text-xs">
-              PO <span className="font-mono font-semibold">{inv.po_number}</span>
+          {hasPo ? (
+            <p className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+              <span className="badge badge-outline badge-sm font-mono">
+                {inv.po_number || poBadge?.lastPoNumber || "PO on file"}
+              </span>
+              {(poBadge?.poCount ?? 0) > 1 ? (
+                <span className="badge badge-ghost badge-sm">{poBadge!.poCount} POs</span>
+              ) : null}
+              {(poBadge?.receiptCount ?? 0) > 0 ? (
+                <span className="badge badge-info badge-sm gap-1">
+                  <Paperclip className="h-3 w-3" /> {poBadge!.receiptCount} receipt
+                  {poBadge!.receiptCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
             </p>
-          ) : null}
+          ) : (
+            <p className="mt-1 text-xs opacity-50">No PO / receipts yet</p>
+          )}
         </div>
         <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
       </div>
+
+      {!inv.equipment ? (
+        <div className="alert alert-warning py-2 text-xs">
+          <span>
+            No equipment on this invoice — open the invoice and attach model / serial before customer review.
+          </span>
+        </div>
+      ) : null}
 
       <div className="rounded-box border border-base-300 bg-base-200/30 p-3">
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">Workflow</p>
@@ -704,6 +856,7 @@ function WorkOrderInvoicePreview({
   busy,
   error,
   taxRate,
+  poInfo,
   onCancel,
   onCreateDraft,
   onCreateReview,
@@ -714,11 +867,14 @@ function WorkOrderInvoicePreview({
   busy: boolean;
   error: string | null;
   taxRate: number;
+  poInfo?: PoBadge;
   onCancel: () => void;
   onCreateDraft: () => void;
   onCreateReview: () => void;
   onCreateSend: () => void;
 }) {
+  const missingEquipment = !wo.equipment_id && !wo.equipment;
+
   return (
     <div className="space-y-4">
       <div>
@@ -744,16 +900,42 @@ function WorkOrderInvoicePreview({
             <p className="font-medium">{equipmentLabel(wo.equipment)}</p>
           </div>
         ) : (
-          <p className="mt-2 text-xs text-warning">
-            No equipment on this job — you can attach model/serial on the invoice after create.
-          </p>
+          <div className="alert alert-warning mt-2 py-2 text-xs">
+            <span>
+              <strong>No equipment linked on this job.</strong> Attach model / serial / install date on the{" "}
+              <Link href={`/work-orders/${wo.id}`} className="link font-medium">
+                job
+              </Link>{" "}
+              first, or on the invoice after create.
+            </span>
+          </div>
         )}
+        {(poInfo?.poCount ?? 0) > 0 ? (
+          <p className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+            <span className="badge badge-outline badge-sm">
+              {poInfo!.poCount} PO{poInfo!.poCount === 1 ? "" : "s"} from field
+            </span>
+            {(poInfo?.receiptCount ?? 0) > 0 ? (
+              <span className="badge badge-info badge-sm gap-1">
+                <Paperclip className="h-3 w-3" /> {poInfo!.receiptCount} receipt
+                {poInfo!.receiptCount === 1 ? "" : "s"}
+              </span>
+            ) : null}
+            <span className="opacity-60">will link to this invoice on create</span>
+          </p>
+        ) : null}
         <Link href={`/work-orders/${wo.id}`} className="link link-primary text-xs">
           Open job detail
         </Link>
       </div>
 
       {error ? <div className="alert alert-error text-sm">{error}</div> : null}
+
+      {missingEquipment ? (
+        <p className="text-xs opacity-60">
+          Create is still allowed — billing can finish equipment after draft is saved.
+        </p>
+      ) : null}
 
       {busy && !preview ? (
         <p className="text-sm opacity-60">Loading labor and parts…</p>
