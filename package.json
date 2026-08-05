@@ -9,6 +9,8 @@
         "lint": "eslint"
     },
     "dependencies": {
+        "@stripe/react-stripe-js": "^6.8.0",
+        "@stripe/stripe-js": "^9.13.0",
         "@supabase/ssr": "^0.12.4",
         "@supabase/supabase-js": "^2.112.0",
         "daisyui": "^5.7.16",
@@ -20,6 +22,7 @@
         "react": "19.2.8",
         "react-dom": "19.2.8",
         "recharts": "^3.10.1",
+        "stripe": "^22.4.0",
         "zod": "^4.4.3"
     },
     "devDependencies": {
