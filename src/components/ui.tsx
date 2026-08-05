@@ -82,9 +82,6 @@ export function StatCard({
       <div className="stat-title">{label}</div>
       <div className={`stat-value text-2xl ${danger ? "text-error" : ""}`}>{value}</div>
       {hint ? <div className="stat-desc">{hint}</div> : null}
-      {onClick ? (
-        <div className="stat-desc opacity-60">{active ? "Click to hide details" : "Click to view invoices"}</div>
-      ) : null}
     </>
   );
 

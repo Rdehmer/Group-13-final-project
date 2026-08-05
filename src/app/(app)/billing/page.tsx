@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, FileText, ClipboardList, ChevronRight, Paperclip, Clipboard } from "lucide-react";
@@ -72,6 +72,9 @@ export default function BillingPage() {
   const [filter, setFilter] = useState<InvoiceQueueFilter>("all");
   const [invoiceMonth, setInvoiceMonth] = useState<string>("all");
   const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<"customer" | "date" | "due" | "total" | "balance">("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const readySectionRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewWoId, setPreviewWoId] = useState<string | null>(null);
   const [woPreview, setWoPreview] = useState<InvoicePreview | null>(null);
@@ -246,6 +249,65 @@ export default function BillingPage() {
     });
   }, [invoices, filter, invoiceMonth, query, today, currentUserId, teamMap, poByInvoice]);
 
+  const sortedFiltered = useMemo(() => {
+    const rows = [...filtered];
+    const dir = sortDir === "asc" ? 1 : -1;
+    rows.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "customer":
+          cmp = (a.customers?.name ?? "").localeCompare(b.customers?.name ?? "", undefined, {
+            sensitivity: "base",
+          });
+          break;
+        case "date":
+          cmp = (a.invoice_date || "").localeCompare(b.invoice_date || "");
+          break;
+        case "due":
+          cmp = (a.due_date || "").localeCompare(b.due_date || "");
+          break;
+        case "total":
+          cmp = Number(a.invoice_total) - Number(b.invoice_total);
+          break;
+        case "balance":
+          cmp = Number(a.remaining_balance) - Number(b.remaining_balance);
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * dir;
+    });
+    return rows;
+  }, [filtered, sortKey, sortDir]);
+
+  const filtersActive = filter !== "all" || invoiceMonth !== "all" || query.trim() !== "";
+
+  function clearFilters() {
+    setFilter("all");
+    setInvoiceMonth("all");
+    setQuery("");
+  }
+
+  function toggleSort(key: typeof sortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "customer" ? "asc" : "desc");
+    }
+  }
+
+  function sortLabel(key: typeof sortKey, label: string) {
+    if (sortKey !== key) return label;
+    return `${label} ${sortDir === "asc" ? "↑" : "↓"}`;
+  }
+
+  function applyQueueFilter(next: InvoiceQueueFilter) {
+    setFilter((prev) => (prev === next ? "all" : next));
+    setPreviewWoId(null);
+    setWoPreview(null);
+  }
+
   const selected = invoices.find((i) => i.id === selectedId) ?? null;
 
   const stats = useMemo(() => {
@@ -387,24 +449,45 @@ export default function BillingPage() {
       {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Open AR" value={formatMoney(stats.openAr)} hint="Unpaid balances" />
+        <StatCard
+          label="Open AR"
+          value={formatMoney(stats.openAr)}
+          hint="Unpaid balances · click for Sent/Open"
+          onClick={() => applyQueueFilter("sent")}
+          active={filter === "sent"}
+        />
         <StatCard
           label="Past due"
           value={formatMoney(stats.pastDue)}
-          hint="Over due date"
+          hint="Over due date · click to filter"
           danger={stats.pastDue > 0}
+          onClick={() => applyQueueFilter("past_due")}
+          active={filter === "past_due"}
         />
         <StatCard
           label="Needs review"
           value={stats.needsReview}
           danger={stats.needsReview > 0}
-          hint={`${stats.onHold} on hold · ${stats.unassigned} unassigned`}
+          hint={`${stats.onHold} on hold · ${stats.unassigned} unassigned · click to filter`}
+          onClick={() => applyQueueFilter("needs_review")}
+          active={filter === "needs_review"}
         />
-        <StatCard label="Ready to invoice" value={stats.readyCount} hint="Completed, unbilled jobs" />
+        <StatCard
+          label="Ready to invoice"
+          value={stats.readyCount}
+          hint="Completed, unbilled jobs · click to jump"
+          onClick={() => {
+            readySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+          active={Boolean(previewWoId)}
+        />
       </div>
 
       {completedWo.length > 0 ? (
-        <div className="mb-5 rounded-box border border-primary/30 bg-primary/5 p-4">
+        <div
+          ref={readySectionRef}
+          className="mb-5 scroll-mt-4 rounded-box border border-primary/30 bg-primary/5 p-4"
+        >
           <div className="mb-3 flex items-center gap-2">
             <ClipboardList className="h-5 w-5 text-primary" />
             <h2 className="font-semibold">Ready to invoice</h2>
@@ -476,12 +559,17 @@ export default function BillingPage() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
+        {filtersActive ? (
+          <button type="button" className="btn btn-ghost btn-sm shrink-0" onClick={clearFilters}>
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
         <div className="card bg-base-100 shadow">
           <div className="card-body p-0">
-            {filtered.length === 0 ? (
+            {sortedFiltered.length === 0 ? (
               <div className="p-6">
                 <EmptyState
                   title={
@@ -492,8 +580,8 @@ export default function BillingPage() {
                         : "No invoices match"
                   }
                   description={
-                    invoiceMonth !== "all" || filter !== "all"
-                      ? "Try All / All months, or change one filter. You can also create an invoice from a completed work order above."
+                    filtersActive
+                      ? "Try Clear filters, or change status/month/search. You can also create an invoice from a completed work order above."
                       : "Adjust search or create an invoice from a completed work order above."
                   }
                 />
@@ -504,11 +592,31 @@ export default function BillingPage() {
                   <thead>
                     <tr>
                       <th>Invoice #</th>
-                      <th>Customer</th>
-                      <th>Date</th>
-                      <th>Due</th>
-                      <th className="text-right">Total</th>
-                      <th className="text-right">Balance</th>
+                      <th>
+                        <button type="button" className="btn btn-ghost btn-xs px-1 font-bold" onClick={() => toggleSort("customer")}>
+                          {sortLabel("customer", "Customer")}
+                        </button>
+                      </th>
+                      <th>
+                        <button type="button" className="btn btn-ghost btn-xs px-1 font-bold" onClick={() => toggleSort("date")}>
+                          {sortLabel("date", "Date")}
+                        </button>
+                      </th>
+                      <th>
+                        <button type="button" className="btn btn-ghost btn-xs px-1 font-bold" onClick={() => toggleSort("due")}>
+                          {sortLabel("due", "Due")}
+                        </button>
+                      </th>
+                      <th className="text-right">
+                        <button type="button" className="btn btn-ghost btn-xs px-1 font-bold" onClick={() => toggleSort("total")}>
+                          {sortLabel("total", "Total")}
+                        </button>
+                      </th>
+                      <th className="text-right">
+                        <button type="button" className="btn btn-ghost btn-xs px-1 font-bold" onClick={() => toggleSort("balance")}>
+                          {sortLabel("balance", "Balance")}
+                        </button>
+                      </th>
                       <th>PO</th>
                       <th>Status</th>
                       <th>Assignee</th>
@@ -516,7 +624,7 @@ export default function BillingPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((inv) => {
+                    {sortedFiltered.map((inv) => {
                       const active = selectedId === inv.id && !previewWoId;
                       const overdue = invoiceBucket(inv, today) === "past_due";
                       const poBadge = poByInvoice[inv.id] ??
