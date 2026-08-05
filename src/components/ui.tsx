@@ -12,18 +12,28 @@ const TONE: Record<string, string> = {
 export function StatusBadge({
   label,
   tone = "neutral",
+  className = "",
 }: {
   label: string;
   tone?: keyof typeof TONE;
+  className?: string;
 }) {
-  return <span className={`badge badge-sm ${TONE[tone]}`}>{label}</span>;
+  return (
+    <span className={`badge badge-sm h-auto max-w-full whitespace-normal break-words py-1 text-center leading-tight ${TONE[tone]} ${className}`}>
+      {label}
+    </span>
+  );
 }
 
 export function statusTone(status: string): keyof typeof TONE {
   const s = status.toLowerCase();
   if (["critical", "past due", "disputed", "out of service", "canceled"].some((x) => s.includes(x)))
     return "error";
-  if (["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue"].some((x) => s.includes(x)))
+  if (
+    ["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue", "needs service"].some((x) =>
+      s.includes(x),
+    )
+  )
     return "warning";
   if (["completed", "paid", "active", "approved", "operational", "renewed"].some((x) => s.includes(x)))
     return "success";
