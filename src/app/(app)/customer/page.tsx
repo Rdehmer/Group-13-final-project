@@ -16,7 +16,7 @@ import {
 } from "@/lib/contracts";
 import type { Equipment, Profile, WorkOrder } from "@/lib/types";
 
-type ServiceKind = "repair" | "follow_up" | "routine";
+type ServiceKind = "repair" | "follow_up" | "routine" | "emergency_repair";
 type Timing = "asap" | "this_week" | "flexible";
 type TimeOfDay = "morning" | "afternoon" | "either";
 type WizardStep = "type" | "equipment" | "details" | "confirm";
@@ -73,6 +73,13 @@ const SERVICE_OPTIONS: {
     workOrderType: "Preventive Maintenance",
     detailsPlaceholder: "Any areas to focus on, seasonal concerns, or units that need extra attention…",
   },
+  {
+    kind: "emergency_repair",
+    title: "Emergency repair",
+    description: "Urgent breakdown — equipment is down or unsafe and needs immediate attention.",
+    workOrderType: "Emergency Repair",
+    detailsPlaceholder: "Describe the emergency, safety concerns, alarms, and when the unit went down…",
+  },
 ];
 
 const TIMING_OPTIONS = [
@@ -89,7 +96,12 @@ const TIME_OF_DAY_OPTIONS = [
 
 const STEPS: WizardStep[] = ["type", "equipment", "details", "confirm"];
 
+function isRepairLike(kind: ServiceKind | ""): boolean {
+  return kind === "repair" || kind === "emergency_repair";
+}
+
 function resolveWorkOrderType(form: RequestForm): string {
+  if (form.service_kind === "emergency_repair") return "Emergency Repair";
   if (form.service_kind === "repair") {
     return form.equipment_running === "no" ? "Emergency Repair" : "Repair";
   }
@@ -97,6 +109,9 @@ function resolveWorkOrderType(form: RequestForm): string {
 }
 
 function resolvePriority(form: RequestForm): WorkOrder["priority"] {
+  if (form.service_kind === "emergency_repair") {
+    return form.timing === "asap" ? "Critical" : "High";
+  }
   if (form.service_kind === "repair" && form.equipment_running === "no") {
     return form.timing === "asap" ? "Critical" : "High";
   }
@@ -134,7 +149,7 @@ function buildRequestedService(
     `Preferred time of day: ${timeOfDayLabel(form.time_of_day)}`,
     form.contact_phone.trim() ? `On-site contact phone: ${form.contact_phone.trim()}` : null,
     form.access_notes.trim() ? `Access notes: ${form.access_notes.trim()}` : null,
-    form.service_kind === "repair" && form.equipment_running
+    isRepairLike(form.service_kind) && form.equipment_running
       ? `Equipment currently running: ${form.equipment_running === "yes" ? "Yes" : "No"}`
       : null,
     form.details.trim() ? `Details: ${form.details.trim()}` : null,
@@ -243,10 +258,10 @@ function CustomerPortalPageInner() {
       return "Please choose what kind of visit you need.";
     }
     if (current === "equipment") {
-      if (form.service_kind === "repair" && !form.equipment_id) {
+      if (isRepairLike(form.service_kind) && !form.equipment_id) {
         return "Please select the equipment that needs repair.";
       }
-      if (form.service_kind === "repair" && !form.equipment_running) {
+      if (isRepairLike(form.service_kind) && !form.equipment_running) {
         return "Please tell us whether the equipment is still running.";
       }
     }
@@ -459,7 +474,8 @@ function CustomerPortalPageInner() {
                             setForm({
                               ...form,
                               service_kind: option.kind,
-                              equipment_running: option.kind === "repair" ? form.equipment_running : "",
+                              equipment_running: isRepairLike(option.kind) ? form.equipment_running : "",
+                              timing: option.kind === "emergency_repair" ? "asap" : form.timing,
                             });
                             setError(null);
                           }}
@@ -479,7 +495,7 @@ function CustomerPortalPageInner() {
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">
                       2. Which equipment?
-                      {form.service_kind === "repair" ? " *" : ""}
+                      {isRepairLike(form.service_kind) ? " *" : ""}
                     </p>
                     <button type="button" className="btn btn-ghost btn-xs" onClick={() => setShowAddEquipment(true)}>
                       Add equipment
@@ -497,7 +513,7 @@ function CustomerPortalPageInner() {
                     />
                   ) : (
                     <div className="grid gap-2">
-                      {form.service_kind !== "repair" ? (
+                      {!isRepairLike(form.service_kind) ? (
                         <label className={`cursor-pointer rounded-box border p-3 text-sm ${form.equipment_id === "" ? "border-primary bg-primary/10" : "border-base-300"}`}>
                           <input
                             type="radio"
@@ -536,7 +552,7 @@ function CustomerPortalPageInner() {
                   )}
                 </div>
 
-                {form.service_kind === "repair" ? (
+                {isRepairLike(form.service_kind) ? (
                   <fieldset>
                     <legend className="mb-2 text-sm font-medium">Is the equipment still running? *</legend>
                     <div className="flex flex-wrap gap-3">
@@ -681,7 +697,7 @@ function CustomerPortalPageInner() {
                     <dt className="opacity-70">Equipment</dt>
                     <dd className="text-right font-medium">{selectedEquipment?.name ?? "General / site visit"}</dd>
                   </div>
-                  {form.service_kind === "repair" ? (
+                  {isRepairLike(form.service_kind) ? (
                     <div className="flex justify-between gap-3">
                       <dt className="opacity-70">Still running?</dt>
                       <dd className="text-right font-medium">{form.equipment_running === "yes" ? "Yes" : "No — down/unsafe"}</dd>
