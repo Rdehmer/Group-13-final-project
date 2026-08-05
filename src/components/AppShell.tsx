@@ -4,9 +4,67 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
 import { ThemeSelector } from "@/components/ThemeSelector";
-import { NAV_ITEMS, homeForRole } from "@/lib/roles";
+import { NAV_ITEMS, type NavItem } from "@/lib/roles";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
+
+function isPathActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function NavLink({
+  item,
+  pathname,
+  className,
+}: {
+  item: NavItem;
+  pathname: string;
+  className?: string;
+}) {
+  const active = item.href === "/customer"
+    ? pathname === "/customer"
+    : isPathActive(pathname, item.href);
+
+  return (
+    <Link href={item.href} className={`${active ? "active font-medium" : ""} ${className ?? ""}`.trim()}>
+      {item.label}
+    </Link>
+  );
+}
+
+function NavDetailsGroup({
+  item,
+  pathname,
+  profile,
+}: {
+  item: NavItem;
+  pathname: string;
+  profile: Profile;
+}) {
+  const childActive = item.children!.some((child) =>
+    child.href === "/customer"
+      ? pathname === "/customer"
+      : isPathActive(pathname, child.href),
+  );
+  const sectionOpen = childActive || isPathActive(pathname, item.href);
+
+  return (
+    <li>
+      <Link href={item.href} className={sectionOpen ? "font-medium" : ""}>
+        {item.label}
+      </Link>
+      <ul>
+        {item.children!
+          .filter((child) => child.roles.includes(profile.role))
+          .map((child) => (
+            <li key={`${child.href}-${child.label}`}>
+              <NavLink item={child} pathname={pathname} />
+            </li>
+          ))}
+      </ul>
+    </li>
+  );
+}
 
 export function AppShell({
   profile,
@@ -37,10 +95,10 @@ export function AppShell({
             </label>
           </div>
           <div className="flex-1">
-            <Link href={homeForRole(profile.role)} className="block hover:opacity-80">
+            <div>
               <p className="text-xs uppercase tracking-wide opacity-60">Equipment Service Manager</p>
               <p className="font-semibold leading-tight">Ridley Equipment Services</p>
-            </Link>
+            </div>
           </div>
           <div className="hidden items-center gap-3 md:flex">
             <div className="text-right text-sm">
@@ -75,12 +133,25 @@ export function AppShell({
         <nav className="menu min-h-full w-72 bg-base-100 p-4 text-base-content">
           <div className="mb-6 flex items-center gap-2 px-2">
             <Wrench className="h-6 w-6 text-primary" />
-            <Link href={homeForRole(profile.role)} className="font-bold hover:opacity-80">
-              ESM
-            </Link>
+            <span className="font-bold">ESM</span>
           </div>
           {navItems.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            if (item.children?.length) {
+              return (
+                <NavDetailsGroup
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  profile={profile}
+                />
+              );
+            }
+
+            const matches = navItems.filter(
+              (n) => !n.children && (pathname === n.href || pathname.startsWith(`${n.href}/`)),
+            );
+            const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
+            const active = best?.href === item.href;
             return (
               <li key={item.href}>
                 <Link href={item.href} className={active ? "active font-medium" : ""}>
