@@ -115,8 +115,20 @@ export type WorkOrder = {
   performed_before_approval: boolean;
   under_expired_contract: boolean;
   costs_after_billing: boolean;
+  completion_proof_requirement: "photo_or_signature" | "photo" | "signature" | "both";
   created_at: string;
   updated_at: string;
+};
+
+export type WorkOrderCompletionProof = {
+  id: string;
+  job_id: string;
+  type: "photo" | "signature";
+  file_url: string | null;
+  base64_data: string | null;
+  captured_at: string;
+  technician_id: string;
+  created_at: string;
 };
 
 export type Part = {
@@ -134,6 +146,42 @@ export type Part = {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type TruckInventory = {
+  technician_id: string;
+  part_id: string;
+  quantity_on_hand: number;
+  typical_job_quantity: number;
+  last_restocked_at: string | null;
+  updated_at: string;
+};
+
+export type PurchaseOrder = {
+  id: string;
+  technician_id: string;
+  part_id: string;
+  quantity_requested: number;
+  status: "pending" | "approved" | "fulfilled";
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EmergencyPurchase = {
+  id: string;
+  technician_id: string;
+  job_id: string;
+  part_id: string;
+  part_name: string;
+  quantity: number;
+  amount_paid: number;
+  store_name: string;
+  receipt_url: string;
+  purchased_at: string;
+  status: "submitted" | "reimbursed";
+  reimbursed_at: string | null;
+  created_at: string;
 };
 
 export type TechnicianLabor = {

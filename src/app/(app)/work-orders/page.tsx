@@ -32,6 +32,7 @@ export default function WorkOrdersPage() {
     assigned_technician_id: "",
     scheduled_date: "",
     problem_description: "",
+    completion_proof_requirement: "photo_or_signature" as WorkOrder["completion_proof_requirement"],
     status: "Requested",
   });
 
@@ -68,6 +69,7 @@ export default function WorkOrdersPage() {
       assigned_technician_id: form.assigned_technician_id || null,
       scheduled_date: form.scheduled_date || null,
       problem_description: form.problem_description || null,
+      completion_proof_requirement: form.completion_proof_requirement,
       status: form.assigned_technician_id ? "Assigned" : "Requested",
     };
     const { data, error: insertError } = await supabase.from("work_orders").insert(payload).select().single();
@@ -137,6 +139,21 @@ export default function WorkOrdersPage() {
               </FormRow>
               <FormRow label="Problem">
                 <textarea className="textarea textarea-bordered w-full" rows={3} value={form.problem_description} onChange={(e) => setForm({ ...form, problem_description: e.target.value })} />
+              </FormRow>
+              <FormRow label="Completion proof">
+                <select
+                  className="select select-bordered w-full"
+                  value={form.completion_proof_requirement}
+                  onChange={(e) => setForm({
+                    ...form,
+                    completion_proof_requirement: e.target.value as WorkOrder["completion_proof_requirement"],
+                  })}
+                >
+                  <option value="photo_or_signature">Photo or signature</option>
+                  <option value="photo">Photo required</option>
+                  <option value="signature">Signature required</option>
+                  <option value="both">Photo and signature required</option>
+                </select>
               </FormRow>
               <div className="modal-action">
                 <button type="button" className="btn" onClick={() => setShowForm(false)}>Cancel</button>
