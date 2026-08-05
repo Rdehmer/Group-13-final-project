@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
+import { EquipmentAttachPanel } from "@/components/EquipmentAttachPanel";
 import {
   JOB_STAGES,
   isJobOpen,
@@ -16,11 +17,17 @@ import {
   jobStageIndex,
   type JobBoardFilter,
 } from "@/lib/jobs";
+import { equipmentLabel } from "@/lib/equipment";
 import type { Customer, Equipment, Profile, WorkOrder } from "@/lib/types";
 
 type JobRow = WorkOrder & {
   customers?: { name: string };
-  equipment?: { name: string } | null;
+  equipment?: {
+    name: string;
+    model?: string | null;
+    serial_number?: string | null;
+    installation_date?: string | null;
+  } | null;
 };
 
 function nextWoNumber() {
@@ -60,7 +67,7 @@ export default function JobsPage() {
     const [{ data: wo }, { data: cust }, { data: tech }] = await Promise.all([
       supabase
         .from("work_orders")
-        .select("*, customers(name), equipment(name)")
+        .select("*, customers(name), equipment(name, model, serial_number, installation_date)")
         .order("created_at", { ascending: false }),
       supabase.from("customers").select("*").eq("status", "Active").order("name"),
       supabase.from("profiles").select("*").eq("role", "technician").eq("is_active", true),
@@ -275,20 +282,13 @@ export default function JobsPage() {
                   ))}
                 </select>
               </FormRow>
-              <FormRow label="Equipment">
-                <select
-                  className="select select-bordered w-full"
-                  value={form.equipment_id}
-                  onChange={(e) => setForm({ ...form, equipment_id: e.target.value })}
-                >
-                  <option value="">Optional</option>
-                  {equipment.map((eq) => (
-                    <option key={eq.id} value={eq.id}>
-                      {eq.name}
-                    </option>
-                  ))}
-                </select>
-              </FormRow>
+              <EquipmentAttachPanel
+                customerId={form.customer_id}
+                equipment={equipment}
+                selectedId={form.equipment_id}
+                onSelect={(equipmentId) => setForm({ ...form, equipment_id: equipmentId })}
+                onCreated={(row) => setEquipment((prev) => [...prev, row as Equipment])}
+              />
               <FormRow label="Job type">
                 <select
                   className="select select-bordered w-full"
@@ -542,14 +542,14 @@ function JobPreview({ job, techName }: { job: JobRow; techName: string }) {
           <p className="font-medium">{job.scheduled_date ?? "Not set"}</p>
         </div>
         <div className="col-span-2 rounded-box bg-base-200/60 p-3">
-          <p className="opacity-60">Equipment</p>
+          <p className="opacity-60">Equipment (model / serial)</p>
           <p className="font-medium">
-            {job.equipment_id && job.equipment?.name ? (
+            {job.equipment_id && job.equipment ? (
               <Link href="/equipment" className="link link-hover">
-                {job.equipment.name}
+                {equipmentLabel(job.equipment)}
               </Link>
             ) : (
-              job.equipment?.name ?? "—"
+              "Not linked"
             )}
           </p>
         </div>

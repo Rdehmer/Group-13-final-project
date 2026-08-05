@@ -193,6 +193,10 @@ export type Invoice = {
   customer_id: string;
   contract_id: string | null;
   work_order_id: string | null;
+  /** Equipment unit this invoice covers (model / serial on equipment). */
+  equipment_id: string | null;
+  /** Customer / field PO number on the invoice document. */
+  po_number: string | null;
   invoice_date: string;
   due_date: string;
   billing_period: string | null;
@@ -209,8 +213,47 @@ export type Invoice = {
   status: string;
   notes: string | null;
   created_by: string | null;
+  /** Team member responsible for this invoice (profiles.id). */
+  assigned_to: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type PurchaseOrder = {
+  id: string;
+  po_number: string;
+  invoice_id: string | null;
+  work_order_id: string | null;
+  vendor_name: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PurchaseOrderLine = {
+  id: string;
+  purchase_order_id: string;
+  part_id: string | null;
+  part_number: string | null;
+  part_name: string | null;
+  description: string | null;
+  quantity: number;
+  unit_cost: number;
+  created_at: string;
+};
+
+export type PurchaseOrderAttachment = {
+  id: string;
+  purchase_order_id: string;
+  file_name: string;
+  file_path: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  /** Base64 data URL when Storage bucket is unavailable (demo fallback). */
+  file_data: string | null;
+  uploaded_by: string | null;
+  created_at: string;
 };
 
 export type Payment = {

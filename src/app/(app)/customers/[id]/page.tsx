@@ -110,7 +110,15 @@ export default function CustomerDetailPage() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="table table-sm">
-                    <thead><tr><th>Name</th><th>Status</th><th>Location</th></tr></thead>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Model</th>
+                        <th>Serial #</th>
+                        <th>Installed</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
                     <tbody>
                       {equipment.map((eq) => (
                         <tr key={eq.id}>
@@ -119,8 +127,12 @@ export default function CustomerDetailPage() {
                               {eq.name}
                             </Link>
                           </td>
-                          <td><StatusBadge label={eq.operating_status} tone={statusTone(eq.operating_status)} /></td>
-                          <td>{eq.location ?? "—"}</td>
+                          <td>{eq.model ?? "—"}</td>
+                          <td className="font-mono text-xs">{eq.serial_number ?? "—"}</td>
+                          <td>{eq.installation_date ?? "—"}</td>
+                          <td>
+                            <StatusBadge label={eq.operating_status} tone={statusTone(eq.operating_status)} />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
