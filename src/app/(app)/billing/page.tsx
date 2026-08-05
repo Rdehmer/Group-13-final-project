@@ -436,46 +436,46 @@ export default function BillingPage() {
         </div>
       ) : null}
 
-      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="tabs tabs-box tabs-sm w-full overflow-x-auto lg:w-auto">
-          {INVOICE_QUEUE_TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`tab ${filter === t.id ? "tab-active" : ""}`}
-              onClick={() => setFilter(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto lg:max-w-xl">
-          <label className="form-control w-full sm:max-w-[14rem]">
-            <select
-              className="select select-bordered select-sm w-full"
-              value={invoiceMonth}
-              onChange={(e) => setInvoiceMonth(e.target.value)}
-              aria-label="Invoice month"
-            >
-              <option value="all">All months</option>
-              {invoiceMonthOptions.map((key) => (
-                <option key={key} value={key}>
-                  {formatMonthLabel(key)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="input input-bordered input-sm flex w-full items-center gap-2 lg:max-w-xs">
-            <Search className="h-4 w-4 opacity-50" />
-            <input
-              type="search"
-              className="grow"
-              placeholder="Search invoice, customer, assignee…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-        </div>
+      <div className="mb-4 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+        <label className="form-control w-full sm:max-w-[14rem]">
+          <select
+            className="select select-bordered select-sm w-full"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as InvoiceQueueFilter)}
+            aria-label="Invoice status"
+          >
+            {INVOICE_QUEUE_TABS.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="form-control w-full sm:max-w-[14rem]">
+          <select
+            className="select select-bordered select-sm w-full"
+            value={invoiceMonth}
+            onChange={(e) => setInvoiceMonth(e.target.value)}
+            aria-label="Invoice month"
+          >
+            <option value="all">All months</option>
+            {invoiceMonthOptions.map((key) => (
+              <option key={key} value={key}>
+                {formatMonthLabel(key)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="input input-bordered input-sm flex w-full items-center gap-2 sm:max-w-xs sm:flex-1">
+          <Search className="h-4 w-4 opacity-50" />
+          <input
+            type="search"
+            className="grow"
+            placeholder="Search invoice, customer, assignee…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
@@ -487,12 +487,14 @@ export default function BillingPage() {
                   title={
                     invoiceMonth !== "all"
                       ? `No invoices in ${formatMonthLabel(invoiceMonth)}`
-                      : "No invoices match"
+                      : filter !== "all"
+                        ? `No invoices for ${INVOICE_QUEUE_TABS.find((t) => t.id === filter)?.label ?? "this filter"}`
+                        : "No invoices match"
                   }
                   description={
-                    invoiceMonth !== "all"
-                      ? "Try All months, or pick a different month. You can also create an invoice from a completed work order above."
-                      : "Adjust filters or create an invoice from a completed work order above."
+                    invoiceMonth !== "all" || filter !== "all"
+                      ? "Try All / All months, or change one filter. You can also create an invoice from a completed work order above."
+                      : "Adjust search or create an invoice from a completed work order above."
                   }
                 />
               </div>
