@@ -361,21 +361,21 @@ export default function ContractsPage() {
             <ClickableStatCard
               label="Active Contract Revenue"
               value={formatMoney(totalRevenue)}
-              href="/reports?from=contracts&focus=revenue"
+              href="/reports/contracts?from=contracts&focus=revenue"
               ariaLabel="View active contract revenue on reports"
             />
             <ClickableStatCard
               label="Est. Direct Cost"
               value={formatMoney(estDirectCost)}
               hint="Assumes $350/visit avg"
-              href="/reports?from=contracts&focus=cost"
+              href="/reports/contracts?from=contracts&focus=cost"
               ariaLabel="View estimated direct cost on reports"
             />
             <ClickableStatCard
               label="Est. Gross Margin"
               value={formatPct(margin)}
               hint={`Profit ${formatMoney(profit)}`}
-              href="/reports?from=contracts&focus=margin"
+              href="/reports/contracts?from=contracts&focus=margin"
               ariaLabel="View estimated gross margin on reports"
             />
           </>
