@@ -85,7 +85,7 @@ export default function OpenRequestPage() {
   return (
     <div>
       <PageHeader
-        title="Open Requests"
+        title="Active Service"
         description="Track the status of your service requests and see where each one is in the process."
         actions={
           <Link href="/customer" className="btn btn-outline btn-sm">
@@ -96,11 +96,11 @@ export default function OpenRequestPage() {
 
       {workOrders.length === 0 ? (
         <EmptyState
-          title="No open requests"
+          title="No active service"
           description="When you submit a service request, its status and stage will appear here."
           action={
             <Link href="/customer" className="btn btn-primary btn-sm">
-              Go to My Portal
+              Go to Home
             </Link>
           }
         />

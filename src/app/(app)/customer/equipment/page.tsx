@@ -49,7 +49,7 @@ export default function CustomerEquipmentPage() {
   return (
     <div>
       <PageHeader
-        title="Equipment"
+        title="My Equipment"
         description="Equipment registered to your account."
         actions={
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowAddEquipment(true)}>

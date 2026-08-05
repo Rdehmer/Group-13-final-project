@@ -7,6 +7,12 @@ import { logActivity } from "@/lib/activity";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
+import {
+  CONTRACT_START_DATE_BLOCK_MESSAGE,
+  findBlockingContractForServiceRequest,
+  parseCustomerContracts,
+  type CustomerContract,
+} from "@/lib/contracts";
 import type { Equipment, Profile, WorkOrder } from "@/lib/types";
 
 type ServiceKind = "repair" | "follow_up" | "routine";
@@ -145,6 +151,7 @@ export default function CustomerPortalPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [contracts, setContracts] = useState<CustomerContract[]>([]);
   const [contractCount, setContractCount] = useState(0);
   const [activeContractCount, setActiveContractCount] = useState(0);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -162,14 +169,20 @@ export default function CustomerPortalPage() {
     const [{ data: eq }, { data: wo }, { data: sc }, { data: customer }] = await Promise.all([
       supabase.from("equipment").select("*").eq("customer_id", customerId).order("name"),
       supabase.from("work_orders").select("*").eq("customer_id", customerId).order("created_at", { ascending: false }),
-      supabase.from("service_contracts").select("id, status").eq("customer_id", customerId),
+      supabase.from("service_contracts").select(`
+          *,
+          contract_equipment (
+            equipment ( id, name, category, location )
+          )
+        `).eq("customer_id", customerId),
       supabase.from("customers").select("phone").eq("id", customerId).single(),
     ]);
     setEquipment((eq as Equipment[]) ?? []);
     setWorkOrders((wo as WorkOrder[]) ?? []);
-    const contracts = sc ?? [];
-    setContractCount(contracts.length);
-    setActiveContractCount(contracts.filter((c) => c.status === "Active").length);
+    const parsedContracts = parseCustomerContracts(sc ?? []);
+    setContracts(parsedContracts);
+    setContractCount(parsedContracts.length);
+    setActiveContractCount(parsedContracts.filter((c) => c.status === "Active").length);
     const phone = customer?.phone ?? "";
     setCustomerPhone(phone);
     if (phone) {
@@ -271,6 +284,15 @@ export default function CustomerPortalPage() {
       return;
     }
 
+    const blocking = findBlockingContractForServiceRequest(
+      contracts,
+      form.equipment_id || null,
+    );
+    if (blocking) {
+      setError(CONTRACT_START_DATE_BLOCK_MESSAGE);
+      return;
+    }
+
     setBusy(true);
     setMessage(null);
     setSubmittedWo(null);
@@ -342,7 +364,7 @@ export default function CustomerPortalPage() {
   return (
     <div>
       <PageHeader
-        title="My Portal"
+        title="Home"
         description={`Welcome, ${profile.full_name ?? profile.email}. Submit a service request below, or open a section for more detail.`}
       />
 
@@ -351,13 +373,13 @@ export default function CustomerPortalPage() {
           <StatCard label="My Contracts" value={contractCount} hint={`${activeContractCount} active · View →`} />
         </Link>
         <Link href="/customer/equipment" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          <StatCard label="Equipment" value={equipment.length} hint="View & register →" />
+          <StatCard label="My Equipment" value={equipment.length} hint="View & register →" />
         </Link>
         <Link href="/customer/open-request" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          <StatCard label="Open Requests" value={openRequests} hint="View status & stage →" />
+          <StatCard label="Active Service" value={openRequests} hint="View status & stage →" />
         </Link>
         <Link href="/customer/order-history" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          <StatCard label="Order History" value={workOrders.length} hint="View history →" />
+          <StatCard label="Service History" value={workOrders.length} hint="View history →" />
         </Link>
       </div>
 

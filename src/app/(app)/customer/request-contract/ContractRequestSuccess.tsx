@@ -35,7 +35,7 @@ export function ContractRequestSuccess({ contractName }: Props) {
             View in My Contracts
           </Link>
           <Link href="/customer" className="btn btn-outline btn-sm">
-            Back to My Portal
+            Back to Home
           </Link>
         </div>
       </div>

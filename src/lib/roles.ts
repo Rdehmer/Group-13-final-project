@@ -4,7 +4,7 @@ export type NavItem = {
   href: string;
   label: string;
   roles: UserRole[];
-  /** Indented sub-item in the sidebar (e.g. under My Portal). */
+  /** Indented sub-item in the sidebar (e.g. under Home). */
   indent?: boolean;
   /** Nested sidebar links shown in a dropdown under this item. */
   children?: NavItem[];
@@ -63,14 +63,9 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/customer",
-    label: "My Portal",
+    label: "Home",
     roles: ["customer"],
     children: [
-      {
-        href: "/customer",
-        label: "Request Service",
-        roles: ["customer"],
-      },
       {
         href: "/customer/request-contract",
         label: "Request Contract",
@@ -78,7 +73,12 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/customer/open-request",
-        label: "Open Requests",
+        label: "Active Service",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/order-history",
+        label: "Service History",
         roles: ["customer"],
       },
       {
@@ -88,12 +88,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/customer/equipment",
-        label: "Equipment",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/order-history",
-        label: "Order History",
+        label: "My Equipment",
         roles: ["customer"],
       },
     ],

@@ -429,6 +429,46 @@ export function findOverlappingEquipment(
   return overlaps;
 }
 
+export const CONTRACT_SERVICE_REQUEST_WAIT_DAYS = 45;
+
+export const CONTRACT_START_DATE_BLOCK_MESSAGE =
+  "You cannot make a service request within 45 days of your contract start date.";
+
+export function daysSinceContractStart(startDate: string, asOf = new Date()): number | null {
+  if (!startDate) return null;
+  const start = new Date(`${startDate}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  const today = new Date(asOf);
+  today.setHours(0, 0, 0, 0);
+  return Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+export function isWithinContractServiceRequestWaitingPeriod(
+  startDate: string,
+  asOf = new Date(),
+): boolean {
+  const days = daysSinceContractStart(startDate, asOf);
+  return days !== null && days < CONTRACT_SERVICE_REQUEST_WAIT_DAYS;
+}
+
+function isActiveContractStatus(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === "active" || s === "renewed";
+}
+
+export function findBlockingContractForServiceRequest(
+  contracts: CustomerContract[],
+  equipmentId: string | null,
+): CustomerContract | null {
+  for (const contract of contracts) {
+    if (!isActiveContractStatus(contract.status)) continue;
+    if (!isWithinContractServiceRequestWaitingPeriod(contract.start_date)) continue;
+    if (equipmentId && !contract.equipment.some((eq) => eq.id === equipmentId)) continue;
+    return contract;
+  }
+  return null;
+}
+
 export type ContractRequestPreviewData = {
   tierName: string;
   tierTagline: string;

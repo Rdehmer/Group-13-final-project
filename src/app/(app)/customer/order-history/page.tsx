@@ -48,7 +48,7 @@ export default function CustomerOrderHistoryPage() {
   return (
     <div>
       <PageHeader
-        title="Order History"
+        title="Service History"
         description="Past and current service work orders for your account."
         actions={
           <Link href="/customer" className="btn btn-outline btn-sm">
@@ -59,7 +59,7 @@ export default function CustomerOrderHistoryPage() {
 
       {workOrders.length === 0 ? (
         <EmptyState
-          title="No order history"
+          title="No service history"
           description="Your work orders will appear here after you submit a service request."
           action={
             <Link href="/customer" className="btn btn-primary btn-sm">
