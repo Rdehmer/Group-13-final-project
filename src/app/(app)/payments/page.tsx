@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
@@ -100,7 +101,10 @@ export default function PaymentsPage() {
   return (
     <div>
       <PageHeader title="Payments" description="Record payments and monitor AR aging" actions={
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)} disabled={invoices.length === 0}>Record Payment</button>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/billing" className="btn btn-outline btn-sm">Invoices</Link>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)} disabled={invoices.length === 0}>Record Payment</button>
+        </div>
       } />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -154,12 +158,29 @@ export default function PaymentsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Payment #</th><th>Customer</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead>
+                <thead><tr><th>Payment #</th><th>Invoice</th><th>Customer</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead>
                 <tbody>
                   {payments.map((p) => (
                     <tr key={p.id}>
-                      <td>{p.payment_number}</td>
-                      <td>{p.customers?.name ?? "—"}</td>
+                      <td className="font-medium">{p.payment_number}</td>
+                      <td>
+                        {p.invoice_id ? (
+                          <Link href={`/billing/${p.invoice_id}`} className="link link-primary">
+                            View invoice
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        {p.customer_id ? (
+                          <Link href={`/customers/${p.customer_id}`} className="link link-hover">
+                            {p.customers?.name ?? "—"}
+                          </Link>
+                        ) : (
+                          p.customers?.name ?? "—"
+                        )}
+                      </td>
                       <td>{p.payment_date}</td>
                       <td>{p.payment_method}</td>
                       <td>{formatMoney(p.payment_amount)}</td>

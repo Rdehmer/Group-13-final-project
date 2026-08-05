@@ -7,7 +7,8 @@ import { createClient } from "@/lib/supabase/client";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
-import type { Customer, Equipment, WorkOrder, ServiceContract } from "@/lib/types";
+import type { Customer, Equipment, WorkOrder, ServiceContract, Invoice } from "@/lib/types";
+import { formatMoney } from "@/lib/calculations";
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -16,19 +17,22 @@ export default function CustomerDetailPage() {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [contracts, setContracts] = useState<ServiceContract[]>([]);
+  const [invoices, setInvoices] = useState<Pick<Invoice, "id" | "invoice_number" | "invoice_total" | "remaining_balance" | "status">[]>([]);
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const [{ data: c }, { data: eq }, { data: wo }, { data: sc }] = await Promise.all([
+    const [{ data: c }, { data: eq }, { data: wo }, { data: sc }, { data: inv }] = await Promise.all([
       supabase.from("customers").select("*").eq("id", id).single(),
       supabase.from("equipment").select("*").eq("customer_id", id).order("name"),
       supabase.from("work_orders").select("*").eq("customer_id", id).order("created_at", { ascending: false }).limit(10),
       supabase.from("service_contracts").select("*").eq("customer_id", id).order("start_date", { ascending: false }),
+      supabase.from("invoices").select("id, invoice_number, invoice_total, remaining_balance, status").eq("customer_id", id).order("created_at", { ascending: false }).limit(8),
     ]);
     setCustomer(c as Customer);
     setEquipment((eq as Equipment[]) ?? []);
     setWorkOrders((wo as WorkOrder[]) ?? []);
     setContracts((sc as ServiceContract[]) ?? []);
+    setInvoices((inv as typeof invoices) ?? []);
   }
 
   useEffect(() => {
@@ -110,7 +114,11 @@ export default function CustomerDetailPage() {
                     <tbody>
                       {equipment.map((eq) => (
                         <tr key={eq.id}>
-                          <td>{eq.name}</td>
+                          <td>
+                            <Link href="/equipment" className="link link-hover">
+                              {eq.name}
+                            </Link>
+                          </td>
                           <td><StatusBadge label={eq.operating_status} tone={statusTone(eq.operating_status)} /></td>
                           <td>{eq.location ?? "—"}</td>
                         </tr>
@@ -134,7 +142,11 @@ export default function CustomerDetailPage() {
                     <tbody>
                       {contracts.map((sc) => (
                         <tr key={sc.id}>
-                          <td>{sc.name}</td>
+                          <td>
+                            <Link href="/contracts" className="link link-hover">
+                              {sc.name}
+                            </Link>
+                          </td>
                           <td>{sc.contract_type}</td>
                           <td><StatusBadge label={sc.status} tone={statusTone(sc.status)} /></td>
                         </tr>
@@ -148,13 +160,16 @@ export default function CustomerDetailPage() {
 
           <div className="card bg-base-100 shadow">
             <div className="card-body">
-              <h2 className="card-title text-base">Recent Work Orders</h2>
+              <div className="flex items-center justify-between">
+                <h2 className="card-title text-base">Recent Work Orders</h2>
+                <Link href="/work-orders" className="link link-primary text-sm">All jobs</Link>
+              </div>
               {workOrders.length === 0 ? (
                 <EmptyState title="No work orders" description="Work orders for this customer will appear here." />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="table table-sm">
-                    <thead><tr><th>WO #</th><th>Type</th><th>Priority</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Job #</th><th>Type</th><th>Priority</th><th>Status</th></tr></thead>
                     <tbody>
                       {workOrders.map((wo) => (
                         <tr key={wo.id} className={wo.priority === "Critical" ? "bg-error/10" : ""}>
@@ -162,6 +177,47 @@ export default function CustomerDetailPage() {
                           <td>{wo.work_order_type}</td>
                           <td><StatusBadge label={wo.priority} tone={statusTone(wo.priority)} /></td>
                           <td><StatusBadge label={wo.status} tone={statusTone(wo.status)} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card bg-base-100 shadow">
+            <div className="card-body">
+              <div className="flex items-center justify-between">
+                <h2 className="card-title text-base">Invoices</h2>
+                <Link href="/billing" className="link link-primary text-sm">Billing</Link>
+              </div>
+              {invoices.length === 0 ? (
+                <EmptyState title="No invoices" description="Invoices for this customer will appear here." />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Invoice</th>
+                        <th className="text-right">Total</th>
+                        <th className="text-right">Balance</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoices.map((inv) => (
+                        <tr key={inv.id}>
+                          <td>
+                            <Link href={`/billing/${inv.id}`} className="link link-primary">
+                              {inv.invoice_number}
+                            </Link>
+                          </td>
+                          <td className="text-right">{formatMoney(inv.invoice_total)}</td>
+                          <td className="text-right">{formatMoney(inv.remaining_balance)}</td>
+                          <td>
+                            <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
+                          </td>
                         </tr>
                       ))}
                     </tbody>

@@ -374,10 +374,18 @@ export default function InvoiceDetailPage() {
               <p className="mt-1 whitespace-pre-line text-sm opacity-80">{inv.customers.billing_address}</p>
             ) : null}
             {inv.customers?.email ? (
-              <p className="mt-1 text-sm opacity-70">{inv.customers.email}</p>
+              <p className="mt-1 text-sm opacity-70">
+                <a href={`mailto:${inv.customers.email}`} className="link link-hover">
+                  {inv.customers.email}
+                </a>
+              </p>
             ) : null}
             {inv.customers?.phone ? (
-              <p className="text-sm opacity-70">{inv.customers.phone}</p>
+              <p className="text-sm opacity-70">
+                <a href={`tel:${inv.customers.phone}`} className="link link-hover">
+                  {inv.customers.phone}
+                </a>
+              </p>
             ) : null}
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm sm:text-right">

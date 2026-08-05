@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -136,7 +137,15 @@ export default function ContractsPage() {
                   {contracts.map((c) => (
                     <tr key={c.id}>
                       <td className="font-medium">{c.name}</td>
-                      <td>{c.customers?.name ?? "—"}</td>
+                      <td>
+                        {c.customer_id ? (
+                          <Link href={`/customers/${c.customer_id}`} className="link link-hover">
+                            {c.customers?.name ?? "—"}
+                          </Link>
+                        ) : (
+                          c.customers?.name ?? "—"
+                        )}
+                      </td>
                       <td>{c.contract_type}</td>
                       <td>{formatMoney(c.contract_price)}</td>
                       <td><StatusBadge label={c.status} tone={statusTone(c.status)} /></td>

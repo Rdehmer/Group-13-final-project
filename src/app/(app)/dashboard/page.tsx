@@ -36,7 +36,7 @@ export default async function DashboardPage() {
       .not("status", "in", '("Completed","Closed","Canceled")'),
     supabase
       .from("work_orders")
-      .select("id, work_order_number, priority, status, scheduled_date, customers(name)")
+      .select("id, work_order_number, priority, status, scheduled_date, customer_id, customers(name)")
       .not("status", "in", '("Completed","Closed","Canceled")')
       .order("scheduled_date", { ascending: true })
       .limit(8),
@@ -125,7 +125,15 @@ export default async function DashboardPage() {
                               {wo.work_order_number}
                             </Link>
                           </td>
-                          <td>{relatedName(wo.customers)}</td>
+                          <td>
+                            {wo.customer_id ? (
+                              <Link href={`/customers/${wo.customer_id}`} className="link link-hover">
+                                {relatedName(wo.customers)}
+                              </Link>
+                            ) : (
+                              relatedName(wo.customers)
+                            )}
+                          </td>
                           <td>
                             <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
                           </td>
@@ -161,7 +169,9 @@ export default async function DashboardPage() {
                     {(lowStockParts ?? []).map((p) => (
                       <tr key={p.id}>
                         <td>
-                          {p.part_number} — {p.name}
+                          <Link href={`/parts?part=${p.id}`} className="link link-primary">
+                            {p.part_number} — {p.name}
+                          </Link>
                         </td>
                         <td>
                           <StatusBadge label={String(p.quantity_on_hand)} tone="warning" />
@@ -173,6 +183,11 @@ export default async function DashboardPage() {
                 </table>
               </div>
             )}
+            <div className="mt-3">
+              <Link href="/parts?filter=low" className="btn btn-outline btn-xs">
+                Open parts inventory
+              </Link>
+            </div>
           </div>
         </div>
       </div>

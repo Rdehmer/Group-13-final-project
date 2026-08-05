@@ -142,8 +142,20 @@ export default function CustomersPage() {
                 <tbody>
                   {customers.map((c) => (
                     <tr key={c.id}>
-                      <td className="font-medium">{c.name}</td>
-                      <td>{c.primary_contact_name ?? c.email ?? "—"}</td>
+                      <td className="font-medium">
+                        <Link href={`/customers/${c.id}`} className="link link-hover">
+                          {c.name}
+                        </Link>
+                      </td>
+                      <td>
+                        {c.email ? (
+                          <a href={`mailto:${c.email}`} className="link link-hover">
+                            {c.primary_contact_name ?? c.email}
+                          </a>
+                        ) : (
+                          c.primary_contact_name ?? "—"
+                        )}
+                      </td>
                       <td>{[c.city, c.state].filter(Boolean).join(", ") || "—"}</td>
                       <td><StatusBadge label={c.status} tone={statusTone(c.status)} /></td>
                       <td><Link href={`/customers/${c.id}`} className="btn btn-ghost btn-xs">View</Link></td>
