@@ -209,6 +209,8 @@ export type Invoice = {
   status: string;
   notes: string | null;
   created_by: string | null;
+  /** Team member responsible for this invoice (profiles.id). */
+  assigned_to: string | null;
   created_at: string;
   updated_at: string;
 };

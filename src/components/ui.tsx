@@ -23,9 +23,13 @@ export function statusTone(status: string): keyof typeof TONE {
   const s = status.toLowerCase();
   if (["critical", "past due", "disputed", "out of service", "canceled"].some((x) => s.includes(x)))
     return "error";
-  if (["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue"].some((x) => s.includes(x)))
+  if (
+    ["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue", "needs review"].some((x) =>
+      s.includes(x),
+    )
+  )
     return "warning";
-  if (["completed", "paid", "active", "approved", "operational", "renewed"].some((x) => s.includes(x)))
+  if (["completed", "paid", "active", "approved", "operational", "renewed", "reviewed"].some((x) => s.includes(x)))
     return "success";
   if (["draft", "requested", "scheduled", "sent"].some((x) => s.includes(x))) return "info";
   return "neutral";

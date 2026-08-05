@@ -11,6 +11,133 @@ export type BillableLine = {
   amount: number;
 };
 
+/** Invoice workflow + AR statuses (string values stored on invoices.status). */
+export const INVOICE_STATUSES = [
+  "Draft",
+  "Needs Review",
+  "Reviewed",
+  "On Hold",
+  "Sent",
+  "Partially Paid",
+  "Paid",
+  "Disputed",
+  "Canceled",
+] as const;
+
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+/** Queue tabs on the billing board. */
+export type InvoiceQueueFilter =
+  | "all"
+  | "needs_review"
+  | "on_hold"
+  | "reviewed"
+  | "draft"
+  | "sent"
+  | "past_due"
+  | "paid"
+  | "mine"
+  | "unassigned";
+
+export const INVOICE_QUEUE_TABS: { id: InvoiceQueueFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "needs_review", label: "Needs Review" },
+  { id: "on_hold", label: "On Hold" },
+  { id: "reviewed", label: "Reviewed" },
+  { id: "draft", label: "Draft" },
+  { id: "sent", label: "Sent / Open" },
+  { id: "past_due", label: "Past Due" },
+  { id: "paid", label: "Paid" },
+  { id: "mine", label: "Assigned to me" },
+  { id: "unassigned", label: "Unassigned" },
+];
+
+export function normalizeInvoiceStatus(status: string): string {
+  return (status || "").trim();
+}
+
+export function isUnsentInvoice(status: string): boolean {
+  const s = normalizeInvoiceStatus(status).toLowerCase();
+  return (
+    s.includes("draft") ||
+    s === "unsent" ||
+    s.includes("needs review") ||
+    s.includes("on hold") ||
+    s === "reviewed"
+  );
+}
+
+export function isTerminalInvoiceStatus(status: string): boolean {
+  const s = normalizeInvoiceStatus(status).toLowerCase();
+  return s.includes("canceled") || s.includes("void") || (s.includes("paid") && !s.includes("partial"));
+}
+
+export function invoiceBucket(
+  inv: Pick<Invoice, "status" | "due_date" | "remaining_balance">,
+  today = new Date(),
+):
+  | "draft"
+  | "needs_review"
+  | "reviewed"
+  | "on_hold"
+  | "sent"
+  | "open"
+  | "past_due"
+  | "paid"
+  | "other" {
+  const status = normalizeInvoiceStatus(inv.status).toLowerCase();
+  if (status.includes("needs review")) return "needs_review";
+  if (status.includes("on hold")) return "on_hold";
+  if (status === "reviewed") return "reviewed";
+  if (status.includes("draft") || status === "unsent") return "draft";
+  if (status.includes("paid") && !status.includes("partial")) return "paid";
+  if (status.includes("canceled") || status.includes("void") || status.includes("disputed")) return "other";
+  const due = new Date(inv.due_date);
+  const bal = Number(inv.remaining_balance);
+  if (bal > 0 && due < today && !isUnsentInvoice(inv.status)) return "past_due";
+  if (status.includes("sent") || status.includes("partial")) return "sent";
+  if (bal > 0) return "open";
+  return "other";
+}
+
+export function matchesInvoiceQueue(
+  inv: Invoice,
+  filter: InvoiceQueueFilter,
+  today: Date,
+  currentUserId: string | null,
+): boolean {
+  const bucket = invoiceBucket(inv, today);
+  const assigned = (inv as Invoice & { assigned_to?: string | null }).assigned_to ?? null;
+
+  switch (filter) {
+    case "all":
+      return true;
+    case "needs_review":
+      return bucket === "needs_review";
+    case "on_hold":
+      return bucket === "on_hold";
+    case "reviewed":
+      return bucket === "reviewed";
+    case "draft":
+      return bucket === "draft";
+    case "sent":
+      return (
+        (bucket === "sent" || bucket === "open" || bucket === "past_due") &&
+        Number(inv.remaining_balance) > 0
+      );
+    case "past_due":
+      return bucket === "past_due";
+    case "paid":
+      return bucket === "paid";
+    case "mine":
+      return Boolean(currentUserId && assigned === currentUserId);
+    case "unassigned":
+      return !assigned && !isTerminalInvoiceStatus(inv.status);
+    default:
+      return true;
+  }
+}
+
 /** Editable line before save (id is client-only). */
 export type EditableInvoiceLine = {
   id: string;
@@ -29,11 +156,6 @@ export const EDITABLE_LINE_KINDS: { value: EditableInvoiceLine["kind"]; label: s
   { value: "warranty", label: "Warranty deduction" },
   { value: "discount", label: "Discount" },
 ];
-
-export function isUnsentInvoice(status: string): boolean {
-  const s = (status || "").toLowerCase();
-  return s.includes("draft") || s === "unsent";
-}
 
 export function newEditableLine(
   kind: EditableInvoiceLine["kind"] = "additional",
@@ -328,22 +450,6 @@ export function linesFromStoredInvoice(inv: Invoice): BillableLine[] {
     });
   }
   return lines;
-}
-
-export function invoiceBucket(
-  inv: Invoice,
-  today = new Date(),
-): "draft" | "sent" | "open" | "past_due" | "paid" | "other" {
-  const status = (inv.status || "").toLowerCase();
-  if (status.includes("draft") || status === "unsent") return "draft";
-  if (status.includes("paid") && !status.includes("partial")) return "paid";
-  if (status.includes("canceled") || status.includes("void") || status.includes("disputed")) return "other";
-  const due = new Date(inv.due_date);
-  const bal = Number(inv.remaining_balance);
-  if (bal > 0 && due < today && !status.includes("draft")) return "past_due";
-  if (status.includes("sent") || status.includes("partial")) return "sent";
-  if (bal > 0) return "open";
-  return "other";
 }
 
 export function daysPastDue(inv: Invoice, today = new Date()): number {

@@ -13,14 +13,20 @@ import {
   buildWorkOrderPreview,
   daysPastDue,
   invoiceBucket,
+  matchesInvoiceQueue,
+  INVOICE_QUEUE_TABS,
   type InvoicePreview,
+  type InvoiceQueueFilter,
 } from "@/lib/billing";
-import type { Invoice, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
+import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
+import type { Invoice, Profile, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
 
-type InvoiceRow = Invoice & { customers?: { name: string; billing_address?: string | null } };
+type InvoiceRow = Invoice & {
+  customers?: { name: string; billing_address?: string | null };
+  assigned_to?: string | null;
+};
 type WoRow = WorkOrder & { customers?: { name: string } };
-
-type StatusFilter = "all" | "draft" | "sent" | "open" | "past_due" | "paid";
+type TeamMember = Pick<Profile, "id" | "full_name" | "email" | "role">;
 
 /**
  * This business faces revenue leakage risk when completed work is not invoiced.
@@ -33,8 +39,11 @@ export default function BillingPage() {
   const deepLinkWo = searchParams.get("wo");
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [completedWo, setCompletedWo] = useState<WoRow[]>([]);
+  const [team, setTeam] = useState<TeamMember[]>([]);
+  const [teamMap, setTeamMap] = useState<Record<string, string>>({});
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(0.0825);
-  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [filter, setFilter] = useState<InvoiceQueueFilter>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewWoId, setPreviewWoId] = useState<string | null>(null);
@@ -63,22 +72,36 @@ export default function BillingPage() {
   }
 
   async function load() {
-    const [{ data: inv }, { data: wo }, { data: settings }] = await Promise.all([
-      supabase
-        .from("invoices")
-        .select("*, customers(name, billing_address)")
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("work_orders")
-        .select("*, customers(name)")
-        .eq("status", "Completed")
-        .eq("billing_status", "Unbilled"),
-      supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
-    ]);
+    const [{ data: inv }, { data: wo }, { data: settings }, { data: members }, { data: auth }] =
+      await Promise.all([
+        supabase
+          .from("invoices")
+          .select("*, customers(name, billing_address)")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("work_orders")
+          .select("*, customers(name)")
+          .eq("status", "Completed")
+          .eq("billing_status", "Unbilled"),
+        supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
+        supabase
+          .from("profiles")
+          .select("id, full_name, email, role")
+          .in("role", ["billing", "administrator", "service_manager"])
+          .eq("is_active", true)
+          .order("full_name"),
+        supabase.auth.getUser(),
+      ]);
     const list = (inv as InvoiceRow[]) ?? [];
     const ready = (wo as WoRow[]) ?? [];
     setInvoices(list);
     setCompletedWo(ready);
+    setCurrentUserId(auth.user?.id ?? null);
+    const teamList = (members as TeamMember[]) ?? [];
+    setTeam(teamList);
+    const map: Record<string, string> = {};
+    for (const m of teamList) map[m.id] = m.full_name || m.email;
+    setTeamMap(map);
     const rate = settings?.default_tax_rate ? Number(settings.default_tax_rate) : taxRate;
     if (settings?.default_tax_rate) setTaxRate(rate);
     if (!selectedId && !deepLinkWo && list.length > 0) setSelectedId(list[0].id);
@@ -96,48 +119,83 @@ export default function BillingPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return invoices.filter((inv) => {
-      const bucket = invoiceBucket(inv, today);
-      if (filter !== "all") {
-        if (filter === "open") {
-          if (!(bucket === "open" || bucket === "sent" || bucket === "past_due")) return false;
-          if (Number(inv.remaining_balance) <= 0) return false;
-        } else if (bucket !== filter) return false;
-      }
+      if (!matchesInvoiceQueue(inv, filter, today, currentUserId)) return false;
       if (!q) return true;
+      const assignee = inv.assigned_to ? teamMap[inv.assigned_to] ?? "" : "";
       return (
         inv.invoice_number.toLowerCase().includes(q) ||
         (inv.customers?.name ?? "").toLowerCase().includes(q) ||
-        inv.status.toLowerCase().includes(q)
+        inv.status.toLowerCase().includes(q) ||
+        assignee.toLowerCase().includes(q)
       );
     });
-  }, [invoices, filter, query, today]);
+  }, [invoices, filter, query, today, currentUserId, teamMap]);
 
   const selected = invoices.find((i) => i.id === selectedId) ?? null;
 
   const stats = useMemo(() => {
     let openAr = 0;
     let pastDue = 0;
-    let draftCount = 0;
+    let needsReview = 0;
+    let onHold = 0;
+    let unassigned = 0;
     for (const inv of invoices) {
       const bal = Number(inv.remaining_balance);
       const bucket = invoiceBucket(inv, today);
-      if (bucket === "draft") draftCount += 1;
-      if (bal > 0 && bucket !== "draft") openAr += bal;
+      if (bal > 0 && bucket !== "draft" && bucket !== "on_hold" && bucket !== "needs_review" && bucket !== "reviewed") {
+        openAr += bal;
+      }
       if (bucket === "past_due") pastDue += bal;
+      if (bucket === "needs_review") needsReview += 1;
+      if (bucket === "on_hold") onHold += 1;
+      if (!inv.assigned_to && inv.status !== "Paid" && inv.status !== "Canceled") unassigned += 1;
     }
     return {
       openAr,
       pastDue,
-      draftCount,
+      needsReview,
+      onHold,
+      unassigned,
       readyCount: completedWo.length,
     };
   }, [invoices, completedWo, today]);
+
+  async function updateInvoiceWorkflow(
+    invoiceId: string,
+    patch: { status?: string; assigned_to?: string | null },
+  ) {
+    setBusy(true);
+    setError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error: updError } = await supabase
+      .from("invoices")
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", invoiceId);
+    if (updError) {
+      const msg = updError.message.includes("assigned_to")
+        ? `${updError.message} — run supabase/migrations/20260805_invoice_assignment_status.sql in Supabase if assigned_to is missing.`
+        : updError.message;
+      setError(msg);
+      setBusy(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: patch.status ? "status_change" : "assigned",
+      recordType: "invoice",
+      recordId: invoiceId,
+      newValue: patch.status ?? patch.assigned_to ?? "unassigned",
+    });
+    await load();
+    setSelectedId(invoiceId);
+    setBusy(false);
+  }
 
   async function loadPreviewForWo(woId: string) {
     await loadWoPreview(woId, taxRate);
   }
 
-  async function createInvoice(asDraft: boolean) {
+  async function createInvoice(status: "Draft" | "Needs Review" | "Sent" = "Draft") {
     if (!previewWoId || !woPreview) return;
     const wo = completedWo.find((w) => w.id === previewWoId);
     if (!wo) return;
@@ -149,28 +207,37 @@ export default function BillingPage() {
     const { data: { user } } = await supabase.auth.getUser();
     const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
 
-    const { data: inv, error: insertError } = await supabase
+    const payload: Record<string, unknown> = {
+      invoice_number: invoiceNumber,
+      customer_id: wo.customer_id,
+      work_order_id: wo.id,
+      contract_id: wo.contract_id,
+      due_date: due.toISOString().slice(0, 10),
+      labor_charges: woPreview.laborCharges,
+      parts_charges: woPreview.partsCharges,
+      warranty_deductions: woPreview.warrantyDeductions,
+      tax: woPreview.tax,
+      invoice_total: woPreview.total,
+      remaining_balance: woPreview.total,
+      status,
+      created_by: user?.id ?? null,
+      assigned_to: user?.id ?? null,
+    };
+
+    let { data: inv, error: insertError } = await supabase
       .from("invoices")
-      .insert({
-        invoice_number: invoiceNumber,
-        customer_id: wo.customer_id,
-        work_order_id: wo.id,
-        contract_id: wo.contract_id,
-        due_date: due.toISOString().slice(0, 10),
-        labor_charges: woPreview.laborCharges,
-        parts_charges: woPreview.partsCharges,
-        warranty_deductions: woPreview.warrantyDeductions,
-        tax: woPreview.tax,
-        invoice_total: woPreview.total,
-        remaining_balance: woPreview.total,
-        status: asDraft ? "Draft" : "Sent",
-        created_by: user?.id ?? null,
-      })
+      .insert(payload)
       .select()
       .single();
 
-    if (insertError) {
-      setError(insertError.message);
+    // Retry without assigned_to if the column has not been migrated yet.
+    if (insertError?.message?.includes("assigned_to")) {
+      delete payload.assigned_to;
+      ({ data: inv, error: insertError } = await supabase.from("invoices").insert(payload).select().single());
+    }
+
+    if (insertError || !inv) {
+      setError(insertError?.message ?? "Could not create invoice");
       setBusy(false);
       return;
     }
@@ -192,21 +259,14 @@ export default function BillingPage() {
     router.push(`/billing/${inv.id}`);
   }
 
-  const tabs: { id: StatusFilter; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "draft", label: "Draft" },
-    { id: "sent", label: "Sent" },
-    { id: "open", label: "Open" },
-    { id: "past_due", label: "Past Due" },
-    { id: "paid", label: "Paid" },
-  ];
-
   return (
     <div>
       <PageHeader
         title="Invoices"
-        description="Review billable work, preview charges, and post customer invoices"
+        description="Status queues, team assignment, and posting customer invoices"
       />
+
+      {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Open AR" value={formatMoney(stats.openAr)} hint="Unpaid balances" />
@@ -216,8 +276,13 @@ export default function BillingPage() {
           hint="Over due date"
           danger={stats.pastDue > 0}
         />
+        <StatCard
+          label="Needs review"
+          value={stats.needsReview}
+          danger={stats.needsReview > 0}
+          hint={`${stats.onHold} on hold · ${stats.unassigned} unassigned`}
+        />
         <StatCard label="Ready to invoice" value={stats.readyCount} hint="Completed, unbilled jobs" />
-        <StatCard label="Draft invoices" value={stats.draftCount} hint="Not yet sent" />
       </div>
 
       {completedWo.length > 0 ? (
@@ -245,7 +310,7 @@ export default function BillingPage() {
 
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="tabs tabs-box tabs-sm w-full overflow-x-auto lg:w-auto">
-          {tabs.map((t) => (
+          {INVOICE_QUEUE_TABS.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -261,7 +326,7 @@ export default function BillingPage() {
           <input
             type="search"
             className="grow"
-            placeholder="Search invoice or customer…"
+            placeholder="Search invoice, customer, assignee…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -290,6 +355,7 @@ export default function BillingPage() {
                       <th className="text-right">Total</th>
                       <th className="text-right">Balance</th>
                       <th>Status</th>
+                      <th>Assignee</th>
                       <th />
                     </tr>
                   </thead>
@@ -336,6 +402,11 @@ export default function BillingPage() {
                           <td>
                             <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
                           </td>
+                          <td className="max-w-[7rem] truncate text-xs">
+                            {inv.assigned_to ? teamMap[inv.assigned_to] ?? "Unknown" : (
+                              <span className="opacity-50">Unassigned</span>
+                            )}
+                          </td>
                           <td>
                             <Link
                               href={`/billing/${inv.id}`}
@@ -370,11 +441,20 @@ export default function BillingPage() {
                   setWoPreview(null);
                   setError(null);
                 }}
-                onCreateDraft={() => createInvoice(true)}
-                onCreateSend={() => createInvoice(false)}
+                onCreateDraft={() => createInvoice("Draft")}
+                onCreateReview={() => createInvoice("Needs Review")}
+                onCreateSend={() => createInvoice("Sent")}
               />
             ) : selected ? (
-              <InvoiceListPreview inv={selected} today={today} />
+              <InvoiceListPreview
+                inv={selected}
+                today={today}
+                team={team}
+                assigneeName={selected.assigned_to ? teamMap[selected.assigned_to] : null}
+                busy={busy}
+                onStatusChange={(status) => updateInvoiceWorkflow(selected.id, { status })}
+                onAssignChange={(userId) => updateInvoiceWorkflow(selected.id, { assigned_to: userId })}
+              />
             ) : (
               <EmptyState
                 title="Select an invoice"
@@ -388,7 +468,23 @@ export default function BillingPage() {
   );
 }
 
-function InvoiceListPreview({ inv, today }: { inv: InvoiceRow; today: Date }) {
+function InvoiceListPreview({
+  inv,
+  today,
+  team,
+  assigneeName,
+  busy,
+  onStatusChange,
+  onAssignChange,
+}: {
+  inv: InvoiceRow;
+  today: Date;
+  team: TeamMember[];
+  assigneeName: string | null;
+  busy: boolean;
+  onStatusChange: (status: string) => void;
+  onAssignChange: (userId: string | null) => void;
+}) {
   const overdueDays = daysPastDue(inv, today);
   const bucket = invoiceBucket(inv, today);
 
@@ -411,8 +507,28 @@ function InvoiceListPreview({ inv, today }: { inv: InvoiceRow; today: Date }) {
               inv.customers?.name ?? "Customer"
             )}
           </p>
+          {assigneeName ? (
+            <p className="mt-1 text-xs opacity-70">
+              Assigned to <span className="font-medium">{assigneeName}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-xs opacity-50">Unassigned</p>
+          )}
         </div>
         <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
+      </div>
+
+      <div className="rounded-box border border-base-300 bg-base-200/30 p-3">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">Workflow</p>
+        <InvoiceWorkflowControls
+          status={inv.status}
+          assignedTo={inv.assigned_to}
+          team={team}
+          busy={busy}
+          compact
+          onStatusChange={onStatusChange}
+          onAssignChange={onAssignChange}
+        />
       </div>
 
       {inv.work_order_id ? (
@@ -534,6 +650,7 @@ function WorkOrderInvoicePreview({
   taxRate,
   onCancel,
   onCreateDraft,
+  onCreateReview,
   onCreateSend,
 }: {
   wo: WoRow;
@@ -543,6 +660,7 @@ function WorkOrderInvoicePreview({
   taxRate: number;
   onCancel: () => void;
   onCreateDraft: () => void;
+  onCreateReview: () => void;
   onCreateSend: () => void;
 }) {
   return (
@@ -635,6 +753,9 @@ function WorkOrderInvoicePreview({
             <button type="button" className="btn btn-outline btn-sm" onClick={onCreateDraft} disabled={busy}>
               Save as draft
             </button>
+            <button type="button" className="btn btn-outline btn-sm" onClick={onCreateReview} disabled={busy}>
+              Needs review
+            </button>
             <button type="button" className="btn btn-primary btn-sm" onClick={onCreateSend} disabled={busy}>
               {busy ? "Creating…" : "Create & send"}
             </button>
@@ -644,3 +765,4 @@ function WorkOrderInvoicePreview({
     </div>
   );
 }
+

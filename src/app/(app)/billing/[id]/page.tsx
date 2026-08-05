@@ -22,9 +22,11 @@ import {
   type BillableLine,
   type EditableInvoiceLine,
 } from "@/lib/billing";
-import type { Invoice, Payment, TechnicianLabor, WorkOrderPart } from "@/lib/types";
+import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
+import type { Invoice, Payment, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
 
 type InvoiceDetail = Invoice & {
+  assigned_to?: string | null;
   customers?: {
     name: string;
     billing_address?: string | null;
@@ -46,6 +48,7 @@ export default function InvoiceDetailPage() {
   const [lines, setLines] = useState<BillableLine[]>([]);
   const [editLines, setEditLines] = useState<EditableInvoiceLine[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [team, setTeam] = useState<Pick<Profile, "id" | "full_name" | "email" | "role">[]>([]);
   const [taxRate, setTaxRate] = useState(0.0825);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +57,7 @@ export default function InvoiceDetailPage() {
   const [notes, setNotes] = useState("");
 
   async function load() {
-    const [{ data }, { data: pay }, { data: settings }] = await Promise.all([
+    const [{ data }, { data: pay }, { data: settings }, { data: members }] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, customers(name, billing_address, email, phone), work_orders(work_order_number, problem_description)")
@@ -62,11 +65,18 @@ export default function InvoiceDetailPage() {
         .single(),
       supabase.from("payments").select("*").eq("invoice_id", id).order("payment_date", { ascending: false }),
       supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, role")
+        .in("role", ["billing", "administrator", "service_manager"])
+        .eq("is_active", true)
+        .order("full_name"),
     ]);
 
     const invoice = data as InvoiceDetail | null;
     setInv(invoice);
     setPayments((pay as Payment[]) ?? []);
+    setTeam((members as typeof team) ?? []);
     if (settings?.default_tax_rate) setTaxRate(Number(settings.default_tax_rate));
     if (!invoice) return;
 
@@ -254,6 +264,34 @@ export default function InvoiceDetailPage() {
     setSaving(false);
   }
 
+  async function setAssignee(userId: string | null) {
+    if (!inv) return;
+    setSaving(true);
+    setError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error: updError } = await supabase
+      .from("invoices")
+      .update({ assigned_to: userId, updated_at: new Date().toISOString() })
+      .eq("id", inv.id);
+    if (updError) {
+      const msg = updError.message.includes("assigned_to")
+        ? `${updError.message} — run supabase/migrations/20260805_invoice_assignment_status.sql in Supabase.`
+        : updError.message;
+      setError(msg);
+      setSaving(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "assigned",
+      recordType: "invoice",
+      recordId: inv.id,
+      newValue: userId ?? "unassigned",
+    });
+    await load();
+    setSaving(false);
+  }
+
   if (!inv) {
     return <div className="p-8 text-center opacity-60">Loading invoice…</div>;
   }
@@ -274,6 +312,7 @@ export default function InvoiceDetailPage() {
 
   const workOrder = inv.work_orders;
   const showLines = canEdit ? editLines : lines;
+  const assignee = team.find((m) => m.id === inv.assigned_to);
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -295,6 +334,26 @@ export default function InvoiceDetailPage() {
           {canEdit ? (
             <button
               type="button"
+              className="btn btn-outline btn-sm gap-1"
+              disabled={saving}
+              onClick={() => setStatus("Needs Review")}
+            >
+              Mark needs review
+            </button>
+          ) : null}
+          {canEdit || inv.status === "Needs Review" ? (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              disabled={saving}
+              onClick={() => setStatus("Reviewed")}
+            >
+              Mark reviewed
+            </button>
+          ) : null}
+          {canEdit || inv.status === "Needs Review" || inv.status === "Reviewed" || inv.status === "On Hold" ? (
+            <button
+              type="button"
               className="btn btn-primary btn-sm gap-1"
               disabled={saving}
               onClick={() => setStatus("Sent")}
@@ -303,6 +362,16 @@ export default function InvoiceDetailPage() {
             </button>
           ) : null}
           {inv.status === "Sent" || inv.status === "Partially Paid" ? (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              disabled={saving}
+              onClick={() => setStatus("On Hold")}
+            >
+              Put on hold
+            </button>
+          ) : null}
+          {inv.status === "Sent" || inv.status === "Partially Paid" || inv.status === "Reviewed" ? (
             <button
               type="button"
               className="btn btn-outline btn-sm gap-1"
@@ -323,11 +392,37 @@ export default function InvoiceDetailPage() {
       {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}
       {savedMsg ? <div className="alert alert-success mb-4 text-sm">{savedMsg}</div> : null}
 
+      <div className="card mb-4 bg-base-100 shadow">
+        <div className="card-body py-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">Status & assignment</h2>
+            {assignee ? (
+              <p className="text-sm opacity-70">
+                Currently: <span className="font-medium">{assignee.full_name || assignee.email}</span>
+              </p>
+            ) : (
+              <p className="text-sm opacity-50">No one assigned</p>
+            )}
+          </div>
+          <InvoiceWorkflowControls
+            status={inv.status}
+            assignedTo={inv.assigned_to}
+            team={team}
+            busy={saving}
+            onStatusChange={setStatus}
+            onAssignChange={setAssignee}
+          />
+          <p className="mt-2 text-xs opacity-60">
+            Workflow queues: Draft → Needs Review → Reviewed → Sent (or On Hold anytime before paid).
+          </p>
+        </div>
+      </div>
+
       {canEdit ? (
         <div className="alert alert-info mb-4 text-sm">
           <span>
-            This invoice is unsent. Edit line items below, then <strong>Save</strong> or <strong>Send</strong>.
-            Tax is recalculated at {(taxRate * 100).toFixed(2)}%.
+            This invoice is still in the unsent workflow ({inv.status}). Edit line items, assign an owner, then{" "}
+            <strong>Send</strong> when ready. Tax is recalculated at {(taxRate * 100).toFixed(2)}%.
           </span>
         </div>
       ) : null}
