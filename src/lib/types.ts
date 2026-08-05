@@ -29,6 +29,10 @@ export type Customer = {
   city: string | null;
   state: string | null;
   zip_code: string | null;
+  /** Optional; used for global location filters and forms. */
+  region: string | null;
+  /** Optional; used for global location filters and forms. */
+  country: string | null;
   status: "Active" | "Inactive" | "On Hold";
   payment_terms: string | null;
   notes: string | null;
@@ -93,6 +97,8 @@ export type WorkOrder = {
   assigned_technician_id: string | null;
   scheduled_date: string | null;
   scheduled_start_time: string | null;
+  /** Optional end time when the column exists; duration falls back to estimated_labor_hours. */
+  scheduled_end_time?: string | null;
   problem_description: string | null;
   requested_service: string | null;
   customer_approval_required: boolean;
@@ -241,6 +247,10 @@ export type Invoice = {
   customer_id: string;
   contract_id: string | null;
   work_order_id: string | null;
+  /** Equipment unit this invoice covers (model / serial on equipment). */
+  equipment_id: string | null;
+  /** Customer / field PO number on the invoice document. */
+  po_number: string | null;
   invoice_date: string;
   due_date: string;
   billing_period: string | null;
@@ -257,8 +267,47 @@ export type Invoice = {
   status: string;
   notes: string | null;
   created_by: string | null;
+  /** Team member responsible for this invoice (profiles.id). */
+  assigned_to: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type PurchaseOrder = {
+  id: string;
+  po_number: string;
+  invoice_id: string | null;
+  work_order_id: string | null;
+  vendor_name: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PurchaseOrderLine = {
+  id: string;
+  purchase_order_id: string;
+  part_id: string | null;
+  part_number: string | null;
+  part_name: string | null;
+  description: string | null;
+  quantity: number;
+  unit_cost: number;
+  created_at: string;
+};
+
+export type PurchaseOrderAttachment = {
+  id: string;
+  purchase_order_id: string;
+  file_name: string;
+  file_path: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  /** Base64 data URL when Storage bucket is unavailable (demo fallback). */
+  file_data: string | null;
+  uploaded_by: string | null;
+  created_at: string;
 };
 
 export type Payment = {
@@ -273,6 +322,48 @@ export type Payment = {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+};
+
+/** Accounting batch lifecycle: Open (editable) → Posted (locked) → Exported (to GL). */
+export type AccountingBatchStatus = "Open" | "Posted" | "Exported";
+export type AccountingBatchType = "invoice" | "payment" | "mixed";
+
+export type AccountingBatch = {
+  id: string;
+  batch_number: string;
+  batch_type: AccountingBatchType;
+  name: string | null;
+  status: AccountingBatchStatus;
+  batch_date: string;
+  payment_method: string | null;
+  notes: string | null;
+  invoice_total: number;
+  payment_total: number;
+  invoice_count: number;
+  payment_count: number;
+  created_by: string | null;
+  posted_by: string | null;
+  posted_at: string | null;
+  exported_by: string | null;
+  exported_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountingBatchInvoice = {
+  id: string;
+  batch_id: string;
+  invoice_id: string;
+  amount: number;
+  added_at: string;
+};
+
+export type AccountingBatchPayment = {
+  id: string;
+  batch_id: string;
+  payment_id: string;
+  amount: number;
+  added_at: string;
 };
 
 export type CompanySettings = {
