@@ -65,6 +65,11 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["customer"],
   },
   {
+    href: "/customer/open-request",
+    label: "Open Request",
+    roles: ["customer"],
+  },
+  {
     href: "/customer/request-contract",
     label: "Request Contract",
     roles: ["customer"],

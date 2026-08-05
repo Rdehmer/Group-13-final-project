@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
@@ -102,7 +103,13 @@ export default function CustomerPortalPage() {
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="My Contracts" value={contracts.length} hint={`${activeContracts} active`} />
         <StatCard label="Equipment" value={equipment.length} />
-        <StatCard label="Open Requests" value={openRequests} />
+        <Link href="/customer/open-request" className="block transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+          <StatCard
+            label="Open Request"
+            value={openRequests}
+            hint="View status & stage →"
+          />
+        </Link>
         <StatCard label="Recent Orders" value={workOrders.length} />
       </div>
 

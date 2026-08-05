@@ -78,10 +78,11 @@ export function AppShell({
             <span className="font-bold">ESM</span>
           </div>
           {navItems.map((item) => {
-            const active =
-              item.href === "/customer"
-                ? pathname === "/customer"
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const matches = navItems.filter(
+              (n) => pathname === n.href || pathname.startsWith(`${n.href}/`),
+            );
+            const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
+            const active = best?.href === item.href;
             return (
               <li key={item.href}>
                 <Link
