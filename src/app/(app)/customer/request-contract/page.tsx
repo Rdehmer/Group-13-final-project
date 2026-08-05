@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { ContractRequestForm } from "@/app/(app)/customer/request-contract/ContractRequestForm";
+import { ContractTierCards } from "@/app/(app)/customer/request-contract/ContractTierCards";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/ui";
+import type { ContractTierId } from "@/lib/contracts";
 import type { Equipment, Profile } from "@/lib/types";
 
 export default function RequestContractPage() {
@@ -13,6 +15,7 @@ export default function RequestContractPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [selectedTier, setSelectedTier] = useState<ContractTierId>("silver");
 
   const reloadEquipment = useCallback(async (customerId: string) => {
     const { data: eq } = await supabase
@@ -49,12 +52,15 @@ export default function RequestContractPage() {
         description="Start a maintenance or repair agreement. Ridley will review your request and confirm pricing before activation."
       />
 
+      <ContractTierCards selectedTier={selectedTier} onSelectTier={setSelectedTier} />
+
       <div className="card bg-base-100 shadow">
         <div className="card-body">
           <ContractRequestForm
             supabase={supabase}
             customerId={profile.customer_id}
             equipment={equipment}
+            selectedTier={selectedTier}
             onSuccess={() => router.push("/customer")}
             onEquipmentAdded={(item) => {
               setEquipment((prev) =>
