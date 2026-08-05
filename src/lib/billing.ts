@@ -350,3 +350,31 @@ export function daysPastDue(inv: Invoice, today = new Date()): number {
   const due = new Date(inv.due_date);
   return Math.floor((today.getTime() - due.getTime()) / 86400000);
 }
+
+/** YYYY-MM from an ISO/date string, or empty if invalid. */
+export function monthKeyFromDate(dateStr: string | null | undefined): string {
+  if (!dateStr || dateStr.length < 7) return "";
+  return dateStr.slice(0, 7);
+}
+
+/** Label like "August 2026" for a YYYY-MM key. */
+export function formatMonthLabel(monthKey: string): string {
+  const [y, m] = monthKey.split("-").map(Number);
+  if (!y || !m) return monthKey;
+  return new Date(y, m - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" });
+}
+
+/** Unique YYYY-MM keys from date strings, newest first. */
+export function collectMonthKeys(dates: (string | null | undefined)[]): string[] {
+  const set = new Set<string>();
+  for (const d of dates) {
+    const key = monthKeyFromDate(d);
+    if (key) set.add(key);
+  }
+  return Array.from(set).sort((a, b) => b.localeCompare(a));
+}
+
+/** All 12 calendar months for a year as YYYY-MM (January → December). */
+export function calendarMonthsForYear(year = new Date().getFullYear()): string[] {
+  return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+}

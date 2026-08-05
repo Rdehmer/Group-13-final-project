@@ -13,6 +13,9 @@ import {
   buildWorkOrderPreview,
   daysPastDue,
   invoiceBucket,
+  calendarMonthsForYear,
+  formatMonthLabel,
+  monthKeyFromDate,
   type InvoicePreview,
 } from "@/lib/billing";
 import type { Invoice, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
@@ -35,6 +38,7 @@ export default function BillingPage() {
   const [completedWo, setCompletedWo] = useState<WoRow[]>([]);
   const [taxRate, setTaxRate] = useState(0.0825);
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [invoiceMonth, setInvoiceMonth] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewWoId, setPreviewWoId] = useState<string | null>(null);
@@ -93,6 +97,8 @@ export default function BillingPage() {
 
   const today = useMemo(() => new Date(), []);
 
+  const invoiceMonthOptions = useMemo(() => calendarMonthsForYear(new Date().getFullYear()), []);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return invoices.filter((inv) => {
@@ -103,6 +109,9 @@ export default function BillingPage() {
           if (Number(inv.remaining_balance) <= 0) return false;
         } else if (bucket !== filter) return false;
       }
+      if (invoiceMonth !== "all" && monthKeyFromDate(inv.invoice_date) !== invoiceMonth) {
+        return false;
+      }
       if (!q) return true;
       return (
         inv.invoice_number.toLowerCase().includes(q) ||
@@ -110,7 +119,7 @@ export default function BillingPage() {
         inv.status.toLowerCase().includes(q)
       );
     });
-  }, [invoices, filter, query, today]);
+  }, [invoices, filter, invoiceMonth, query, today]);
 
   const selected = invoices.find((i) => i.id === selectedId) ?? null;
 
@@ -256,16 +265,33 @@ export default function BillingPage() {
             </button>
           ))}
         </div>
-        <label className="input input-bordered flex w-full items-center gap-2 lg:max-w-xs">
-          <Search className="h-4 w-4 opacity-50" />
-          <input
-            type="search"
-            className="grow"
-            placeholder="Search invoice or customer…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto lg:max-w-xl">
+          <label className="form-control w-full sm:max-w-[14rem]">
+            <select
+              className="select select-bordered select-sm w-full"
+              value={invoiceMonth}
+              onChange={(e) => setInvoiceMonth(e.target.value)}
+              aria-label="Invoice month"
+            >
+              <option value="all">All months</option>
+              {invoiceMonthOptions.map((key) => (
+                <option key={key} value={key}>
+                  {formatMonthLabel(key)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="input input-bordered input-sm flex w-full items-center gap-2 lg:max-w-xs">
+            <Search className="h-4 w-4 opacity-50" />
+            <input
+              type="search"
+              className="grow"
+              placeholder="Search invoice or customer…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">

@@ -8,7 +8,7 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, remainingBalance } from "@/lib/calculations";
-import { daysPastDue } from "@/lib/billing";
+import { daysPastDue, calendarMonthsForYear, formatMonthLabel, monthKeyFromDate } from "@/lib/billing";
 import type { Invoice, Payment } from "@/lib/types";
 
 type AgingBucket = "current" | "d30" | "d60" | "d90";
@@ -17,6 +17,8 @@ type OpenInvoice = Invoice & {
   customers?: { name: string };
   work_orders?: { work_order_number: string } | null;
 };
+
+type PaymentRow = Payment & { customers?: { name: string } };
 
 const BUCKET_LABELS: Record<AgingBucket, string> = {
   current: "Current",
@@ -42,12 +44,13 @@ export default function PaymentsPage() {
   const searchParams = useSearchParams();
   const preselectedInvoice = searchParams.get("invoice");
   const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
-  const [payments, setPayments] = useState<(Payment & { customers?: { name: string } })[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ invoice_id: "", payment_method: "Check", payment_amount: "", reference_number: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedBucket, setSelectedBucket] = useState<AgingBucket | null>(null);
+  const [paymentMonth, setPaymentMonth] = useState<string>("all");
 
   async function load() {
     const [{ data: inv }, { data: pay }] = await Promise.all([
@@ -56,11 +59,15 @@ export default function PaymentsPage() {
         .select("*, customers(name), work_orders(work_order_number)")
         .gt("remaining_balance", 0)
         .not("status", "eq", "Canceled"),
-      supabase.from("payments").select("*, customers(name)").order("created_at", { ascending: false }).limit(20),
+      supabase
+        .from("payments")
+        .select("*, customers(name)")
+        .order("payment_date", { ascending: false })
+        .limit(200),
     ]);
     const openInvoices = (inv as OpenInvoice[]) ?? [];
     setInvoices(openInvoices);
-    setPayments((pay as typeof payments) ?? []);
+    setPayments((pay as PaymentRow[]) ?? []);
     if (preselectedInvoice) {
       const match = openInvoices.find((i) => i.id === preselectedInvoice);
       if (match) {
@@ -98,6 +105,18 @@ export default function PaymentsPage() {
   }, [invoices]);
 
   const drillInvoices = selectedBucket ? byBucket[selectedBucket] : [];
+
+  const paymentMonthOptions = useMemo(() => calendarMonthsForYear(new Date().getFullYear()), []);
+
+  const filteredPayments = useMemo(() => {
+    if (paymentMonth === "all") return payments;
+    return payments.filter((p) => monthKeyFromDate(p.payment_date) === paymentMonth);
+  }, [payments, paymentMonth]);
+
+  const paymentMonthTotal = useMemo(
+    () => filteredPayments.reduce((sum, p) => sum + Number(p.payment_amount), 0),
+    [filteredPayments],
+  );
 
   function toggleBucket(bucket: AgingBucket) {
     setSelectedBucket((prev) => (prev === bucket ? null : bucket));
@@ -292,15 +311,42 @@ export default function PaymentsPage() {
 
       <div className="card bg-base-100 shadow">
         <div className="card-body">
-          <h2 className="card-title text-base">Recent Payments</h2>
-          {payments.length === 0 ? (
-            <EmptyState title="No payments recorded" description="Record a simulated payment against an open invoice." />
+          <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="card-title text-base">Payments received</h2>
+              <p className="text-sm opacity-60">
+                {paymentMonth === "all"
+                  ? `All loaded payments · ${formatMoney(paymentMonthTotal)}`
+                  : `${formatMonthLabel(paymentMonth)} · ${formatMoney(paymentMonthTotal)} received`}
+              </p>
+            </div>
+            <label className="form-control w-full sm:max-w-[14rem]">
+              <select
+                className="select select-bordered select-sm w-full"
+                value={paymentMonth}
+                onChange={(e) => setPaymentMonth(e.target.value)}
+                aria-label="Payment month"
+              >
+                <option value="all">All months</option>
+                {paymentMonthOptions.map((key) => (
+                  <option key={key} value={key}>
+                    {formatMonthLabel(key)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {filteredPayments.length === 0 ? (
+            <EmptyState
+              title="No payments in this month"
+              description="Choose another payment month or record a simulated payment against an open invoice."
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
                 <thead><tr><th>Payment #</th><th>Invoice</th><th>Customer</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead>
                 <tbody>
-                  {payments.map((p) => (
+                  {filteredPayments.map((p) => (
                     <tr key={p.id}>
                       <td className="font-medium">{p.payment_number}</td>
                       <td>
