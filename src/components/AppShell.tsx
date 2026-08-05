@@ -4,9 +4,33 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
 import { ThemeSelector } from "@/components/ThemeSelector";
-import { NAV_ITEMS } from "@/lib/roles";
+import { NAV_ITEMS, type NavItem } from "@/lib/roles";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
+
+function isPathActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function NavLink({
+  item,
+  pathname,
+  className,
+}: {
+  item: NavItem;
+  pathname: string;
+  className?: string;
+}) {
+  const active = item.href === "/customer"
+    ? pathname === "/customer"
+    : isPathActive(pathname, item.href);
+
+  return (
+    <Link href={item.href} className={`${active ? "active font-medium" : ""} ${className ?? ""}`.trim()}>
+      {item.label}
+    </Link>
+  );
+}
 
 export function AppShell({
   profile,
@@ -78,17 +102,50 @@ export function AppShell({
             <span className="font-bold">ESM</span>
           </div>
           {navItems.map((item) => {
+            if (item.children?.length) {
+              const childActive = item.children.some((child) =>
+                child.href === "/customer"
+                  ? pathname === "/customer"
+                  : isPathActive(pathname, child.href),
+              );
+              const sectionOpen = childActive || isPathActive(pathname, item.href);
+              return (
+                <li key={item.href}>
+                  <details key={pathname} defaultOpen={sectionOpen}>
+                    <summary className={sectionOpen ? "font-medium" : ""}>
+                      <Link
+                        href={item.href}
+                        className={pathname === item.href ? "active font-medium" : ""}
+                        onClick={(e) => {
+                          // Navigate home without only toggling the dropdown.
+                          e.stopPropagation();
+                        }}
+                      >
+                        {item.label}
+                      </Link>
+                    </summary>
+                    <ul>
+                      {item.children
+                        .filter((child) => child.roles.includes(profile.role))
+                        .map((child) => (
+                          <li key={`${child.href}-${child.label}`}>
+                            <NavLink item={child} pathname={pathname} />
+                          </li>
+                        ))}
+                    </ul>
+                  </details>
+                </li>
+              );
+            }
+
             const matches = navItems.filter(
-              (n) => pathname === n.href || pathname.startsWith(`${n.href}/`),
+              (n) => !n.children && (pathname === n.href || pathname.startsWith(`${n.href}/`)),
             );
             const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
             const active = best?.href === item.href;
             return (
               <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={active ? "active font-medium" : ""}
-                >
+                <Link href={item.href} className={active ? "active font-medium" : ""}>
                   {item.label}
                 </Link>
               </li>

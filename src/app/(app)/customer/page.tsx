@@ -4,48 +4,37 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
-import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { PageHeader, FormRow } from "@/components/PageHeader";
-import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
-import type { Equipment, Profile, ServiceContract, WorkOrder } from "@/lib/types";
-
-type ContractRow = ServiceContract & { equipment_count?: number };
+import { EmptyState, StatCard } from "@/components/ui";
+import type { Equipment, Profile, WorkOrder } from "@/lib/types";
 
 /**
  * This business faces customer communication gap risk when service status is opaque.
- * Our app reduces the risk by giving customers a portal to request contracts, view equipment, and request service.
+ * Our app reduces the risk by giving customers a focused place to request service,
+ * with other portal details one click away.
  */
 export default function CustomerPortalPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
-  const [contracts, setContracts] = useState<ContractRow[]>([]);
+  const [contractCount, setContractCount] = useState(0);
+  const [activeContractCount, setActiveContractCount] = useState(0);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [form, setForm] = useState({ equipment_id: "", problem_description: "", priority: "Normal" });
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showAddEquipment, setShowAddEquipment] = useState(false);
 
   const loadData = useCallback(async (customerId: string) => {
-    const [{ data: eq }, { data: wo }, { data: sc }, { data: ce }] = await Promise.all([
+    const [{ data: eq }, { data: wo }, { data: sc }] = await Promise.all([
       supabase.from("equipment").select("*").eq("customer_id", customerId).order("name"),
-      supabase.from("work_orders").select("*").eq("customer_id", customerId).order("created_at", { ascending: false }).limit(10),
-      supabase.from("service_contracts").select("*").eq("customer_id", customerId).order("created_at", { ascending: false }),
-      supabase.from("contract_equipment").select("contract_id"),
+      supabase.from("work_orders").select("*").eq("customer_id", customerId).order("created_at", { ascending: false }),
+      supabase.from("service_contracts").select("id, status").eq("customer_id", customerId),
     ]);
     setEquipment((eq as Equipment[]) ?? []);
     setWorkOrders((wo as WorkOrder[]) ?? []);
-
-    const countByContract = new Map<string, number>();
-    for (const row of ce ?? []) {
-      const id = row.contract_id as string;
-      countByContract.set(id, (countByContract.get(id) ?? 0) + 1);
-    }
-    const withCounts = ((sc as ServiceContract[]) ?? []).map((c) => ({
-      ...c,
-      equipment_count: countByContract.get(c.id) ?? 0,
-    }));
-    setContracts(withCounts);
+    const contracts = sc ?? [];
+    setContractCount(contracts.length);
+    setActiveContractCount(contracts.filter((c) => c.status === "Active").length);
   }, [supabase]);
 
   useEffect(() => {
@@ -94,60 +83,30 @@ export default function CustomerPortalPage() {
   }
 
   const openRequests = workOrders.filter((w) => !["Completed", "Closed", "Canceled"].includes(w.status)).length;
-  const activeContracts = contracts.filter((c) => c.status === "Active").length;
 
   return (
     <div>
-      <PageHeader title="My Portal" description={`Welcome, ${profile.full_name ?? profile.email}`} />
+      <PageHeader
+        title="My Portal"
+        description={`Welcome, ${profile.full_name ?? profile.email}. Submit a service request below, or open a section for more detail.`}
+      />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="My Contracts" value={contracts.length} hint={`${activeContracts} active`} />
-        <StatCard label="Equipment" value={equipment.length} />
-        <Link href="/customer/open-request" className="block transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          <StatCard
-            label="Open Request"
-            value={openRequests}
-            hint="View status & stage →"
-          />
+        <Link href="/customer/contracts" className="block transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-box">
+          <StatCard label="My Contracts" value={contractCount} hint={`${activeContractCount} active · View →`} />
         </Link>
-        <StatCard label="Recent Orders" value={workOrders.length} />
+        <Link href="/customer/equipment" className="block transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-box">
+          <StatCard label="Equipment" value={equipment.length} hint="View & register →" />
+        </Link>
+        <Link href="/customer/open-request" className="block transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-box">
+          <StatCard label="Open Request" value={openRequests} hint="View status & stage →" />
+        </Link>
+        <Link href="/customer/order-history" className="block transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-box">
+          <StatCard label="Order History" value={workOrders.length} hint="View history →" />
+        </Link>
       </div>
 
-      <div className="mb-6 card bg-base-100 shadow">
-        <div className="card-body">
-          <h2 className="card-title text-base">My Contracts</h2>
-          {contracts.length === 0 ? (
-            <EmptyState title="No contracts yet" description="Use Request Contract in the sidebar to submit a new agreement." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="table table-sm">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Term</th>
-                    <th>Equipment</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {contracts.map((c) => (
-                    <tr key={c.id}>
-                      <td>{c.name}</td>
-                      <td>{c.contract_type}</td>
-                      <td><StatusBadge label={c.status} tone={statusTone(c.status)} /></td>
-                      <td>{c.start_date} — {c.end_date}</td>
-                      <td>{c.equipment_count ?? 0}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="mx-auto max-w-2xl">
         <div className="card bg-base-100 shadow">
           <div className="card-body">
             <h2 className="card-title text-base">Request Service</h2>
@@ -168,67 +127,11 @@ export default function CustomerPortalPage() {
               <FormRow label="Description" required>
                 <textarea className="textarea textarea-bordered w-full" rows={4} value={form.problem_description} onChange={(e) => setForm({ ...form, problem_description: e.target.value })} required />
               </FormRow>
-              <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>Submit Request</button>
+              <button type="submit" className="btn btn-primary" disabled={busy}>Submit Request</button>
             </form>
           </div>
         </div>
-
-        <div className="card bg-base-100 shadow">
-          <div className="card-body flex min-h-[220px] flex-col">
-            <h2 className="card-title text-base">Your Equipment</h2>
-            {equipment.length === 0 ? (
-              <EmptyState title="No equipment on file" description="Register equipment to request service or include it in a contract." />
-            ) : (
-              <ul className="flex-1 space-y-2">
-                {equipment.map((eq) => (
-                  <li key={eq.id} className="flex items-center justify-between rounded-box bg-base-200 p-3 text-sm">
-                    <span>{eq.name}</span>
-                    <StatusBadge label={eq.operating_status} tone={statusTone(eq.operating_status)} />
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="mt-4 flex justify-end">
-              <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowAddEquipment(true)}>
-                Add Equipment
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
-
-      <div className="mt-6 card bg-base-100 shadow">
-        <div className="card-body">
-          <h2 className="card-title text-base">Service History</h2>
-          {workOrders.length === 0 ? (
-            <EmptyState title="No service history" description="Your work orders will appear here." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="table table-sm">
-                <thead><tr><th>WO #</th><th>Type</th><th>Status</th><th>Scheduled</th></tr></thead>
-                <tbody>
-                  {workOrders.map((wo) => (
-                    <tr key={wo.id}>
-                      <td>{wo.work_order_number}</td>
-                      <td>{wo.work_order_type}</td>
-                      <td><StatusBadge label={wo.status} tone={statusTone(wo.status)} /></td>
-                      <td>{wo.scheduled_date ?? "Pending"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <AddEquipmentModal
-        supabase={supabase}
-        customerId={profile.customer_id}
-        open={showAddEquipment}
-        onClose={() => setShowAddEquipment(false)}
-        onAdded={(item) => setEquipment((prev) => [...prev, item].sort((a, b) => a.name.localeCompare(b.name)))}
-      />
     </div>
   );
 }
