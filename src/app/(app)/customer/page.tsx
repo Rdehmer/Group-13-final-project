@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
@@ -148,7 +149,17 @@ function buildRequestedService(
  * Our app reduces the risk with a guided request wizard, clear visit types, and a confirm-before-submit step.
  */
 export default function CustomerPortalPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center opacity-60">Loading…</div>}>
+      <CustomerPortalPageInner />
+    </Suspense>
+  );
+}
+
+function CustomerPortalPageInner() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const preselectEquipmentId = searchParams.get("equipment_id");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
@@ -164,6 +175,7 @@ export default function CustomerPortalPage() {
   const [busy, setBusy] = useState(false);
   const [showAddEquipment, setShowAddEquipment] = useState(false);
   const [customerPhone, setCustomerPhone] = useState("");
+  const [appliedPreselect, setAppliedPreselect] = useState(false);
 
   const loadData = useCallback(async (customerId: string) => {
     const [{ data: eq }, { data: wo }, { data: sc }, { data: customer }] = await Promise.all([
@@ -188,6 +200,7 @@ export default function CustomerPortalPage() {
     if (phone) {
       setForm((prev) => (prev.contact_phone ? prev : { ...prev, contact_phone: phone }));
     }
+    return (eq as Equipment[]) ?? [];
   }, [supabase]);
 
   useEffect(() => {
@@ -197,9 +210,17 @@ export default function CustomerPortalPage() {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
       if (!p?.customer_id) return;
-      await loadData(p.customer_id);
+      const loadedEquipment = await loadData(p.customer_id);
+      if (!appliedPreselect && preselectEquipmentId) {
+        const match = loadedEquipment.find((eq) => eq.id === preselectEquipmentId);
+        if (match) {
+          setForm((prev) => ({ ...prev, equipment_id: match.id }));
+          setStep("equipment");
+          setAppliedPreselect(true);
+        }
+      }
     })();
-  }, [loadData, supabase]);
+  }, [appliedPreselect, loadData, preselectEquipmentId, supabase]);
 
   const selectedOption = SERVICE_OPTIONS.find((o) => o.kind === form.service_kind) ?? null;
   const selectedEquipment = useMemo(

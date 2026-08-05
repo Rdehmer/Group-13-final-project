@@ -5,9 +5,23 @@ import Link from "next/link";
 import { format, isBefore, isToday, parseISO } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
+import { EquipmentContextPanel } from "@/components/EquipmentContextPanel";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { EQUIPMENT_CONTEXT_SELECT, type EquipmentContextFields } from "@/lib/equipmentCoverage";
 import type { Part, Profile, TechnicianLabor, WorkOrder, WorkOrderPart, AdditionalWorkRequest } from "@/lib/types";
+
+type TechWorkOrder = WorkOrder & {
+  customers?: {
+    name: string;
+    service_address?: string | null;
+    city?: string | null;
+    state?: string | null;
+    zip_code?: string | null;
+    phone?: string | null;
+  };
+  equipment?: EquipmentContextFields | null;
+};
 
 /**
  * This business faces field execution gap risk when technicians lack a single workspace.
@@ -16,7 +30,7 @@ import type { Part, Profile, TechnicianLabor, WorkOrder, WorkOrderPart, Addition
 export default function TechnicianPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [workOrders, setWorkOrders] = useState<(WorkOrder & { customers?: { name: string } })[]>([]);
+  const [workOrders, setWorkOrders] = useState<TechWorkOrder[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [labor, setLabor] = useState<TechnicianLabor[]>([]);
   const [parts, setParts] = useState<(WorkOrderPart & { parts?: Part })[]>([]);
@@ -36,12 +50,16 @@ export default function TechnicianPage() {
   }
 
   async function loadWorkOrders(techId?: string, role?: Profile["role"]) {
-    let query = supabase.from("work_orders").select("*, customers(name)").not("status", "in", '("Completed","Closed","Canceled")').order("scheduled_date");
+    let query = supabase
+      .from("work_orders")
+      .select(`*, customers(name, service_address, city, state, zip_code, phone), equipment(${EQUIPMENT_CONTEXT_SELECT})`)
+      .not("status", "in", '("Completed","Closed","Canceled")')
+      .order("scheduled_date");
     if (techId && role === "technician") {
       query = query.eq("assigned_technician_id", techId);
     }
     const { data } = await query;
-    setWorkOrders((data as typeof workOrders) ?? []);
+    setWorkOrders((data as TechWorkOrder[]) ?? []);
   }
 
   async function loadDetail(woId: string) {
@@ -197,6 +215,23 @@ export default function TechnicianPage() {
                     <div>
                       <h2 className="text-lg font-bold">{selected.work_order_number}</h2>
                       <p className="text-sm opacity-70">{selected.customers?.name} · {selected.scheduled_date}</p>
+                      {(() => {
+                        const c = selected.customers;
+                        const address = [
+                          c?.service_address,
+                          [c?.city, c?.state].filter(Boolean).join(", "),
+                          c?.zip_code,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ");
+                        if (!address && !c?.phone) return null;
+                        return (
+                          <p className="mt-1 text-sm opacity-70">
+                            {address || "No service address on file"}
+                            {c?.phone ? ` · ${c.phone}` : ""}
+                          </p>
+                        );
+                      })()}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <StatusBadge label={selected.status} tone={statusTone(selected.status)} />
@@ -206,6 +241,9 @@ export default function TechnicianPage() {
                     </div>
                   </div>
                   <p className="mt-2 text-sm">{selected.problem_description ?? "No description"}</p>
+                  <div className="mt-3">
+                    <EquipmentContextPanel equipment={selected.equipment} />
+                  </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => woAction("arrival")} disabled={busy}>Record Arrival</button>
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => woAction("start")} disabled={busy}>Start Work</button>

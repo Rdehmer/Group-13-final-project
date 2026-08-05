@@ -21,6 +21,7 @@ const EMPTY_FORM = {
   model: "",
   serial_number: "",
   location: "",
+  installation_date: "",
 };
 
 export function AddEquipmentModal({ supabase, customerId, open, onClose, onAdded }: Props) {
@@ -50,6 +51,7 @@ export function AddEquipmentModal({ supabase, customerId, open, onClose, onAdded
       model: form.model.trim() || null,
       serial_number: form.serial_number.trim() || null,
       location: form.location.trim() || null,
+      installation_date: form.installation_date,
       operating_status: "Operational" as const,
       warranty_status: "Unknown" as const,
     };
@@ -108,6 +110,15 @@ export function AddEquipmentModal({ supabase, customerId, open, onClose, onAdded
           </FormRow>
           <FormRow label="Location">
             <input className="input input-bordered w-full" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Warehouse A" />
+          </FormRow>
+          <FormRow label="Install date" required>
+            <input
+              type="date"
+              className="input input-bordered w-full"
+              value={form.installation_date}
+              onChange={(e) => setForm({ ...form, installation_date: e.target.value })}
+              required
+            />
           </FormRow>
           <div className="modal-action">
             <button type="button" className="btn" onClick={handleClose} disabled={busy}>Cancel</button>

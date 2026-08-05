@@ -1,15 +1,39 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import {
+  buildCoverageMap,
+  coverageFor,
+  EQUIPMENT_COVERAGE_SELECT,
+  type ContractEquipmentLink,
+  type EquipmentCoverage,
+} from "@/lib/equipmentCoverage";
 import type { Customer, Equipment } from "@/lib/types";
 
+type ManagerEquipmentRow = Equipment & {
+  customers?: { name: string };
+  coverage: EquipmentCoverage;
+};
+
 export default function EquipmentPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center opacity-60">Loading…</div>}>
+      <EquipmentPageInner />
+    </Suspense>
+  );
+}
+
+function EquipmentPageInner() {
   const supabase = createClient();
-  const [equipment, setEquipment] = useState<(Equipment & { customers?: { name: string } })[]>([]);
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
+  const highlightRef = useRef<HTMLTableRowElement | null>(null);
+  const [equipment, setEquipment] = useState<ManagerEquipmentRow[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,17 +49,28 @@ export default function EquipmentPage() {
   });
 
   async function load() {
-    const [{ data: eq }, { data: cust }] = await Promise.all([
+    const [{ data: eq }, { data: cust }, { data: links }] = await Promise.all([
       supabase.from("equipment").select("*, customers(name)").order("name"),
       supabase.from("customers").select("*").eq("status", "Active").order("name"),
+      supabase.from("contract_equipment").select(EQUIPMENT_COVERAGE_SELECT),
     ]);
-    setEquipment((eq as typeof equipment) ?? []);
+    const coverageMap = buildCoverageMap(links as ContractEquipmentLink[] | null);
+    const rows = ((eq as (Equipment & { customers?: { name: string } })[]) ?? []).map((item) => ({
+      ...item,
+      coverage: coverageFor(coverageMap, item.id),
+    }));
+    setEquipment(rows);
     setCustomers((cust as Customer[]) ?? []);
   }
 
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (!highlightId || equipment.length === 0) return;
+    highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightId, equipment]);
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -109,17 +144,47 @@ export default function EquipmentPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Name</th><th>Customer</th><th>Category</th><th>Status</th><th>Location</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Customer</th>
+                    <th>Serial #</th>
+                    <th>Category</th>
+                    <th>Status</th>
+                    <th>Location</th>
+                    <th>Contract</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {equipment.map((eq) => (
-                    <tr key={eq.id}>
-                      <td className="font-medium">{eq.name}</td>
-                      <td>{eq.customers?.name ?? "—"}</td>
-                      <td>{eq.category ?? "—"}</td>
-                      <td><StatusBadge label={eq.operating_status} tone={statusTone(eq.operating_status)} /></td>
-                      <td>{eq.location ?? "—"}</td>
-                    </tr>
-                  ))}
+                  {equipment.map((eq) => {
+                    const highlighted = highlightId === eq.id;
+                    return (
+                      <tr
+                        key={eq.id}
+                        ref={highlighted ? highlightRef : undefined}
+                        className={highlighted ? "bg-primary/10" : undefined}
+                      >
+                        <td className="font-medium">{eq.name}</td>
+                        <td>{eq.customers?.name ?? "—"}</td>
+                        <td className="font-mono text-xs">{eq.serial_number ?? "—"}</td>
+                        <td>{eq.category ?? "—"}</td>
+                        <td><StatusBadge label={eq.operating_status} tone={statusTone(eq.operating_status)} /></td>
+                        <td>{eq.location ?? "—"}</td>
+                        <td>
+                          {eq.coverage.covered ? (
+                            <div>
+                              <StatusBadge label="Covered" tone="success" />
+                              {eq.coverage.contractName ? (
+                                <p className="mt-1 text-xs opacity-60">{eq.coverage.contractName}</p>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <StatusBadge label="Not covered" tone="neutral" />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

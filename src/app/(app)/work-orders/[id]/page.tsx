@@ -5,15 +5,22 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
+import { EquipmentContextPanel } from "@/components/EquipmentContextPanel";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
+import { EQUIPMENT_CONTEXT_SELECT, type EquipmentContextFields } from "@/lib/equipmentCoverage";
 import type { Profile, WorkOrder } from "@/lib/types";
+
+type WoDetail = WorkOrder & {
+  customers?: { name: string };
+  equipment?: EquipmentContextFields | null;
+};
 
 export default function WorkOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const supabase = createClient();
-  const [wo, setWo] = useState<(WorkOrder & { customers?: { name: string }; equipment?: { name: string } }) | null>(null);
+  const [wo, setWo] = useState<WoDetail | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [managerNotes, setManagerNotes] = useState("");
   const [workPerformed, setWorkPerformed] = useState("");
@@ -21,10 +28,14 @@ export default function WorkOrderDetailPage() {
 
   async function load() {
     const [{ data }, { data: { user } }] = await Promise.all([
-      supabase.from("work_orders").select("*, customers(name), equipment(name)").eq("id", id).single(),
+      supabase
+        .from("work_orders")
+        .select(`*, customers(name), equipment(${EQUIPMENT_CONTEXT_SELECT})`)
+        .eq("id", id)
+        .single(),
       supabase.auth.getUser(),
     ]);
-    const w = data as typeof wo;
+    const w = data as WoDetail | null;
     setWo(w);
     setManagerNotes(w?.manager_notes ?? "");
     setWorkPerformed(w?.work_performed ?? "");
@@ -78,6 +89,9 @@ export default function WorkOrderDetailPage() {
 
   if (!wo) return <div className="p-8 text-center opacity-60">Loading…</div>;
 
+  const equipmentCatalogHref =
+    isManager && wo.equipment?.id ? `/equipment?highlight=${wo.equipment.id}` : null;
+
   return (
     <div>
       <PageHeader
@@ -101,11 +115,11 @@ export default function WorkOrderDetailPage() {
               <StatusBadge label={wo.billing_status} tone={statusTone(wo.billing_status)} />
             </div>
             <div className="grid gap-2 sm:grid-cols-2 text-sm">
-              <p><span className="opacity-60">Equipment:</span> {wo.equipment?.name ?? "—"}</p>
               <p><span className="opacity-60">Scheduled:</span> {wo.scheduled_date ?? "—"}</p>
               <p><span className="opacity-60">Warranty:</span> {wo.warranty_coverage}</p>
               <p><span className="opacity-60">Arrival:</span> {wo.arrival_at ? new Date(wo.arrival_at).toLocaleString() : "—"}</p>
             </div>
+            <EquipmentContextPanel equipment={wo.equipment} catalogHref={equipmentCatalogHref} />
             <div>
               <p className="text-sm font-medium opacity-60">Problem</p>
               <p>{wo.problem_description ?? "—"}</p>
