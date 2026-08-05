@@ -121,8 +121,20 @@ export type WorkOrder = {
   performed_before_approval: boolean;
   under_expired_contract: boolean;
   costs_after_billing: boolean;
+  completion_proof_requirement: "photo_or_signature" | "photo" | "signature" | "both";
   created_at: string;
   updated_at: string;
+};
+
+export type WorkOrderCompletionProof = {
+  id: string;
+  job_id: string;
+  type: "photo" | "signature";
+  file_url: string | null;
+  base64_data: string | null;
+  captured_at: string;
+  technician_id: string;
+  created_at: string;
 };
 
 export type Part = {
