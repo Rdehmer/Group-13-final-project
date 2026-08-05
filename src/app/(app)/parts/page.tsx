@@ -105,6 +105,9 @@ export default function PartsPage() {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<PartForm>(EMPTY_FORM);
+  const [partActivity, setPartActivity] = useState<
+    { id: string; action: string; new_value: string | null; created_at: string }[]
+  >([]);
 
   async function load() {
     const [{ data: partRows }, { data: useRows }] = await Promise.all([
@@ -158,6 +161,25 @@ export default function PartsPage() {
       setEditForm(partToForm(selected));
       setAdjustQty(String(selected.quantity_on_hand));
     }
+  }, [selectedId, selected?.updated_at]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setPartActivity([]);
+      return;
+    }
+    supabase
+      .from("activity_logs")
+      .select("id, action, new_value, created_at")
+      .eq("record_type", "part")
+      .eq("record_id", selectedId)
+      .order("created_at", { ascending: false })
+      .limit(8)
+      .then(({ data }) => {
+        setPartActivity(
+          (data as { id: string; action: string; new_value: string | null; created_at: string }[]) ?? [],
+        );
+      });
   }, [selectedId, selected?.updated_at]);
 
   const filtered = useMemo(() => {
@@ -650,6 +672,17 @@ export default function PartsPage() {
                       <p className="text-xs uppercase tracking-wide opacity-60">Part detail</p>
                       <h3 className="text-xl font-bold">{selected.name}</h3>
                       <p className="font-mono text-sm opacity-70">{selected.part_number}</p>
+                      <p className="mt-1 text-xs opacity-50">
+                        Last updated{" "}
+                        {selected.updated_at
+                          ? new Date(selected.updated_at).toLocaleString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })
+                          : "—"}
+                      </p>
                     </div>
                     <div className="flex flex-col items-end gap-2">
                       <StatusBadge label={stockLabel(selected)} tone={stockTone(selected)} />
@@ -875,6 +908,34 @@ export default function PartsPage() {
                         >
                           {selected.is_active ? "Mark inactive" : "Reactivate part"}
                         </button>
+                      </div>
+
+                      <div>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">
+                          Recent adjustments
+                        </p>
+                        {partActivity.length === 0 ? (
+                          <p className="text-sm opacity-60">No edit / stock activity logged yet for this part.</p>
+                        ) : (
+                          <ul className="max-h-40 space-y-1.5 overflow-y-auto text-xs">
+                            {partActivity.map((a) => (
+                              <li key={a.id} className="rounded-box bg-base-200/60 px-2 py-1.5">
+                                <span className="font-medium capitalize">{a.action.replace(/_/g, " ")}</span>
+                                {a.new_value ? (
+                                  <span className="opacity-70"> · {a.new_value}</span>
+                                ) : null}
+                                <span className="mt-0.5 block text-[10px] opacity-50">
+                                  {new Date(a.created_at).toLocaleString(undefined, {
+                                    month: "short",
+                                    day: "numeric",
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
 
                       <div>

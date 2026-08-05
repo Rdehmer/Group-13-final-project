@@ -17,6 +17,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { DashboardCharts } from "@/components/DashboardCharts";
+import { DemoWalkthrough } from "@/components/DemoWalkthrough";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import { relatedName } from "@/lib/relations";
@@ -296,12 +297,24 @@ export default async function DashboardPage() {
 
       <DashboardCharts workOrderTrend={workOrderTrend} revenueByMonth={revenueByMonth} />
 
+      {(profile?.role === "administrator" || profile?.role === "service_manager") ? (
+        <DemoWalkthrough />
+      ) : null}
+
       <div className="grid gap-4 xl:grid-cols-5">
         <div className="xl:col-span-3">
           <Panel title="Action required" eyebrow="Jobs" href="/work-orders" linkLabel="All jobs">
             {(openWorkOrders ?? []).length === 0 ? (
               <div className="p-4">
-                <EmptyState title="No open jobs" description="Book a job to get started." />
+                <EmptyState
+                  title="No open jobs"
+                  description="Book a sample job so the demo board and charts have work to show."
+                  action={
+                    <Link href="/work-orders" className="btn btn-primary btn-sm">
+                      Book job
+                    </Link>
+                  }
+                />
               </div>
             ) : (
               <ul className="divide-y divide-base-200">
@@ -355,7 +368,15 @@ export default async function DashboardPage() {
           <Panel title="Low stock" eyebrow="Parts" href="/parts?filter=low" linkLabel="Inventory">
             {lowStockParts.length === 0 ? (
               <div className="p-4">
-                <EmptyState title="Inventory looks good" description="No parts at or below reorder level." />
+                <EmptyState
+                  title="Inventory looks healthy"
+                  description="No parts at or below reorder. Lower a reorder level or use stock on a job for a demo low-stock signal."
+                  action={
+                    <Link href="/parts" className="btn btn-outline btn-sm">
+                      Open parts
+                    </Link>
+                  }
+                />
               </div>
             ) : (
               <>
