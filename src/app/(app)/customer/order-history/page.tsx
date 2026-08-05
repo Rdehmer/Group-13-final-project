@@ -106,12 +106,20 @@ export default function CustomerOrderHistoryPage() {
       <PageHeader
         title="Service History"
         description="Review past visits and download invoices when available."
+        actions={
+          <Link href="/customer/pay" className="btn btn-success btn-sm">
+            Pay bills
+          </Link>
+        }
       />
 
       {workOrders.length > 0 ? (
-        <div className="mb-6 grid gap-4 sm:grid-cols-2">
+        <div className="mb-6 grid gap-4 sm:grid-cols-3">
           <StatCard label="Total visits" value={stats.totalVisits} hint="All service records" />
           <StatCard label="Completed" value={stats.completed} hint="Finished visits" />
+          <Link href="/customer/pay" className="block rounded-box transition hover:opacity-90">
+            <StatCard label="Pay online" value="Portal" hint="QBO-style checkout →" />
+          </Link>
         </div>
       ) : null}
 

@@ -404,7 +404,7 @@ function CustomerPortalPageInner() {
         description={`Welcome, ${profile.full_name ?? profile.email}. Submit a service request below, or open a section for more detail.`}
       />
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Link href="/customer/contracts" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           <StatCard label="My Contracts" value={contractCount} hint={`${activeContractCount} active · View →`} />
         </Link>
@@ -413,6 +413,9 @@ function CustomerPortalPageInner() {
         </Link>
         <Link href="/customer/open-request" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           <StatCard label="Active Service" value={openRequests} hint="View status & stage →" />
+        </Link>
+        <Link href="/customer/pay" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+          <StatCard label="Pay bills" value="Portal" hint="Invoices & checkout →" />
         </Link>
         <Link href="/customer/order-history" className="block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           <StatCard label="Service History" value={workOrders.length} hint="View history →" />

@@ -92,6 +92,11 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["customer"],
       },
       {
+        href: "/customer/pay",
+        label: "Pay bills",
+        roles: ["customer"],
+      },
+      {
         href: "/customer/order-history",
         label: "Service History",
         roles: ["customer"],
