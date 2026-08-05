@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -10,6 +11,9 @@ import type { Part } from "@/lib/types";
 
 export default function PartsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [parts, setParts] = useState<Part[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,6 +27,9 @@ export default function PartsPage() {
     standard_customer_price: "0",
   });
 
+  const filter = searchParams.get("filter");
+  const focusPartId = searchParams.get("part");
+
   async function load() {
     const { data } = await supabase.from("parts").select("*").order("name");
     setParts((data as Part[]) ?? []);
@@ -31,6 +38,23 @@ export default function PartsPage() {
   useEffect(() => { load(); }, []);
 
   const lowStock = parts.filter((p) => p.is_active && p.quantity_on_hand <= p.reorder_level);
+
+  const displayedParts = useMemo(() => {
+    if (filter === "low-stock") {
+      return parts.filter((p) => p.is_active && p.quantity_on_hand <= p.reorder_level);
+    }
+    return parts;
+  }, [parts, filter]);
+
+  useEffect(() => {
+    if (!focusPartId) return;
+    const el = document.getElementById(`part-${focusPartId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusPartId, displayedParts]);
+
+  function clearFilters() {
+    router.push(pathname);
+  }
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -56,9 +80,19 @@ export default function PartsPage() {
         <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>Add Part</button>
       } />
 
-      {lowStock.length > 0 ? (
+      {lowStock.length > 0 && filter !== "low-stock" ? (
         <div role="alert" className="alert alert-warning mb-4">
           <span>{lowStock.length} part(s) at or below reorder level</span>
+        </div>
+      ) : null}
+
+      {filter === "low-stock" ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-box bg-base-200/60 px-3 py-2 text-sm">
+          <span className="opacity-70">Showing:</span>
+          <span className="badge badge-warning badge-outline">Low stock</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={clearFilters}>
+            Clear filter
+          </button>
         </div>
       ) : null}
 
@@ -87,17 +121,38 @@ export default function PartsPage() {
 
       <div className="card bg-base-100 shadow">
         <div className="card-body p-0">
-          {parts.length === 0 ? (
-            <div className="p-6"><EmptyState title="No parts in inventory" description="Add parts to track usage on work orders." /></div>
+          {displayedParts.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                title={parts.length === 0 ? "No parts in inventory" : "No low-stock parts"}
+                description={
+                  parts.length === 0
+                    ? "Add parts to track usage on work orders."
+                    : "Try clearing the filter to see all parts."
+                }
+                action={
+                  filter === "low-stock" ? (
+                    <button type="button" className="btn btn-sm" onClick={clearFilters}>
+                      Clear filter
+                    </button>
+                  ) : undefined
+                }
+              />
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
                 <thead><tr><th>Part #</th><th>Name</th><th>On Hand</th><th>Reorder</th><th>Cost</th><th>Price</th><th>Status</th></tr></thead>
                 <tbody>
-                  {parts.map((p) => {
+                  {displayedParts.map((p) => {
                     const low = p.quantity_on_hand <= p.reorder_level;
+                    const focused = focusPartId === p.id;
                     return (
-                      <tr key={p.id} className={low ? "bg-warning/10" : ""}>
+                      <tr
+                        key={p.id}
+                        id={`part-${p.id}`}
+                        className={`${low ? "bg-warning/10" : ""} ${focused ? "ring-2 ring-primary ring-inset" : ""}`}
+                      >
                         <td>{p.part_number}</td>
                         <td className="font-medium">{p.name}</td>
                         <td>{p.quantity_on_hand}</td>

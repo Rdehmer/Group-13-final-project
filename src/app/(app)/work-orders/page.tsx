@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { isBefore, parseISO, startOfDay } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -12,12 +14,17 @@ function nextWoNumber() {
   return `WO-${Date.now().toString().slice(-8)}`;
 }
 
+const CLOSED = new Set(["Completed", "Closed", "Canceled"]);
+
 /**
  * This business faces missed emergency response risk.
  * Our app reduces the risk by highlighting Critical and Emergency work orders.
  */
 export default function WorkOrdersPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [workOrders, setWorkOrders] = useState<(WorkOrder & { customers?: { name: string } })[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -35,6 +42,10 @@ export default function WorkOrdersPage() {
     status: "Requested",
   });
 
+  const filter = searchParams.get("filter");
+  const typeFilter = searchParams.get("type");
+  const statusFilter = searchParams.get("status");
+
   async function load() {
     const [{ data: wo }, { data: cust }, { data: tech }] = await Promise.all([
       supabase.from("work_orders").select("*, customers(name)").order("created_at", { ascending: false }),
@@ -47,6 +58,40 @@ export default function WorkOrdersPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  const today = startOfDay(new Date());
+
+  const filteredWorkOrders = useMemo(() => {
+    return workOrders.filter((wo) => {
+      if (filter === "open" && CLOSED.has(wo.status)) return false;
+      if (filter === "urgent") {
+        if (CLOSED.has(wo.status)) return false;
+        if (!["Critical", "High"].includes(wo.priority)) return false;
+      }
+      if (filter === "overdue") {
+        if (CLOSED.has(wo.status)) return false;
+        if (!wo.scheduled_date) return false;
+        if (!isBefore(parseISO(wo.scheduled_date), today)) return false;
+      }
+      if (typeFilter && wo.work_order_type !== typeFilter) return false;
+      if (statusFilter && wo.status !== statusFilter) return false;
+      return true;
+    });
+  }, [workOrders, filter, typeFilter, statusFilter, today]);
+
+  const activeFilterLabel = [
+    filter === "open" ? "Open" : null,
+    filter === "urgent" ? "High / Critical" : null,
+    filter === "overdue" ? "Overdue" : null,
+    typeFilter ? `Type: ${typeFilter}` : null,
+    statusFilter ? `Status: ${statusFilter}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  function clearFilters() {
+    router.push(pathname);
+  }
 
   useEffect(() => {
     if (!form.customer_id) { setEquipment([]); return; }
@@ -88,6 +133,16 @@ export default function WorkOrdersPage() {
       <PageHeader title="Work Orders" description="Schedule and track service work" actions={
         <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>Create Work Order</button>
       } />
+
+      {activeFilterLabel ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-box bg-base-200/60 px-3 py-2 text-sm">
+          <span className="opacity-70">Showing:</span>
+          <span className="badge badge-primary badge-outline">{activeFilterLabel}</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={clearFilters}>
+            Clear filter
+          </button>
+        </div>
+      ) : null}
 
       {showForm ? (
         <dialog className="modal modal-open">
@@ -149,14 +204,30 @@ export default function WorkOrdersPage() {
 
       <div className="card bg-base-100 shadow">
         <div className="card-body p-0">
-          {workOrders.length === 0 ? (
-            <div className="p-6"><EmptyState title="No work orders" description="Create a work order to schedule service." /></div>
+          {filteredWorkOrders.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                title={workOrders.length === 0 ? "No work orders" : "No matching work orders"}
+                description={
+                  workOrders.length === 0
+                    ? "Create a work order to schedule service."
+                    : "Try clearing the filter to see all work orders."
+                }
+                action={
+                  activeFilterLabel ? (
+                    <button type="button" className="btn btn-sm" onClick={clearFilters}>
+                      Clear filter
+                    </button>
+                  ) : undefined
+                }
+              />
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
                 <thead><tr><th>WO #</th><th>Customer</th><th>Type</th><th>Priority</th><th>Scheduled</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  {workOrders.map((wo) => (
+                  {filteredWorkOrders.map((wo) => (
                     <tr key={wo.id} className={rowClass(wo)}>
                       <td className="font-medium">{wo.work_order_number}</td>
                       <td>{wo.customers?.name ?? "—"}</td>
