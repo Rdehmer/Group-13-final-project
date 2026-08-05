@@ -58,8 +58,22 @@ body {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dashboard-page > * {
-    animation: none;
+@media print {
+  .reports-page aside,
+  .reports-page .print\:hidden,
+  .drawer-side,
+  .navbar {
+    display: none !important;
+  }
+
+  .drawer-content,
+  .reports-page {
+    display: block !important;
+  }
+
+  .report-body {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
   }
 }
