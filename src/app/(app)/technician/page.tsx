@@ -48,6 +48,7 @@ import {
   HOUR_WIDTH,
   WO_PAGE_SIZE,
   CATEGORY_STYLES,
+  DEFAULT_PREFS,
   loadPrefs,
   savePrefs,
   minutesToLabel,
@@ -68,6 +69,7 @@ import {
   MINUTE_OPTIONS,
   DURATION_PRESETS_MIN,
   isOpenPastJob,
+  daysPastScheduled,
 } from "@/lib/technician-schedule";
 
 /**
@@ -183,11 +185,18 @@ export default function TechnicianPage() {
   const [partForm, setPartForm] = useState({ part_id: "", quantity_used: "1" });
   const [awrForm, setAwrForm] = useState({ description: "", estimated_additional_charge: "0" });
   const [busy, setBusy] = useState(false);
-  const [categoryFilter, setCategoryFilter] = useState<"all" | ScheduleCategory>(() => loadPrefs().categoryFilter);
-  const [listExpanded, setListExpanded] = useState(() => loadPrefs().listExpanded);
-  const [density, setDensity] = useState<"compact" | "comfortable">(() => loadPrefs().density);
-  const [techView, setTechView] = useState<string>(() => loadPrefs().techView);
+  // Default prefs on SSR + first paint so server/client HTML match (avoids hydration crash).
+  // Real localStorage prefs load after mount.
+  const [categoryFilter, setCategoryFilter] = useState<"all" | ScheduleCategory>(DEFAULT_PREFS.categoryFilter);
+  const [listExpanded, setListExpanded] = useState(DEFAULT_PREFS.listExpanded);
+  const [density, setDensity] = useState<"compact" | "comfortable">(DEFAULT_PREFS.density);
+  const [techView, setTechView] = useState<string>(DEFAULT_PREFS.techView);
+  const [prefsHydrated, setPrefsHydrated] = useState(false);
   const [visibleCount, setVisibleCount] = useState(WO_PAGE_SIZE);
+  const [pastJobsVisibleCount, setPastJobsVisibleCount] = useState(WO_PAGE_SIZE);
+  const [pastQueueExpanded, setPastQueueExpanded] = useState(true);
+  const [closeoutBusyId, setCloseoutBusyId] = useState<string | null>(null);
+  const [closeoutMessage, setCloseoutMessage] = useState<string | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
   const [scheduleForm, setScheduleForm] = useState({
     scheduled_date: "",
@@ -208,8 +217,18 @@ export default function TechnicianPage() {
   const rowHeight = densityRowHeight(density);
 
   useEffect(() => {
+    const prefs = loadPrefs();
+    setCategoryFilter(prefs.categoryFilter);
+    setListExpanded(prefs.listExpanded);
+    setDensity(prefs.density);
+    setTechView(prefs.techView);
+    setPrefsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!prefsHydrated) return;
     savePrefs({ categoryFilter, listExpanded, density, techView });
-  }, [categoryFilter, listExpanded, density, techView]);
+  }, [categoryFilter, listExpanded, density, techView, prefsHydrated]);
 
   const loadProfile = useCallback(async () => {
     const {
@@ -402,9 +421,19 @@ export default function TechnicianPage() {
     [timedOrders],
   );
 
-  const openPastJobs = useMemo(
-    () => timedOrders.filter((wo) => isOpenPastJob(wo)),
-    [timedOrders],
+  const openPastJobs = useMemo(() => {
+    return filteredByTech
+      .filter((wo) => isOpenPastJob(wo))
+      .sort((a, b) => {
+        const da = a.scheduled_date ?? "";
+        const db = b.scheduled_date ?? "";
+        return da.localeCompare(db);
+      });
+  }, [filteredByTech]);
+
+  const visiblePastJobs = useMemo(
+    () => openPastJobs.slice(0, pastJobsVisibleCount),
+    [openPastJobs, pastJobsVisibleCount],
   );
 
   useEffect(() => {
@@ -562,15 +591,146 @@ export default function TechnicianPage() {
   function applyLocalScheduleUpdate(
     woId: string,
     patch: {
-      scheduled_date: string;
-      scheduled_start_time: string;
-      scheduled_end_time?: string;
-      estimated_labor_hours: number;
+      scheduled_date?: string | null;
+      scheduled_start_time?: string | null;
+      scheduled_end_time?: string | null;
+      estimated_labor_hours?: number | null;
+      assigned_technician_id?: string | null;
+      status?: string;
+      completion_date?: string | null;
+      updated_at?: string;
     },
   ) {
     setWorkOrders((prev) =>
-      prev.map((w) => (w.id === woId ? { ...w, ...patch } : w)),
+      prev.map((w) => {
+        if (w.id !== woId) return w;
+        const next = { ...w, ...patch };
+        if ("assigned_technician_id" in patch) {
+          const tid = patch.assigned_technician_id;
+          next.technician = tid ? technicians.find((t) => t.id === tid) ?? w.technician : null;
+        }
+        return next;
+      }),
     );
+  }
+
+  async function markPastJobCompleted(woId: string) {
+    if (!isManager) return;
+    setCloseoutBusyId(woId);
+    setCloseoutMessage(null);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const completionDate = format(new Date(), "yyyy-MM-dd");
+    const nowIso = new Date().toISOString();
+    const basePayload: Record<string, unknown> = {
+      completion_date: completionDate,
+      updated_at: nowIso,
+      work_performed: "Completed from past-job closeout queue",
+    };
+    if (profile?.id) {
+      basePayload.approved_by = profile.id;
+      basePayload.approved_at = nowIso;
+    }
+
+    // Prefer Completed; DB may require photo/signature and force Closed instead.
+    let finalStatus = "Completed";
+    applyLocalScheduleUpdate(woId, {
+      status: finalStatus,
+      completion_date: completionDate,
+      updated_at: nowIso,
+    });
+
+    let { error } = await supabase
+      .from("work_orders")
+      .update({ ...basePayload, status: finalStatus })
+      .eq("id", woId);
+
+    if (error && /photo|signature/i.test(error.message)) {
+      finalStatus = "Closed";
+      applyLocalScheduleUpdate(woId, {
+        status: finalStatus,
+        completion_date: completionDate,
+        updated_at: nowIso,
+      });
+      ({ error } = await supabase
+        .from("work_orders")
+        .update({ ...basePayload, status: finalStatus })
+        .eq("id", woId));
+    }
+
+    if (error) {
+      setCloseoutMessage(`Could not complete work order: ${error.message}`);
+      await reloadAll();
+      setCloseoutBusyId(null);
+      return;
+    }
+
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "completed_from_past_queue",
+      recordType: "work_order",
+      recordId: woId,
+      newValue: finalStatus,
+    });
+
+    setCloseoutMessage(
+      finalStatus === "Closed"
+        ? "Closed (DB requires photo/signature for Completed). Calendars and lists updated."
+        : "Marked completed. Calendars, filters, and lists updated.",
+    );
+    if (selectedId === woId) {
+      setScheduleDirty(false);
+    }
+    await reloadAll();
+    if (selectedId === woId) await loadDetail(woId);
+    setCloseoutBusyId(null);
+  }
+
+  function reschedulePastJob(woId: string) {
+    selectWorkOrder(woId);
+    setCloseoutMessage("Work order selected — use Schedule & assign below to set a new date/time, then save.");
+    // Scroll schedule form into view after render
+    window.setTimeout(() => {
+      document.getElementById("schedule-assign-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  }
+
+  async function reschedulePastJobToday(woId: string) {
+    if (!isManager) return;
+    setCloseoutBusyId(woId);
+    setCloseoutMessage(null);
+    const today = format(new Date(), "yyyy-MM-dd");
+    const patch = {
+      scheduled_date: today,
+      scheduled_start_time: formatTimeForDb(9 * 60),
+      scheduled_end_time: formatTimeForDb(11 * 60),
+      estimated_labor_hours: 2,
+    };
+    applyLocalScheduleUpdate(woId, patch);
+    const ok = await persistScheduleUpdate(woId, patch);
+    if (!ok) {
+      setCloseoutMessage("Could not reschedule — try again or use the schedule form.");
+      await reloadAll();
+      setCloseoutBusyId(null);
+      return;
+    }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "rescheduled_from_past_queue",
+      recordType: "work_order",
+      recordId: woId,
+      newValue: `${today} 9:00 AM–11:00 AM`,
+    });
+    setSelectedDay(startOfDay(new Date()));
+    setMonthCursor(startOfMonth(new Date()));
+    selectWorkOrder(woId);
+    setCloseoutMessage("Rescheduled to today 9:00 AM–11:00 AM. Showing on day calendar.");
+    await reloadAll();
+    setCloseoutBusyId(null);
   }
 
   async function persistScheduleUpdate(
@@ -1262,24 +1422,129 @@ export default function TechnicianPage() {
           {openPastJobs.length > 0 ? (
             <section className="card border border-error/30 bg-base-100 shadow">
               <div className="card-body p-4">
-                <h2 className="card-title text-base text-error">
-                  Open past jobs
-                  <span className="badge badge-error">{openPastJobs.length}</span>
-                </h2>
-                <p className="text-xs opacity-60">Scheduled in the past but still open — review for cleanup.</p>
-                <ul className="mt-2 space-y-2">
-                  {openPastJobs.slice(0, 8).map((wo) => (
-                    <li key={wo.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                      <button type="button" className="link link-hover link-primary" onClick={() => selectWorkOrder(wo.id)}>
-                        {wo.work_order_number}
-                      </button>
-                      <span className="opacity-70">
-                        {wo.scheduled_date?.slice(0, 10)} · {customerName(wo)}
-                      </span>
-                      <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
-                    </li>
-                  ))}
-                </ul>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h2 className="card-title text-base text-error">
+                      Needs closeout (past schedule)
+                      <span className="badge badge-error">{openPastJobs.length}</span>
+                    </h2>
+                    <p className="mt-1 max-w-xl text-xs opacity-70">
+                      Scheduled before today, but status is still open in the system. These show as{" "}
+                      <strong className="text-error">Overdue (red)</strong> on the calendars — not green —
+                      until you complete or reschedule them here. Actions update lists, filters, and both
+                      calendars immediately.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => setPastQueueExpanded((o) => !o)}
+                    aria-expanded={pastQueueExpanded}
+                  >
+                    {pastQueueExpanded ? "Collapse" : "Expand"}
+                  </button>
+                </div>
+
+                {closeoutMessage ? (
+                  <div className="alert alert-info mt-2 py-2 text-sm">{closeoutMessage}</div>
+                ) : null}
+
+                {pastQueueExpanded ? (
+                  <>
+                    <ul className="mt-3 space-y-3">
+                      {visiblePastJobs.map((wo) => {
+                        const days = daysPastScheduled(wo);
+                        const rowBusy = closeoutBusyId === wo.id || busy;
+                        return (
+                          <li
+                            key={wo.id}
+                            className={`rounded-box border border-base-300 p-3 ${
+                              selectedId === wo.id ? "ring-2 ring-error/50" : ""
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <button
+                                  type="button"
+                                  className="link link-hover link-primary font-semibold"
+                                  onClick={() => selectWorkOrder(wo.id)}
+                                >
+                                  {wo.work_order_number}
+                                </button>
+                                <p className="text-sm opacity-70">
+                                  Scheduled {wo.scheduled_date?.slice(0, 10)} · {days} day
+                                  {days === 1 ? "" : "s"} past · {customerName(wo)}
+                                </p>
+                                <p className="text-xs opacity-60">
+                                  Tech: {techName(wo)} · {wo.startLabel} – {wo.endLabel}
+                                </p>
+                              </div>
+                              <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {isManager ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-success btn-xs"
+                                    disabled={rowBusy}
+                                    onClick={() => void markPastJobCompleted(wo.id)}
+                                  >
+                                    {closeoutBusyId === wo.id ? "Saving…" : "Mark completed"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-outline btn-xs"
+                                    disabled={rowBusy}
+                                    onClick={() => void reschedulePastJobToday(wo.id)}
+                                  >
+                                    Reschedule to today
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    disabled={rowBusy}
+                                    onClick={() => reschedulePastJob(wo.id)}
+                                  >
+                                    Custom reschedule
+                                  </button>
+                                </>
+                              ) : null}
+                              <Link href={`/work-orders/${wo.id}`} className="btn btn-ghost btn-xs">
+                                Open work order
+                              </Link>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {pastJobsVisibleCount < openPastJobs.length ? (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-xs"
+                          onClick={() => setPastJobsVisibleCount((n) => n + WO_PAGE_SIZE)}
+                        >
+                          Load more ({openPastJobs.length - pastJobsVisibleCount} remaining)
+                        </button>
+                      ) : null}
+                      {pastJobsVisibleCount > WO_PAGE_SIZE ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => setPastJobsVisibleCount(WO_PAGE_SIZE)}
+                        >
+                          Show fewer
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-2 text-sm opacity-60">
+                    Queue collapsed · {openPastJobs.length} open past job
+                    {openPastJobs.length === 1 ? "" : "s"} still need closeout.
+                  </p>
+                )}
               </div>
             </section>
           ) : null}
@@ -1733,7 +1998,7 @@ export default function TechnicianPage() {
             </div>
 
             {isManager ? (
-              <div className="card border border-primary/20 bg-base-100 shadow">
+              <div id="schedule-assign-panel" className="card border border-primary/20 bg-base-100 shadow">
                 <div className="card-body">
                   <h3 className="font-semibold">Schedule & assign technician</h3>
                   <p className="text-sm opacity-70">

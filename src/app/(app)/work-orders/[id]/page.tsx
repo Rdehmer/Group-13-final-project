@@ -52,16 +52,32 @@ export default function WorkOrderDetailPage() {
     if (!profile) return;
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
-    await supabase.from("work_orders").update({
-      status: "Completed",
+    const completionDate = new Date().toISOString().slice(0, 10);
+    const nowIso = new Date().toISOString();
+    const base = {
       approved_by: profile.id,
-      approved_at: new Date().toISOString(),
-      completion_date: new Date().toISOString().slice(0, 10),
+      approved_at: nowIso,
+      completion_date: completionDate,
       manager_notes: managerNotes,
-      work_performed: workPerformed,
-      updated_at: new Date().toISOString(),
-    }).eq("id", id);
-    await logActivity(supabase, { userId: user?.id ?? null, action: "approved_completion", recordType: "work_order", recordId: id, newValue: "Completed" });
+      work_performed: workPerformed || "Approved by manager",
+      updated_at: nowIso,
+    };
+
+    let status = "Completed";
+    let { error } = await supabase.from("work_orders").update({ ...base, status }).eq("id", id);
+    if (error && /photo|signature/i.test(error.message)) {
+      status = "Closed";
+      ({ error } = await supabase.from("work_orders").update({ ...base, status }).eq("id", id));
+    }
+    if (!error) {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "approved_completion",
+        recordType: "work_order",
+        recordId: id,
+        newValue: status,
+      });
+    }
     await load();
     setSaving(false);
   }

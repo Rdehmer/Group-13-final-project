@@ -173,42 +173,74 @@ export function snapMinuteOption(minute: string): string {
   return String(snapped === 60 ? 55 : snapped).padStart(2, "0");
 }
 
-export function getScheduleCategory(wo: ScheduleWo, now = new Date()): ScheduleCategory {
-  const status = (wo.status ?? "").toLowerCase();
-  if (status.includes("complete") || status === "closed") return "completed";
-
-  if (wo.scheduled_date) {
-    const day = startOfDay(parseISO(wo.scheduled_date));
-    if (isBefore(day, startOfDay(now))) return "completed";
-  }
-
-  if (
-    status.includes("progress") ||
-    status.includes("ready for review") ||
-    status.includes("waiting") ||
-    !!wo.started_at ||
-    !!wo.arrival_at
-  ) {
-    return "in_progress";
-  }
-
-  if (status.includes("overdue") || status.includes("past due")) return "overdue";
-
-  if (wo.scheduled_date && isSameDay(startOfDay(parseISO(wo.scheduled_date)), now)) {
-    const timed = withDerivedTimesBase(wo);
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    if (nowMinutes > timed.endMinutes) return "overdue";
-  }
-
-  return "upcoming";
-}
-
-/** Jobs scheduled in the past whose DB status is still open (for cleanup queue). */
+/**
+ * Jobs scheduled before today whose DB status is still open (not completed/closed/canceled).
+ * Calendar paints these as overdue (red), not completed (green).
+ */
 export function isOpenPastJob(wo: ScheduleWo, now = new Date()): boolean {
   if (!wo.scheduled_date) return false;
   const status = (wo.status ?? "").toLowerCase();
-  if (status.includes("complete") || status === "closed" || status === "canceled") return false;
-  return isBefore(startOfDay(parseISO(wo.scheduled_date)), startOfDay(now));
+  if (status.includes("complete") || status === "closed" || status.includes("cancel")) return false;
+  try {
+    return isBefore(startOfDay(parseISO(wo.scheduled_date)), startOfDay(now));
+  } catch {
+    return false;
+  }
+}
+
+/** Days between scheduled date and today for closeout UI. */
+export function daysPastScheduled(wo: ScheduleWo, now = new Date()): number {
+  if (!wo.scheduled_date) return 0;
+  try {
+    const day = startOfDay(parseISO(wo.scheduled_date));
+    const today = startOfDay(now);
+    return Math.max(0, Math.round((today.getTime() - day.getTime()) / (24 * 60 * 60 * 1000)));
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Calendar category is driven by schedule *date* first:
+ * - Completed / closed → completed
+ * - Past schedule date (still open) → overdue
+ * - Future schedule date → upcoming (never in_progress)
+ * - Today only → in_progress (or overdue after the day's slot ends)
+ */
+export function getScheduleCategory(wo: ScheduleWo, now = new Date()): ScheduleCategory {
+  const status = (wo.status ?? "").toLowerCase();
+  if (status.includes("complete") || status === "closed") return "completed";
+  if (status === "canceled" || status.includes("cancel")) return "completed";
+
+  if (!wo.scheduled_date) {
+    // Unscheduled open work is not "in progress" on a day calendar.
+    return "upcoming";
+  }
+
+  let scheduleDay: Date;
+  try {
+    scheduleDay = startOfDay(parseISO(wo.scheduled_date));
+  } catch {
+    return "upcoming";
+  }
+  const today = startOfDay(now);
+
+  // Past date, still open → overdue (never in_progress, even if DB status says so)
+  if (isBefore(scheduleDay, today)) {
+    return "overdue";
+  }
+
+  // Future date → upcoming only (ignore In Progress / started_at on the record)
+  if (!isSameDay(scheduleDay, today)) {
+    return "upcoming";
+  }
+
+  // Today: only open jobs for the current date can be In Progress
+  const timed = withDerivedTimesBase(wo);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  if (nowMinutes > timed.endMinutes) return "overdue";
+
+  return "in_progress";
 }
 
 function withDerivedTimesBase(wo: ScheduleWo): Omit<TimedWo, "category" | "hasConflict"> {
