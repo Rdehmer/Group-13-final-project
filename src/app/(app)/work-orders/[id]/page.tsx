@@ -135,31 +135,50 @@ export default function WorkOrderDetailPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const { error: updateError } = await supabase
+    const completionDate = new Date().toISOString().slice(0, 10);
+    const nowIso = new Date().toISOString();
+    const base = {
+      approved_by: profile.id,
+      approved_at: nowIso,
+      completion_date: completionDate,
+      manager_notes: managerNotes,
+      work_performed: workPerformed || "Approved by manager",
+      updated_at: nowIso,
+    };
+
+    let status = "Completed";
+    let { error: updateError } = await supabase
       .from("work_orders")
-      .update({
-        status: "Completed",
-        approved_by: profile.id,
-        approved_at: new Date().toISOString(),
-        completion_date: new Date().toISOString().slice(0, 10),
-        manager_notes: managerNotes,
-        work_performed: workPerformed,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ ...base, status })
       .eq("id", id);
+
+    // DB may require photo/signature before Completed; Closed still finishes the job.
+    if (updateError && /photo|signature/i.test(updateError.message)) {
+      status = "Closed";
+      ({ error: updateError } = await supabase
+        .from("work_orders")
+        .update({ ...base, status })
+        .eq("id", id));
+    }
+
     if (updateError) {
       setError(updateError.message);
       setSaving(false);
       return;
     }
+
     await logActivity(supabase, {
       userId: user?.id ?? null,
       action: "approved_completion",
       recordType: "work_order",
       recordId: id,
-      newValue: "Completed",
+      newValue: status,
     });
-    setMessage("Work order approved and completed.");
+    setMessage(
+      status === "Closed"
+        ? "Work order closed (photo/signature required for Completed)."
+        : "Work order approved and completed.",
+    );
     await load();
     setSaving(false);
   }
