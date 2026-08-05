@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
 import { formatMoney } from "@/lib/calculations";
 import type {
   Part,
@@ -598,6 +599,12 @@ export default function TechnicianPage() {
                       No parts on this job yet. Stock decreases when you add parts.
                     </p>
                   )}
+                </div>
+              </div>
+
+              <div className="card bg-base-100 shadow">
+                <div className="card-body">
+                  <PurchaseOrderPanel workOrderId={selected.id} canEdit />
                 </div>
               </div>
 

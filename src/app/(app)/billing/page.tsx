@@ -19,13 +19,28 @@ import {
   type InvoiceQueueFilter,
 } from "@/lib/billing";
 import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
+import { equipmentLabel } from "@/lib/equipment";
+import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
 import type { Invoice, Profile, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
 
 type InvoiceRow = Invoice & {
   customers?: { name: string; billing_address?: string | null };
   assigned_to?: string | null;
+  equipment?: {
+    name?: string | null;
+    model?: string | null;
+    serial_number?: string | null;
+  } | null;
 };
-type WoRow = WorkOrder & { customers?: { name: string } };
+type WoRow = WorkOrder & {
+  customers?: { name: string };
+  equipment?: {
+    name?: string | null;
+    model?: string | null;
+    serial_number?: string | null;
+    installation_date?: string | null;
+  } | null;
+};
 type TeamMember = Pick<Profile, "id" | "full_name" | "email" | "role">;
 
 /**
@@ -76,11 +91,11 @@ export default function BillingPage() {
       await Promise.all([
         supabase
           .from("invoices")
-          .select("*, customers(name, billing_address)")
+          .select("*, customers(name, billing_address), equipment(name, model, serial_number)")
           .order("created_at", { ascending: false }),
         supabase
           .from("work_orders")
-          .select("*, customers(name)")
+          .select("*, customers(name), equipment(name, model, serial_number, installation_date)")
           .eq("status", "Completed")
           .eq("billing_status", "Unbilled"),
         supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
@@ -212,6 +227,7 @@ export default function BillingPage() {
       customer_id: wo.customer_id,
       work_order_id: wo.id,
       contract_id: wo.contract_id,
+      equipment_id: wo.equipment_id,
       due_date: due.toISOString().slice(0, 10),
       labor_charges: woPreview.laborCharges,
       parts_charges: woPreview.partsCharges,
@@ -230,9 +246,10 @@ export default function BillingPage() {
       .select()
       .single();
 
-    // Retry without assigned_to if the column has not been migrated yet.
-    if (insertError?.message?.includes("assigned_to")) {
-      delete payload.assigned_to;
+    // Retry without optional columns if not migrated yet.
+    if (insertError?.message?.includes("assigned_to") || insertError?.message?.includes("equipment_id")) {
+      if (insertError.message.includes("assigned_to")) delete payload.assigned_to;
+      if (insertError.message.includes("equipment_id")) delete payload.equipment_id;
       ({ data: inv, error: insertError } = await supabase.from("invoices").insert(payload).select().single());
     }
 
@@ -243,6 +260,7 @@ export default function BillingPage() {
     }
 
     await supabase.from("work_orders").update({ billing_status: "Billed" }).eq("id", wo.id);
+    await linkWorkOrderPosToInvoice(supabase, wo.id, inv.id);
     await logActivity(supabase, {
       userId: user?.id ?? null,
       action: "created",
@@ -514,6 +532,11 @@ function InvoiceListPreview({
           ) : (
             <p className="mt-1 text-xs opacity-50">Unassigned</p>
           )}
+          {inv.po_number ? (
+            <p className="mt-1 text-xs">
+              PO <span className="font-mono font-semibold">{inv.po_number}</span>
+            </p>
+          ) : null}
         </div>
         <StatusBadge label={inv.status} tone={statusTone(inv.status)} />
       </div>
@@ -538,6 +561,13 @@ function InvoiceListPreview({
             View job
           </Link>
         </p>
+      ) : null}
+
+      {inv.equipment ? (
+        <div className="rounded-box bg-base-200/60 p-3 text-sm">
+          <p className="text-xs opacity-60">Equipment</p>
+          <p className="font-medium">{equipmentLabel(inv.equipment)}</p>
+        </div>
       ) : null}
 
       {inv.customers?.billing_address ? (
@@ -682,6 +712,16 @@ function WorkOrderInvoicePreview({
           )}
         </p>
         <p className="mt-1 text-xs opacity-60">Tax rate {(taxRate * 100).toFixed(2)}% · from company settings</p>
+        {wo.equipment ? (
+          <div className="mt-2 rounded-box bg-base-200/60 p-2 text-xs">
+            <p className="opacity-60">Equipment will attach to invoice</p>
+            <p className="font-medium">{equipmentLabel(wo.equipment)}</p>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-warning">
+            No equipment on this job — you can attach model/serial on the invoice after create.
+          </p>
+        )}
         <Link href={`/work-orders/${wo.id}`} className="link link-primary text-xs">
           Open job detail
         </Link>
