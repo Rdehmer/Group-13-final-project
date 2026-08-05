@@ -97,6 +97,8 @@ export type WorkOrder = {
   assigned_technician_id: string | null;
   scheduled_date: string | null;
   scheduled_start_time: string | null;
+  /** Optional end time when the column exists; duration falls back to estimated_labor_hours. */
+  scheduled_end_time?: string | null;
   problem_description: string | null;
   requested_service: string | null;
   customer_approval_required: boolean;

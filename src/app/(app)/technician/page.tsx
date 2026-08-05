@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   addDays,
@@ -8,7 +8,6 @@ import {
   endOfMonth,
   endOfWeek,
   format,
-  isBefore,
   isSameDay,
   isSameMonth,
   isToday,
@@ -18,168 +17,65 @@ import {
   startOfWeek,
   subMonths,
 } from "date-fns";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Download,
+  Printer,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
-import type { Part, Profile, TechnicianLabor, WorkOrder, WorkOrderPart, AdditionalWorkRequest } from "@/lib/types";
+import type {
+  Part,
+  Profile,
+  TechnicianLabor,
+  WorkOrder,
+  WorkOrderPart,
+  AdditionalWorkRequest,
+} from "@/lib/types";
+import {
+  type ScheduleWo,
+  type ScheduleCategory,
+  type TimedWo,
+  type Meridiem,
+  type ClockParts,
+  DAY_START_HOUR,
+  DAY_END_HOUR,
+  HOUR_WIDTH,
+  WO_PAGE_SIZE,
+  CATEGORY_STYLES,
+  loadPrefs,
+  savePrefs,
+  minutesToLabel,
+  minutesToClockParts,
+  clockPartsToMinutes,
+  formatTimeForDb,
+  snapMinuteOption,
+  withDerivedTimes,
+  markConflicts,
+  techName,
+  customerName,
+  densityRowHeight,
+  exportDayCsv,
+  downloadTextFile,
+  nextWeekDate,
+  profileLabel,
+  HOUR_12_OPTIONS,
+  MINUTE_OPTIONS,
+  DURATION_PRESETS_MIN,
+  isOpenPastJob,
+} from "@/lib/technician-schedule";
 
 /**
- * This business faces field execution gap risk when technicians lack a single workspace.
- * Our app reduces the risk by consolidating schedule, labor, parts, and approvals in one view.
+ * Field execution gap risk when technicians lack a single workspace.
+ * Consolidates schedule, labor, parts, and approvals in one view.
  */
 
-type ScheduleWo = WorkOrder & {
-  customers?: { id?: string; name: string } | null;
-  technician?: { id?: string; full_name: string | null } | null;
-};
-
-type ScheduleCategory = "in_progress" | "completed" | "overdue" | "upcoming";
-
-type TimedWo = ScheduleWo & {
-  startMinutes: number;
-  endMinutes: number;
-  startLabel: string;
-  endLabel: string;
-  category: ScheduleCategory;
-};
-
-const DAY_START_HOUR = 7;
-const DAY_END_HOUR = 19;
-/** Pixels per hour on the horizontal day timeline. */
-const HOUR_WIDTH = 96;
-const DAY_ROW_HEIGHT = 56;
-/** How many work-order chips to show initially / each Load more click. */
-const WO_PAGE_SIZE = 6;
-
-const CATEGORY_STYLES: Record<
-  ScheduleCategory,
-  { chip: string; block: string; ring: string; label: string }
-> = {
-  in_progress: {
-    chip: "bg-warning/90 text-warning-content",
-    block: "border-warning bg-warning/80 text-warning-content",
-    ring: "ring-warning",
-    label: "In Progress",
-  },
-  completed: {
-    chip: "bg-success/90 text-success-content",
-    block: "border-success bg-success/80 text-success-content",
-    ring: "ring-success",
-    label: "Completed",
-  },
-  overdue: {
-    chip: "bg-error/90 text-error-content",
-    block: "border-error bg-error/80 text-error-content",
-    ring: "ring-error",
-    label: "Overdue",
-  },
-  upcoming: {
-    chip: "bg-info/90 text-info-content",
-    block: "border-info bg-info/80 text-info-content",
-    ring: "ring-info",
-    label: "Upcoming",
-  },
-};
-
-function hashSeed(input: string): number {
-  let h = 0;
-  for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
-  return h;
-}
-
-/**
- * Parse many human time inputs into minutes-from-midnight.
- * Accepts 9:00, 09:00, 9:00 AM, 2:30pm, 14:30:00, etc.
- */
-function parseFlexibleTime(time: string | null | undefined): number | null {
-  if (time == null) return null;
-  const raw = String(time).trim().toLowerCase();
-  if (!raw) return null;
-
-  const ampm = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/i);
-  if (!ampm) return null;
-
-  let hours = Number(ampm[1]);
-  const minutes = Number(ampm[2]);
-  if (Number.isNaN(hours) || Number.isNaN(minutes) || minutes > 59 || hours > 23) return null;
-
-  const mer = ampm[4]?.replace(/\./g, "") ?? "";
-  if (mer.startsWith("p") && hours < 12) hours += 12;
-  if (mer.startsWith("a") && hours === 12) hours = 0;
-  if (!mer && hours > 23) return null;
-
-  return hours * 60 + minutes;
-}
-
-function parseTimeToMinutes(time: string | null | undefined): number | null {
-  return parseFlexibleTime(time);
-}
-
-function minutesToLabel(total: number): string {
-  const clamped = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
-  const h = Math.floor(clamped / 60);
-  const m = clamped % 60;
-  const period = h >= 12 ? "PM" : "AM";
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  return `${hour12}:${String(m).padStart(2, "0")} ${period}`;
-}
-
-function minutesToInputValue(total: number): string {
-  const clamped = Math.max(0, Math.min(23 * 60 + 59, total));
-  const h = Math.floor(clamped / 60);
-  const m = clamped % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-type Meridiem = "AM" | "PM";
-
-type ClockParts = {
-  hour12: string;
-  minute: string;
-  period: Meridiem;
-};
-
-function minutesToClockParts(total: number): ClockParts {
-  const clamped = Math.max(0, Math.min(23 * 60 + 59, total));
-  const h24 = Math.floor(clamped / 60);
-  const m = clamped % 60;
-  const period: Meridiem = h24 >= 12 ? "PM" : "AM";
-  const hour12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return {
-    hour12: String(hour12),
-    minute: String(m).padStart(2, "0"),
-    period,
-  };
-}
-
-/** Convert 12-hour parts + AM/PM into minutes-from-midnight (24h). */
-function clockPartsToMinutes(hour12: string, minute: string, period: Meridiem): number | null {
-  let h = Number(hour12);
-  const m = Number(minute);
-  if (!Number.isFinite(h) || !Number.isFinite(m) || h < 1 || h > 12 || m < 0 || m > 59) return null;
-  if (period === "AM") {
-    if (h === 12) h = 0;
-  } else {
-    if (h !== 12) h += 12;
-  }
-  return h * 60 + m;
-}
-
-function formatTimeForDb(minutes: number): string {
-  return `${minutesToInputValue(minutes)}:00`;
-}
-
-const HOUR_12_OPTIONS = Array.from({ length: 12 }, (_, i) => String(i + 1));
-const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, "0")); // 00, 05, … 55
-
-function snapMinuteOption(minute: string): string {
-  const m = Number(minute);
-  if (!Number.isFinite(m)) return "00";
-  const snapped = Math.round(m / 5) * 5;
-  return String(snapped === 60 ? 55 : snapped).padStart(2, "0");
-}
+type DragPayload = { id: string; durationMinutes: number };
 
 function AmpmTimeFields({
   label,
@@ -241,94 +137,40 @@ function AmpmTimeFields({
   );
 }
 
-function getScheduleCategory(wo: ScheduleWo, now = new Date()): ScheduleCategory {
-  const status = (wo.status ?? "").toLowerCase();
-  if (status.includes("complete") || status === "closed") return "completed";
-
-  // Past scheduled days are treated as completed for schedule views.
-  if (wo.scheduled_date) {
-    const day = startOfDay(parseISO(wo.scheduled_date));
-    if (isBefore(day, startOfDay(now))) return "completed";
-  }
-
-  if (
-    status.includes("progress") ||
-    status.includes("ready for review") ||
-    status.includes("waiting") ||
-    !!wo.started_at ||
-    !!wo.arrival_at
-  ) {
-    return "in_progress";
-  }
-
-  if (status.includes("overdue") || status.includes("past due")) return "overdue";
-
-  // Today, after scheduled window, still open → overdue
-  if (wo.scheduled_date) {
-    const day = startOfDay(parseISO(wo.scheduled_date));
-    if (isSameDay(day, now)) {
-      const timed = (() => {
-        const seed = hashSeed(wo.id);
-        const storedStart = parseTimeToMinutes(wo.scheduled_start_time);
-        const durationHours = Math.max(0.5, Number(wo.estimated_labor_hours) || 1 + (seed % 3));
-        const startMinutes = storedStart ?? 8 * 60 + (seed % 15) * 30;
-        return startMinutes + Math.round(durationHours * 60);
-      })();
-      const nowMinutes = now.getHours() * 60 + now.getMinutes();
-      if (nowMinutes > timed) return "overdue";
-    }
-  }
-
-  return "upcoming";
-}
-
-function withDerivedTimes(wo: ScheduleWo): TimedWo {
-  const seed = hashSeed(wo.id);
-  const storedStart = parseFlexibleTime(wo.scheduled_start_time);
-
-  // Prefer stored duration; if missing, use a stable fake only as a last resort.
-  let durationHours =
-    wo.estimated_labor_hours != null && Number(wo.estimated_labor_hours) > 0
-      ? Number(wo.estimated_labor_hours)
-      : null;
-
-  let startMinutes = storedStart;
-  if (startMinutes == null) {
-    // Stable faux start between 8:00 and 15:00 in 30-minute steps (only if never set)
-    startMinutes = 8 * 60 + (seed % 15) * 30;
-  }
-
-  if (durationHours == null) {
-    durationHours = 1 + (seed % 3);
-  }
-
-  const durationMinutes = Math.max(15, Math.round(durationHours * 60));
-  // Do not rewrite user-chosen start times by clamping into a view window.
-  const endMinutes = startMinutes + durationMinutes;
-
-  return {
-    ...wo,
-    startMinutes,
-    endMinutes,
-    startLabel: minutesToLabel(startMinutes),
-    endLabel: minutesToLabel(endMinutes),
-    category: getScheduleCategory(wo),
-  };
-}
-
-function techName(wo: ScheduleWo): string {
-  return wo.technician?.full_name?.trim() || "Unassigned";
-}
-
-function customerName(wo: ScheduleWo): string {
-  return wo.customers?.name?.trim() || "Unknown customer";
+function ScheduleLegend({ sticky }: { sticky?: boolean }) {
+  return (
+    <div
+      className={`flex flex-wrap items-center gap-3 rounded-box border border-base-300 bg-base-100/95 px-3 py-2 text-xs backdrop-blur-sm ${
+        sticky ? "sticky top-2 z-20 print:hidden" : ""
+      }`}
+      role="list"
+      aria-label="Schedule color legend"
+    >
+      <span className="font-semibold opacity-70">Legend:</span>
+      {(Object.keys(CATEGORY_STYLES) as ScheduleCategory[]).map((key) => (
+        <span key={key} role="listitem" className="inline-flex items-center gap-1.5">
+          <span className={`inline-block h-3 w-3 rounded-sm ${CATEGORY_STYLES[key].chip}`} />
+          {CATEGORY_STYLES[key].label}
+        </span>
+      ))}
+      <span role="listitem" className="inline-flex items-center gap-1.5">
+        <AlertTriangle className="h-3.5 w-3.5 text-error" aria-hidden />
+        Conflict
+      </span>
+    </div>
+  );
 }
 
 export default function TechnicianPage() {
   const supabase = createClient();
+  const dayCalendarRef = useRef<HTMLDivElement>(null);
+  const timelineDropRef = useRef<HTMLDivElement>(null);
+
   const [profile, setProfile] = useState<Profile | null>(null);
   const [workOrders, setWorkOrders] = useState<ScheduleWo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
   const [monthCursor, setMonthCursor] = useState(() => startOfMonth(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
   const [dayPanelOpen, setDayPanelOpen] = useState(false);
@@ -336,12 +178,15 @@ export default function TechnicianPage() {
   const [parts, setParts] = useState<(WorkOrderPart & { parts?: Part })[]>([]);
   const [additional, setAdditional] = useState<AdditionalWorkRequest[]>([]);
   const [inventory, setInventory] = useState<Part[]>([]);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
   const [laborForm, setLaborForm] = useState({ regular_hours: "1", overtime_hours: "0", notes: "" });
   const [partForm, setPartForm] = useState({ part_id: "", quantity_used: "1" });
   const [awrForm, setAwrForm] = useState({ description: "", estimated_additional_charge: "0" });
   const [busy, setBusy] = useState(false);
-  const [categoryFilter, setCategoryFilter] = useState<"all" | ScheduleCategory>("all");
-  const [listExpanded, setListExpanded] = useState(true);
+  const [categoryFilter, setCategoryFilter] = useState<"all" | ScheduleCategory>(() => loadPrefs().categoryFilter);
+  const [listExpanded, setListExpanded] = useState(() => loadPrefs().listExpanded);
+  const [density, setDensity] = useState<"compact" | "comfortable">(() => loadPrefs().density);
+  const [techView, setTechView] = useState<string>(() => loadPrefs().techView);
   const [visibleCount, setVisibleCount] = useState(WO_PAGE_SIZE);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
   const [scheduleForm, setScheduleForm] = useState({
@@ -354,12 +199,17 @@ export default function TechnicianPage() {
     endPeriod: "AM" as Meridiem,
     assigned_technician_id: "",
   });
+  const [bulkForm, setBulkForm] = useState({ scheduled_date: "", assigned_technician_id: "" });
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [scheduleSaved, setScheduleSaved] = useState(false);
   const [scheduleDirty, setScheduleDirty] = useState(false);
 
-  const isManager =
-    profile?.role === "administrator" || profile?.role === "service_manager";
+  const isManager = profile?.role === "administrator" || profile?.role === "service_manager";
+  const rowHeight = densityRowHeight(density);
+
+  useEffect(() => {
+    savePrefs({ categoryFilter, listExpanded, density, techView });
+  }, [categoryFilter, listExpanded, density, techView]);
 
   const loadProfile = useCallback(async () => {
     const {
@@ -411,6 +261,25 @@ export default function TechnicianPage() {
     [supabase, technicians],
   );
 
+  const reloadAll = useCallback(async () => {
+    if (profile) await loadWorkOrders(profile.id, profile.role, technicians);
+  }, [loadWorkOrders, profile, technicians]);
+
+  const loadInventory = useCallback(async () => {
+    // Match Parts tab: load full inventory, then prefer active / in-stock items for the picker.
+    const { data, error } = await supabase.from("parts").select("*").order("name");
+    if (error) {
+      setInventoryError(error.message);
+      setInventory([]);
+      return;
+    }
+    setInventoryError(null);
+    const all = (data as Part[]) ?? [];
+    const active = all.filter((p) => p.is_active === true || p.is_active == null);
+    // If nothing is flagged active, still show all rows so technicians can pick Parts-tab stock.
+    setInventory(active.length > 0 ? active : all);
+  }, [supabase]);
+
   async function loadDetail(woId: string) {
     const [{ data: l }, { data: p }, { data: a }] = await Promise.all([
       supabase.from("technician_labor").select("*").eq("work_order_id", woId).order("work_date", { ascending: false }),
@@ -436,19 +305,20 @@ export default function TechnicianPage() {
       const roster = (techData as Profile[]) ?? [];
       if (!cancelled) setTechnicians(roster);
       if (p) await loadWorkOrders(p.id, p.role, roster);
-      const { data: inv } = await supabase.from("parts").select("*").eq("is_active", true).order("name");
-      if (!cancelled) setInventory((inv as Part[]) ?? []);
+      if (!cancelled) await loadInventory();
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadProfile, loadWorkOrders, supabase]);
+  }, [loadProfile, loadWorkOrders, loadInventory, supabase]);
 
   useEffect(() => {
-    if (selectedId) loadDetail(selectedId);
-  }, [selectedId]);
+    if (selectedId) {
+      void loadDetail(selectedId);
+      void loadInventory();
+    }
+  }, [selectedId, loadInventory]);
 
-  // Keep schedule form in sync with the selected work order (don't clobber while typing)
   useEffect(() => {
     if (!selectedId) {
       setScheduleDirty(false);
@@ -473,46 +343,73 @@ export default function TechnicianPage() {
     setScheduleError(null);
   }, [selectedId, workOrders, scheduleDirty]);
 
-  // Reset dirty when selecting another work order
   useEffect(() => {
     setScheduleDirty(false);
     setScheduleSaved(false);
   }, [selectedId]);
 
-  // Live refresh when work orders change
   useEffect(() => {
     const channel = supabase
       .channel("technician-schedule-work-orders")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "work_orders" },
-        () => {
-          void loadWorkOrders(profile?.id, profile?.role);
-        },
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "work_orders" }, () => {
+        void reloadAll();
+      })
       .subscribe();
 
     const poll = window.setInterval(() => {
-      void loadWorkOrders(profile?.id, profile?.role);
+      void reloadAll();
     }, 45_000);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reloadAll();
+    };
+    const onFocus = () => void reloadAll();
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
 
     return () => {
       window.clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
       void supabase.removeChannel(channel);
     };
-  }, [supabase, loadWorkOrders, profile?.id, profile?.role]);
+  }, [supabase, reloadAll]);
 
-  const timedOrders = useMemo(() => workOrders.map(withDerivedTimes), [workOrders]);
+  const timedOrders = useMemo(
+    () => markConflicts(workOrders.map(withDerivedTimes)),
+    [workOrders],
+  );
+
+  const filteredByTech = useMemo(() => {
+    if (techView === "all") return timedOrders;
+    if (techView === "mine" && profile) {
+      return timedOrders.filter((wo) => wo.assigned_technician_id === profile.id);
+    }
+    if (techView !== "all" && techView !== "mine") {
+      return timedOrders.filter((wo) => wo.assigned_technician_id === techView);
+    }
+    return timedOrders;
+  }, [timedOrders, techView, profile]);
 
   const filteredOrders = useMemo(() => {
-    if (categoryFilter === "all") return timedOrders;
-    return timedOrders.filter((wo) => wo.category === categoryFilter);
-  }, [timedOrders, categoryFilter]);
+    if (categoryFilter === "all") return filteredByTech;
+    return filteredByTech.filter((wo) => wo.category === categoryFilter);
+  }, [filteredByTech, categoryFilter]);
 
-  // Reset paging when the filter changes
+  const unscheduledOrders = useMemo(
+    () => timedOrders.filter((wo) => !wo.scheduled_date),
+    [timedOrders],
+  );
+
+  const openPastJobs = useMemo(
+    () => timedOrders.filter((wo) => isOpenPastJob(wo)),
+    [timedOrders],
+  );
+
   useEffect(() => {
     setVisibleCount(WO_PAGE_SIZE);
-  }, [categoryFilter]);
+  }, [categoryFilter, techView]);
 
   const visibleOrders = useMemo(
     () => filteredOrders.slice(0, visibleCount),
@@ -527,9 +424,9 @@ export default function TechnicianPage() {
       overdue: 0,
       upcoming: 0,
     };
-    for (const wo of timedOrders) counts[wo.category] += 1;
+    for (const wo of filteredByTech) counts[wo.category] += 1;
     return counts;
-  }, [timedOrders]);
+  }, [filteredByTech]);
 
   const monthCells = useMemo(() => {
     const start = startOfWeek(startOfMonth(monthCursor));
@@ -574,7 +471,6 @@ export default function TechnicianPage() {
       hoursList.push(h);
     }
 
-    // Staircase: earliest start on top (lane 0). Overlaps cascade downward.
     const sorted = [...dayOrders].sort(
       (a, b) =>
         a.startMinutes - b.startMinutes ||
@@ -613,6 +509,15 @@ export default function TechnicianPage() {
   }, [dayOrders]);
 
   function selectWorkOrder(id: string) {
+    if (bulkMode) {
+      setBulkSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      return;
+    }
     if (selectedId === id) {
       setSelectedId(null);
       return;
@@ -629,6 +534,126 @@ export default function TechnicianPage() {
   function openDay(day: Date) {
     setSelectedDay(startOfDay(day));
     setDayPanelOpen(true);
+  }
+
+  function handleDayKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setSelectedDay((d) => addDays(d, -1));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setSelectedDay((d) => addDays(d, 1));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setSelectedDay(startOfDay(new Date()));
+    }
+  }
+
+  function parseDragPayload(e: React.DragEvent): DragPayload | null {
+    try {
+      const raw = e.dataTransfer.getData("text/plain");
+      if (!raw) return null;
+      return JSON.parse(raw) as DragPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyLocalScheduleUpdate(
+    woId: string,
+    patch: {
+      scheduled_date: string;
+      scheduled_start_time: string;
+      scheduled_end_time?: string;
+      estimated_labor_hours: number;
+    },
+  ) {
+    setWorkOrders((prev) =>
+      prev.map((w) => (w.id === woId ? { ...w, ...patch } : w)),
+    );
+  }
+
+  async function persistScheduleUpdate(
+    woId: string,
+    patch: {
+      scheduled_date: string;
+      scheduled_start_time: string;
+      scheduled_end_time?: string;
+      estimated_labor_hours: number;
+      assigned_technician_id?: string | null;
+    },
+  ): Promise<boolean> {
+    const payload: Record<string, unknown> = {
+      ...patch,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("work_orders").update(payload).eq("id", woId);
+    if (error && patch.scheduled_end_time && /scheduled_end_time|end_time/i.test(error.message)) {
+      const { scheduled_end_time: _, ...fallback } = payload;
+      const { error: err2 } = await supabase.from("work_orders").update(fallback).eq("id", woId);
+      if (err2) return false;
+      return true;
+    }
+    return !error;
+  }
+
+  async function handleTimelineDrop(e: React.DragEvent) {
+    e.preventDefault();
+    if (!isManager) return;
+    const payload = parseDragPayload(e);
+    if (!payload || !timelineDropRef.current) return;
+
+    const rect = timelineDropRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const minutesFromStart = Math.round(((x / HOUR_WIDTH) * 60) / 5) * 5;
+    const newStart = dayTimeline.rangeStartMin + Math.max(0, minutesFromStart);
+    const newEnd = newStart + payload.durationMinutes;
+    const hours = Math.round(((newEnd - newStart) / 60) * 100) / 100;
+
+    const patch = {
+      scheduled_date: dayKey,
+      scheduled_start_time: formatTimeForDb(newStart),
+      scheduled_end_time: formatTimeForDb(newEnd),
+      estimated_labor_hours: hours,
+    };
+
+    applyLocalScheduleUpdate(payload.id, patch);
+    setBusy(true);
+    await persistScheduleUpdate(payload.id, patch);
+    await reloadAll();
+    setBusy(false);
+  }
+
+  async function handleMonthCellDrop(e: React.DragEvent, targetDay: Date) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isManager) return;
+    const payload = parseDragPayload(e);
+    if (!payload) return;
+
+    const wo = timedOrders.find((w) => w.id === payload.id);
+    if (!wo) return;
+
+    const targetDate = format(targetDay, "yyyy-MM-dd");
+    const patch = {
+      scheduled_date: targetDate,
+      scheduled_start_time: wo.scheduled_start_time ?? formatTimeForDb(wo.startMinutes),
+      scheduled_end_time: formatTimeForDb(wo.endMinutes),
+      estimated_labor_hours: wo.estimated_labor_hours ?? payload.durationMinutes / 60,
+    };
+
+    applyLocalScheduleUpdate(payload.id, patch);
+    setBusy(true);
+    await persistScheduleUpdate(payload.id, patch);
+    await reloadAll();
+    setBusy(false);
+  }
+
+  function handleDragStart(e: React.DragEvent, wo: TimedWo) {
+    const durationMinutes = wo.endMinutes - wo.startMinutes;
+    e.dataTransfer.setData("text/plain", JSON.stringify({ id: wo.id, durationMinutes }));
+    e.dataTransfer.effectAllowed = "move";
   }
 
   async function woAction(action: "arrival" | "start" | "pause" | "ready") {
@@ -663,7 +688,7 @@ export default function TechnicianPage() {
       recordId: selectedId,
       newValue: String(updates.status),
     });
-    await loadWorkOrders(profile?.id, profile?.role);
+    await reloadAll();
     await loadDetail(selectedId);
     setBusy(false);
   }
@@ -686,7 +711,11 @@ export default function TechnicianPage() {
       scheduleForm.startMinute,
       scheduleForm.startPeriod,
     );
-    const endMin = clockPartsToMinutes(scheduleForm.endHour, scheduleForm.endMinute, scheduleForm.endPeriod);
+    const endMin = clockPartsToMinutes(
+      scheduleForm.endHour,
+      scheduleForm.endMinute,
+      scheduleForm.endPeriod,
+    );
     if (startMin == null) {
       setScheduleError("Choose a valid start time and AM/PM.");
       setBusy(false);
@@ -705,6 +734,7 @@ export default function TechnicianPage() {
 
     const hours = Math.round(((endMin - startMin) / 60) * 100) / 100;
     const startTimeDb = formatTimeForDb(startMin);
+    const endTimeDb = formatTimeForDb(endMin);
 
     const {
       data: { user },
@@ -713,6 +743,7 @@ export default function TechnicianPage() {
     const payload = {
       scheduled_date: scheduleForm.scheduled_date,
       scheduled_start_time: startTimeDb,
+      scheduled_end_time: endTimeDb,
       estimated_labor_hours: hours,
       assigned_technician_id: scheduleForm.assigned_technician_id || null,
       updated_at: new Date().toISOString(),
@@ -726,39 +757,40 @@ export default function TechnicianPage() {
       .single();
 
     if (error) {
-      // Still try without select in case RLS blocks returning the row
-      const { error: err2 } = await supabase.from("work_orders").update(payload).eq("id", selectedId);
-      if (err2) {
-        setScheduleError(err2.message || error.message);
-        setBusy(false);
-        return;
+      if (/scheduled_end_time|end_time/i.test(error.message)) {
+        const { scheduled_end_time: _, ...fallback } = payload;
+        const { error: err2 } = await supabase.from("work_orders").update(fallback).eq("id", selectedId);
+        if (err2) {
+          setScheduleError(err2.message || error.message);
+          setBusy(false);
+          return;
+        }
+        applyLocalScheduleUpdate(selectedId, {
+          scheduled_date: payload.scheduled_date,
+          scheduled_start_time: payload.scheduled_start_time,
+          estimated_labor_hours: payload.estimated_labor_hours,
+        });
+      } else {
+        const { error: err2 } = await supabase.from("work_orders").update(payload).eq("id", selectedId);
+        if (err2) {
+          setScheduleError(err2.message || error.message);
+          setBusy(false);
+          return;
+        }
+        applyLocalScheduleUpdate(selectedId, {
+          scheduled_date: payload.scheduled_date,
+          scheduled_start_time: payload.scheduled_start_time,
+          scheduled_end_time: payload.scheduled_end_time,
+          estimated_labor_hours: payload.estimated_labor_hours,
+        });
       }
-      // Optimistically apply so the calendars move immediately
-      setWorkOrders((prev) =>
-        prev.map((w) =>
-          w.id === selectedId
-            ? {
-                ...w,
-                scheduled_date: payload.scheduled_date,
-                scheduled_start_time: payload.scheduled_start_time,
-                estimated_labor_hours: payload.estimated_labor_hours,
-                assigned_technician_id: payload.assigned_technician_id,
-                technician: payload.assigned_technician_id
-                  ? technicians.find((t) => t.id === payload.assigned_technician_id) ?? w.technician
-                  : null,
-              }
-            : w,
-        ),
-      );
     } else if (updated) {
       const tech = payload.assigned_technician_id
         ? technicians.find((t) => t.id === payload.assigned_technician_id) ?? null
         : null;
       setWorkOrders((prev) =>
         prev.map((w) =>
-          w.id === selectedId
-            ? { ...(updated as ScheduleWo), technician: tech }
-            : w,
+          w.id === selectedId ? { ...(updated as ScheduleWo), technician: tech } : w,
         ),
       );
     }
@@ -773,7 +805,6 @@ export default function TechnicianPage() {
       newValue: `${payload.scheduled_date} ${minutesToLabel(startMin)}–${minutesToLabel(endMin)} · ${techLabel}`,
     });
 
-    // Normalize form to saved values
     const startParts = minutesToClockParts(startMin);
     const endParts = minutesToClockParts(endMin);
     setScheduleForm((f) => ({
@@ -789,9 +820,110 @@ export default function TechnicianPage() {
     setSelectedDay(startOfDay(parseISO(scheduleForm.scheduled_date)));
     setMonthCursor(startOfMonth(parseISO(scheduleForm.scheduled_date)));
     setScheduleSaved(true);
-    // Background refresh for full roster
-    void loadWorkOrders(profile?.id, profile?.role, technicians);
+    void reloadAll();
     setBusy(false);
+  }
+
+  function applyDurationPreset(minutes: number) {
+    const startMin = clockPartsToMinutes(
+      scheduleForm.startHour,
+      scheduleForm.startMinute,
+      scheduleForm.startPeriod,
+    );
+    if (startMin == null) return;
+    const endMin = startMin + minutes;
+    const endParts = minutesToClockParts(endMin);
+    setScheduleSaved(false);
+    setScheduleDirty(true);
+    setScheduleForm((f) => ({
+      ...f,
+      endHour: endParts.hour12,
+      endMinute: snapMinuteOption(endParts.minute),
+      endPeriod: endParts.period,
+    }));
+  }
+
+  async function placeToday(woId: string) {
+    if (!isManager) return;
+    setBusy(true);
+    const today = format(new Date(), "yyyy-MM-dd");
+    const patch = {
+      scheduled_date: today,
+      scheduled_start_time: formatTimeForDb(9 * 60),
+      scheduled_end_time: formatTimeForDb(11 * 60),
+      estimated_labor_hours: 2,
+    };
+    applyLocalScheduleUpdate(woId, patch);
+    await persistScheduleUpdate(woId, patch);
+    await reloadAll();
+    setBusy(false);
+  }
+
+  async function applyBulkSchedule() {
+    if (!isManager || bulkSelected.size === 0) return;
+    setBusy(true);
+    for (const id of bulkSelected) {
+      const patch: {
+        scheduled_date?: string;
+        scheduled_start_time?: string;
+        scheduled_end_time?: string;
+        estimated_labor_hours?: number;
+        assigned_technician_id?: string | null;
+      } = { assigned_technician_id: bulkForm.assigned_technician_id || null };
+      if (bulkForm.scheduled_date) {
+        const wo = timedOrders.find((w) => w.id === id);
+        patch.scheduled_date = bulkForm.scheduled_date;
+        patch.scheduled_start_time = wo?.scheduled_start_time ?? formatTimeForDb(9 * 60);
+        patch.scheduled_end_time = wo?.scheduled_end_time ?? formatTimeForDb(11 * 60);
+        patch.estimated_labor_hours = wo?.estimated_labor_hours ?? 2;
+      }
+      await persistScheduleUpdate(id, patch as Parameters<typeof persistScheduleUpdate>[1]);
+    }
+    setBulkSelected(new Set());
+    await reloadAll();
+    setBusy(false);
+  }
+
+  async function cloneNextWeek(wo: TimedWo) {
+    if (!isManager || !wo.scheduled_date) return;
+    setBusy(true);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const woNumber = `WO-${Date.now()}`;
+    const insertPayload: Partial<WorkOrder> = {
+      work_order_number: woNumber,
+      customer_id: wo.customer_id,
+      equipment_id: wo.equipment_id,
+      contract_id: wo.contract_id,
+      work_order_type: wo.work_order_type,
+      priority: wo.priority,
+      assigned_technician_id: wo.assigned_technician_id,
+      scheduled_date: nextWeekDate(wo.scheduled_date),
+      scheduled_start_time: wo.scheduled_start_time,
+      scheduled_end_time: wo.scheduled_end_time ?? formatTimeForDb(wo.endMinutes),
+      problem_description: wo.problem_description,
+      requested_service: wo.requested_service,
+      estimated_labor_hours: wo.estimated_labor_hours,
+      status: wo.assigned_technician_id ? "Assigned" : "Requested",
+    };
+    const { data, error } = await supabase.from("work_orders").insert(insertPayload).select().single();
+    if (!error && data) {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "cloned",
+        recordType: "work_order",
+        recordId: data.id,
+        newValue: woNumber,
+      });
+    }
+    await reloadAll();
+    setBusy(false);
+  }
+
+  function exportSelectedDayCsv() {
+    const csv = exportDayCsv(selectedDay, dayOrders);
+    downloadTextFile(`schedule-${dayKey}.csv`, csv);
   }
 
   async function addLabor(e: React.FormEvent) {
@@ -838,8 +970,7 @@ export default function TechnicianPage() {
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
     setPartForm({ part_id: "", quantity_used: "1" });
     await loadDetail(selectedId);
-    const { data: inv } = await supabase.from("parts").select("*").eq("is_active", true).order("name");
-    setInventory((inv as Part[]) ?? []);
+    await loadInventory();
     setBusy(false);
   }
 
@@ -865,36 +996,110 @@ export default function TechnicianPage() {
         description="Month and day calendars for scheduled work, plus job execution tools"
       />
 
-      {/* Totals / work order list (outside calendars) */}
-      <section className="card bg-base-100 shadow">
+      {/* Work order list + filters */}
+      <section className="card bg-base-100 shadow print:hidden">
         <div className="card-body gap-3 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="card-title text-base">
               Total work orders
               <span className="badge badge-neutral badge-lg tabular-nums">{filteredOrders.length}</span>
-              {categoryFilter !== "all" ? (
-                <span className="text-sm font-normal opacity-60">of {timedOrders.length}</span>
+              {categoryFilter !== "all" || techView !== "all" ? (
+                <span className="text-sm font-normal opacity-60">of {filteredByTech.length}</span>
               ) : null}
             </h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className={`btn btn-sm ${bulkMode ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => {
+                  setBulkMode((m) => !m);
+                  if (bulkMode) setBulkSelected(new Set());
+                }}
+                aria-pressed={bulkMode}
+              >
+                Bulk select
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm gap-1"
+                onClick={() => setListExpanded((open) => !open)}
+                aria-expanded={listExpanded}
+              >
+                {listExpanded ? (
+                  <>
+                    Collapse list <ChevronLeft className="h-4 w-4 -rotate-90" />
+                  </>
+                ) : (
+                  <>
+                    Expand list <ChevronRight className="h-4 w-4 rotate-90" />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Tech filter */}
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Technician filter">
+            <span className="text-xs font-semibold opacity-60">Tech:</span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm gap-1"
-              onClick={() => setListExpanded((open) => !open)}
-              aria-expanded={listExpanded}
-              aria-controls="work-order-list-panel"
+              className={`btn btn-xs ${techView === "all" ? "btn-neutral" : "btn-ghost"}`}
+              onClick={() => setTechView("all")}
+              aria-pressed={techView === "all"}
             >
-              {listExpanded ? (
-                <>
-                  Collapse list <ChevronLeft className="h-4 w-4 -rotate-90" />
-                </>
-              ) : (
-                <>
-                  Expand list <ChevronRight className="h-4 w-4 rotate-90" />
-                </>
-              )}
+              All techs
+            </button>
+            {profile ? (
+              <button
+                type="button"
+                className={`btn btn-xs ${techView === "mine" ? "btn-neutral" : "btn-ghost"}`}
+                onClick={() => setTechView("mine")}
+                aria-pressed={techView === "mine"}
+              >
+                My schedule
+              </button>
+            ) : null}
+            {isManager ? (
+              <select
+                className="select select-bordered select-xs max-w-[12rem]"
+                value={techView !== "all" && techView !== "mine" ? techView : ""}
+                onChange={(e) => {
+                  if (e.target.value) setTechView(e.target.value);
+                }}
+                aria-label="Filter by technician"
+              >
+                <option value="">Specific tech…</option>
+                {technicians.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {profileLabel(t)}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
+
+          {/* Density */}
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Calendar density">
+            <span className="text-xs font-semibold opacity-60">Density:</span>
+            <button
+              type="button"
+              className={`btn btn-xs ${density === "compact" ? "btn-neutral" : "btn-ghost"}`}
+              onClick={() => setDensity("compact")}
+              aria-pressed={density === "compact"}
+            >
+              Compact
+            </button>
+            <button
+              type="button"
+              className={`btn btn-xs ${density === "comfortable" ? "btn-neutral" : "btn-ghost"}`}
+              onClick={() => setDensity("comfortable")}
+              aria-pressed={density === "comfortable"}
+            >
+              Comfortable
             </button>
           </div>
 
+          {/* Category filters */}
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by schedule status">
             <button
               type="button"
@@ -902,7 +1107,7 @@ export default function TechnicianPage() {
               onClick={() => setCategoryFilter("all")}
               aria-pressed={categoryFilter === "all"}
             >
-              All ({timedOrders.length})
+              All ({filteredByTech.length})
             </button>
             {(Object.keys(CATEGORY_STYLES) as ScheduleCategory[]).map((key) => (
               <button
@@ -918,11 +1123,47 @@ export default function TechnicianPage() {
             ))}
           </div>
 
+          {/* Bulk assign bar */}
+          {bulkMode && bulkSelected.size > 0 && isManager ? (
+            <div className="flex flex-wrap items-end gap-2 rounded-box border border-primary/30 bg-primary/5 p-3">
+              <span className="text-sm font-semibold">{bulkSelected.size} selected</span>
+              <FormRow label="Date">
+                <input
+                  type="date"
+                  className="input input-bordered input-sm"
+                  value={bulkForm.scheduled_date}
+                  onChange={(e) => setBulkForm({ ...bulkForm, scheduled_date: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Technician">
+                <select
+                  className="select select-bordered select-sm"
+                  value={bulkForm.assigned_technician_id}
+                  onChange={(e) => setBulkForm({ ...bulkForm, assigned_technician_id: e.target.value })}
+                >
+                  <option value="">No change</option>
+                  {technicians.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {profileLabel(t)}
+                    </option>
+                  ))}
+                </select>
+              </FormRow>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => void applyBulkSchedule()} disabled={busy}>
+                Apply to selected
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBulkSelected(new Set())}>
+                Clear
+              </button>
+            </div>
+          ) : null}
+
           {listExpanded ? (
-            <div id="work-order-list-panel" className="space-y-3">
+            <div className="space-y-3">
               <p className="text-xs opacity-60">
-                Click a work order to highlight it on the calendars; click again to clear. Past-dated jobs show as
-                completed. Showing {Math.min(visibleCount, filteredOrders.length)} of {filteredOrders.length}.
+                Click a work order to highlight it on the calendars; click again to clear.
+                {bulkMode ? " Bulk mode: toggle multiple selections." : ""} Showing{" "}
+                {Math.min(visibleCount, filteredOrders.length)} of {filteredOrders.length}.
               </p>
 
               {filteredOrders.length === 0 ? (
@@ -932,7 +1173,7 @@ export default function TechnicianPage() {
                   <ul className="flex flex-wrap gap-2">
                     {visibleOrders.map((wo) => {
                       const style = CATEGORY_STYLES[wo.category];
-                      const active = selectedId === wo.id;
+                      const active = bulkMode ? bulkSelected.has(wo.id) : selectedId === wo.id;
                       return (
                         <li key={wo.id}>
                           <button
@@ -940,9 +1181,12 @@ export default function TechnicianPage() {
                             onClick={() => selectWorkOrder(wo.id)}
                             className={`rounded-box border px-3 py-1.5 text-left text-sm transition ${style.chip} ${
                               active ? `ring-2 ring-offset-2 ${style.ring}` : "opacity-90 hover:opacity-100"
-                            }`}
+                            } ${wo.hasConflict ? "outline outline-2 outline-error outline-offset-1" : ""}`}
                             aria-pressed={active}
                           >
+                            {bulkMode ? (
+                              <span className="mr-1 inline-block h-3 w-3 rounded border border-current align-middle" aria-hidden />
+                            ) : null}
                             <span className="font-semibold">{wo.work_order_number}</span>
                             <span className="mx-1 opacity-70">·</span>
                             <span className="opacity-90">{customerName(wo)}</span>
@@ -975,20 +1219,241 @@ export default function TechnicianPage() {
               )}
             </div>
           ) : (
-            <p id="work-order-list-panel" className="text-sm opacity-60">
+            <p className="text-sm opacity-60">
               List collapsed
-              {selectedId ? " · a work order is still highlighted on the calendars" : ""}. Use Expand list to browse
-              chips again.
+              {selectedId ? " · a work order is still highlighted on the calendars" : ""}.
             </p>
           )}
         </div>
       </section>
 
+      {/* Queues: unscheduled + open past jobs */}
+      {(isManager && unscheduledOrders.length > 0) || openPastJobs.length > 0 ? (
+        <div className="grid gap-4 lg:grid-cols-2 print:hidden">
+          {isManager && unscheduledOrders.length > 0 ? (
+            <section className="card bg-base-100 shadow">
+              <div className="card-body p-4">
+                <h2 className="card-title text-base">
+                  Unscheduled
+                  <span className="badge badge-warning">{unscheduledOrders.length}</span>
+                </h2>
+                <ul className="mt-2 space-y-2">
+                  {unscheduledOrders.slice(0, 8).map((wo) => (
+                    <li key={wo.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <button type="button" className="link link-hover link-primary" onClick={() => selectWorkOrder(wo.id)}>
+                        {wo.work_order_number}
+                      </button>
+                      <span className="opacity-70">{customerName(wo)}</span>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        onClick={() => void placeToday(wo.id)}
+                        disabled={busy}
+                      >
+                        Place today 9 AM–11 AM
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+          ) : null}
+
+          {openPastJobs.length > 0 ? (
+            <section className="card border border-error/30 bg-base-100 shadow">
+              <div className="card-body p-4">
+                <h2 className="card-title text-base text-error">
+                  Open past jobs
+                  <span className="badge badge-error">{openPastJobs.length}</span>
+                </h2>
+                <p className="text-xs opacity-60">Scheduled in the past but still open — review for cleanup.</p>
+                <ul className="mt-2 space-y-2">
+                  {openPastJobs.slice(0, 8).map((wo) => (
+                    <li key={wo.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <button type="button" className="link link-hover link-primary" onClick={() => selectWorkOrder(wo.id)}>
+                        {wo.work_order_number}
+                      </button>
+                      <span className="opacity-70">
+                        {wo.scheduled_date?.slice(0, 10)} · {customerName(wo)}
+                      </span>
+                      <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+
+      <ScheduleLegend sticky />
+
       <div className="grid gap-4 xl:grid-cols-2">
-        {/* Month calendar */}
-        <section className="card bg-base-100 shadow">
+        {/* Day calendar — first on mobile */}
+        <section
+          ref={dayCalendarRef}
+          tabIndex={0}
+          onKeyDown={handleDayKeyDown}
+          className="card order-1 bg-base-100 shadow outline-none focus-visible:ring-2 focus-visible:ring-primary xl:order-2"
+          aria-label="Day calendar. Use arrow keys to change day, Home for today."
+        >
           <div className="card-body p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 print:hidden">
+              <h2 className="card-title text-base">Day calendar</h2>
+              <div className="flex flex-wrap items-center gap-1">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm btn-square"
+                  aria-label="Previous day"
+                  onClick={() => setSelectedDay((d) => addDays(d, -1))}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="min-w-[10rem] text-center text-sm font-semibold">
+                  {format(selectedDay, "EEE, MMM d")}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm btn-square"
+                  aria-label="Next day"
+                  onClick={() => setSelectedDay((d) => addDays(d, 1))}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => setSelectedDay(startOfDay(new Date()))}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs gap-1"
+                  onClick={() => window.print()}
+                  aria-label="Print day schedule"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  Print
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs gap-1"
+                  onClick={exportSelectedDayCsv}
+                  aria-label="Export day schedule as CSV"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  CSV
+                </button>
+              </div>
+            </div>
+
+            <div className="hidden print:block">
+              <h2 className="text-lg font-bold">{format(selectedDay, "EEEE, MMMM d, yyyy")}</h2>
+              <p className="text-sm">{dayOrders.length} work order(s)</p>
+            </div>
+
+            <div className="relative overflow-x-auto rounded-box border border-base-300">
+              <div className="relative" style={{ width: dayTimeline.timelineWidth + 8, minWidth: "100%" }}>
+                <div className="relative h-8 border-b border-base-300 bg-base-200/40">
+                  {dayTimeline.hours.map((h) => (
+                    <div
+                      key={h}
+                      className="absolute top-0 border-l border-base-300/70 pl-1 pt-1 text-[10px] opacity-60"
+                      style={{
+                        left: ((h * 60 - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH,
+                        width: HOUR_WIDTH,
+                      }}
+                    >
+                      {minutesToLabel(h * 60)}
+                    </div>
+                  ))}
+                </div>
+
+                <div
+                  ref={timelineDropRef}
+                  className="relative"
+                  style={{
+                    height: dayTimeline.laneCount * rowHeight + 20,
+                    width: dayTimeline.timelineWidth,
+                  }}
+                  onDragOver={(e) => {
+                    if (isManager) e.preventDefault();
+                  }}
+                  onDrop={(e) => void handleTimelineDrop(e)}
+                >
+                  {dayTimeline.hours.map((h) => (
+                    <div
+                      key={h}
+                      className="absolute bottom-0 top-0 border-l border-base-300/50"
+                      style={{ left: ((h * 60 - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH }}
+                    />
+                  ))}
+
+                  {dayTimeline.placed.map(({ wo, lane }) => {
+                    const left =
+                      ((wo.startMinutes - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH + lane * 10;
+                    const width = Math.max(
+                      ((wo.endMinutes - wo.startMinutes) / 60) * HOUR_WIDTH - 4,
+                      HOUR_WIDTH * 0.4,
+                    );
+                    const style = CATEGORY_STYLES[wo.category];
+                    const active = selectedId === wo.id;
+                    return (
+                      <div
+                        key={wo.id}
+                        className={`absolute z-10 ${active ? "z-20" : ""}`}
+                        style={{
+                          left,
+                          width,
+                          top: 8 + lane * rowHeight,
+                          height: rowHeight - 14,
+                        }}
+                        draggable={isManager}
+                        onDragStart={(e) => handleDragStart(e, wo)}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectWorkOrder(wo.id)}
+                          className={`relative h-full w-full overflow-hidden rounded-md border px-2 py-1 text-left text-xs shadow-sm transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${style.block} ${
+                            active ? `ring-2 ring-offset-2 ${style.ring}` : ""
+                          } ${wo.hasConflict ? "ring-2 ring-error ring-offset-1" : ""}`}
+                          aria-label={`Work order ${wo.work_order_number} from ${wo.startLabel} to ${wo.endLabel}`}
+                          aria-pressed={active}
+                        >
+                          {wo.hasConflict ? (
+                            <AlertTriangle
+                              className="absolute right-1 top-1 h-3.5 w-3.5 text-error-content"
+                              aria-label="Schedule conflict"
+                            />
+                          ) : null}
+                          <div className="truncate font-semibold leading-tight">{wo.work_order_number}</div>
+                          <div className="truncate text-[10px] opacity-90">{techName(wo)}</div>
+                          <div className="truncate opacity-90">{customerName(wo)}</div>
+                          <div className="truncate text-[10px] opacity-80">
+                            {wo.startLabel} – {wo.endLabel}
+                          </div>
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {dayOrders.length === 0 ? (
+                    <div className="flex h-full min-h-[4rem] items-center justify-center text-sm opacity-50">
+                      No work orders this day
+                      {categoryFilter !== "all" ? " for this filter" : ""}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Month calendar — second on mobile */}
+        <section className="card order-2 bg-base-100 shadow xl:order-1">
+          <div className="card-body p-4">
+            <div className="mb-3 flex items-center justify-between gap-2 print:hidden">
               <h2 className="card-title text-base">Month calendar</h2>
               <div className="flex items-center gap-1">
                 <button
@@ -1025,11 +1490,22 @@ export default function TechnicianPage() {
                 const inMonth = isSameMonth(day, monthCursor);
                 const isSelectedDay = isSameDay(day, selectedDay);
                 return (
-                  <button
+                  <div
                     key={key}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => openDay(day)}
-                    className={`min-h-[5.5rem] rounded-box border p-1 text-left transition hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openDay(day);
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      if (isManager) e.preventDefault();
+                    }}
+                    onDrop={(e) => void handleMonthCellDrop(e, day)}
+                    className={`min-h-[5.5rem] cursor-pointer rounded-box border p-1 text-left transition hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
                       inMonth ? "border-base-300 bg-base-100" : "border-transparent bg-base-200/40 opacity-50"
                     } ${isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""} ${isToday(day) ? "bg-base-200/80" : ""}`}
                     aria-label={`${format(day, "MMMM d, yyyy")}: ${list.length} work orders. Click to open day details.`}
@@ -1047,155 +1523,40 @@ export default function TechnicianPage() {
                         const style = CATEGORY_STYLES[wo.category];
                         const active = selectedId === wo.id;
                         return (
-                          <span
+                          <button
                             key={wo.id}
-                            className={`truncate rounded px-1 py-0.5 text-[10px] leading-tight ${style.chip} ${
+                            type="button"
+                            className={`truncate rounded px-1 py-0.5 text-left text-[10px] leading-tight ${style.chip} ${
                               active ? `ring-2 ring-offset-1 ${style.ring}` : ""
-                            }`}
-                            title={`${wo.work_order_number} · ${wo.startLabel}`}
+                            } ${wo.hasConflict ? "outline outline-1 outline-error" : ""}`}
+                            title={`${wo.work_order_number} · ${wo.startLabel} · ${techName(wo)}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               selectWorkOrder(wo.id);
-                              openDay(day);
                             }}
                           >
-                            {wo.work_order_number}
-                          </span>
+                            <span className="font-semibold">{wo.work_order_number}</span>
+                            {wo.assigned_technician_id || wo.technician ? (
+                              <span className="opacity-80"> · {techName(wo).split(" ")[0]}</span>
+                            ) : null}
+                          </button>
                         );
                       })}
                       {list.length > 3 ? (
                         <span className="px-1 text-[10px] opacity-60">+{list.length - 3} more</span>
                       ) : null}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
           </div>
         </section>
-
-        {/* Day calendar */}
-        <section className="card bg-base-100 shadow">
-          <div className="card-body p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="card-title text-base">Day calendar</h2>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm btn-square"
-                  aria-label="Previous day"
-                  onClick={() => setSelectedDay((d) => addDays(d, -1))}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="min-w-[10rem] text-center text-sm font-semibold">
-                  {format(selectedDay, "EEE, MMM d")}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm btn-square"
-                  aria-label="Next day"
-                  onClick={() => setSelectedDay((d) => addDays(d, 1))}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-                <button type="button" className="btn btn-ghost btn-xs" onClick={() => setSelectedDay(startOfDay(new Date()))}>
-                  Today
-                </button>
-              </div>
-            </div>
-
-            <div className="relative overflow-x-auto rounded-box border border-base-300">
-              <div className="relative" style={{ width: dayTimeline.timelineWidth + 8, minWidth: "100%" }}>
-                {/* Hour labels along the top (horizontal axis) */}
-                <div className="relative h-8 border-b border-base-300 bg-base-200/40">
-                  {dayTimeline.hours.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute top-0 border-l border-base-300/70 pl-1 pt-1 text-[10px] opacity-60"
-                      style={{
-                        left: ((h * 60 - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH,
-                        width: HOUR_WIDTH,
-                      }}
-                    >
-                      {minutesToLabel(h * 60)}
-                    </div>
-                  ))}
-                </div>
-
-                <div
-                  className="relative"
-                  style={{
-                    height: dayTimeline.laneCount * DAY_ROW_HEIGHT + 20,
-                    width: dayTimeline.timelineWidth,
-                  }}
-                >
-                  {dayTimeline.hours.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute bottom-0 top-0 border-l border-base-300/50"
-                      style={{ left: ((h * 60 - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH }}
-                    />
-                  ))}
-
-                  {dayTimeline.placed.map(({ wo, lane }) => {
-                    const left =
-                      ((wo.startMinutes - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH + lane * 10;
-                    const width = Math.max(
-                      ((wo.endMinutes - wo.startMinutes) / 60) * HOUR_WIDTH - 4,
-                      HOUR_WIDTH * 0.4,
-                    );
-                    const style = CATEGORY_STYLES[wo.category];
-                    const active = selectedId === wo.id;
-                    return (
-                      <div
-                        key={wo.id}
-                        className={`tooltip tooltip-bottom absolute z-10 cursor-pointer before:z-50 before:max-w-xs before:whitespace-pre-line before:text-left before:text-xs ${
-                          active ? "z-20" : ""
-                        }`}
-                        style={{
-                          left,
-                          width,
-                          top: 8 + lane * DAY_ROW_HEIGHT,
-                          height: DAY_ROW_HEIGHT - 14,
-                        }}
-                        data-tip={`${wo.work_order_number}\n${wo.startLabel} – ${wo.endLabel}\nTech: ${techName(wo)}\nCustomer: ${customerName(wo)}\n${CATEGORY_STYLES[wo.category].label}`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => selectWorkOrder(wo.id)}
-                          className={`h-full w-full overflow-hidden rounded-md border px-2 py-1 text-left text-xs shadow-sm transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${style.block} ${
-                            active ? `ring-2 ring-offset-2 ${style.ring}` : ""
-                          }`}
-                          aria-label={`Work order ${wo.work_order_number} from ${wo.startLabel} to ${wo.endLabel}`}
-                          aria-pressed={active}
-                        >
-                          <div className="truncate font-semibold leading-tight">{wo.work_order_number}</div>
-                          <div className="truncate opacity-90">{customerName(wo)}</div>
-                          <div className="truncate text-[10px] opacity-80">
-                            {wo.startLabel} – {wo.endLabel}
-                          </div>
-                        </button>
-                      </div>
-                    );
-                  })}
-
-                  {dayOrders.length === 0 ? (
-                    <div className="flex h-full min-h-[4rem] items-center justify-center text-sm opacity-50">
-                      No work orders this day
-                      {categoryFilter !== "all" ? " for this filter" : ""}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
       </div>
 
-      {/* Day detail panel (from month click) */}
+      {/* Day detail modal */}
       {dayPanelOpen ? (
-        <dialog className="modal modal-open">
+        <dialog className="modal modal-open print:hidden">
           <div className="modal-box max-w-lg">
             <h3 className="text-lg font-bold">{format(selectedDay, "EEEE, MMMM d, yyyy")}</h3>
             <p className="text-sm opacity-70">
@@ -1222,25 +1583,26 @@ export default function TechnicianPage() {
                         >
                           {wo.work_order_number}
                         </button>
-                        <span className={`rounded-full px-2 py-0.5 text-xs ${style.chip}`}>{style.label}</span>
+                        <div className="flex items-center gap-1">
+                          {wo.hasConflict ? (
+                            <span className="badge badge-error badge-xs gap-0.5">
+                              <AlertTriangle className="h-3 w-3" aria-hidden />
+                              Conflict
+                            </span>
+                          ) : null}
+                          <span className={`rounded-full px-2 py-0.5 text-xs ${style.chip}`}>{style.label}</span>
+                        </div>
                       </div>
                       <dl className="mt-2 grid gap-1 text-sm">
                         <div>
                           <dt className="inline opacity-60">Time: </dt>
                           <dd className="inline">
                             {wo.startLabel} – {wo.endLabel}
-                            {!wo.scheduled_start_time ? (
-                              <span className="ml-1 text-xs opacity-50">(estimated)</span>
-                            ) : null}
                           </dd>
                         </div>
                         <div>
                           <dt className="inline opacity-60">Technician: </dt>
-                          <dd className="inline">
-                            <Link href="/technician" className="link link-hover">
-                              {techName(wo)}
-                            </Link>
-                          </dd>
+                          <dd className="inline">{techName(wo)}</dd>
                         </div>
                         <div>
                           <dt className="inline opacity-60">Customer: </dt>
@@ -1259,10 +1621,16 @@ export default function TechnicianPage() {
                         <Link href={`/work-orders/${wo.id}`} className="btn btn-ghost btn-xs">
                           Open work order
                         </Link>
-                        {customerId ? (
-                          <Link href={`/customers/${customerId}`} className="btn btn-ghost btn-xs">
-                            Open customer
-                          </Link>
+                        {isManager && wo.scheduled_date ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs gap-1"
+                            onClick={() => void cloneNextWeek(wo)}
+                            disabled={busy}
+                          >
+                            <Copy className="h-3 w-3" />
+                            Clone next week
+                          </button>
                         ) : null}
                       </div>
                     </li>
@@ -1285,7 +1653,7 @@ export default function TechnicianPage() {
       ) : null}
 
       {/* Job workspace */}
-      <section className="space-y-4">
+      <section className="space-y-4 print:hidden">
         {!selected ? (
           <EmptyState
             title="Select a work order"
@@ -1320,6 +1688,12 @@ export default function TechnicianPage() {
                     <span className={`rounded-full px-2 py-0.5 text-xs ${CATEGORY_STYLES[selected.category].chip}`}>
                       {CATEGORY_STYLES[selected.category].label}
                     </span>
+                    {selected.hasConflict ? (
+                      <span className="badge badge-error gap-1">
+                        <AlertTriangle className="h-3 w-3" aria-hidden />
+                        Conflict
+                      </span>
+                    ) : null}
                     <StatusBadge label={selected.status} tone={statusTone(selected.status)} />
                     {selected.priority === "Critical" || selected.work_order_type === "Emergency Repair" ? (
                       <StatusBadge label="URGENT" tone="critical" />
@@ -1343,6 +1717,17 @@ export default function TechnicianPage() {
                   <Link href={`/work-orders/${selected.id}`} className="btn btn-ghost btn-sm">
                     Full Detail
                   </Link>
+                  {isManager && selected.scheduled_date ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm gap-1"
+                      onClick={() => void cloneNextWeek(selected)}
+                      disabled={busy}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      Clone next week
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1385,7 +1770,7 @@ export default function TechnicianPage() {
                         <option value="">Unassigned</option>
                         {technicians.map((t) => (
                           <option key={t.id} value={t.id}>
-                            {t.full_name || t.email}
+                            {profileLabel(t)}
                           </option>
                         ))}
                       </select>
@@ -1424,10 +1809,19 @@ export default function TechnicianPage() {
                         });
                       }}
                     />
-                    <p className="text-xs opacity-60 sm:col-span-2">
-                      Pick hour, minutes, and AM/PM. Values are stored in 24-hour time and shown on the calendars with
-                      matching AM/PM labels (e.g. 2:00 PM → mid-afternoon on the day timeline).
-                    </p>
+                    <div className="flex flex-wrap gap-2 sm:col-span-2">
+                      <span className="text-xs font-semibold opacity-60 self-center">Duration presets:</span>
+                      {DURATION_PRESETS_MIN.map((min) => (
+                        <button
+                          key={min}
+                          type="button"
+                          className="btn btn-outline btn-xs"
+                          onClick={() => applyDurationPreset(min)}
+                        >
+                          {min < 60 ? `${min}m` : `${min / 60}h`}
+                        </button>
+                      ))}
+                    </div>
                     <div className="flex items-end sm:col-span-2">
                       <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>
                         {busy ? "Saving…" : "Save schedule & assignment"}
@@ -1502,7 +1896,25 @@ export default function TechnicianPage() {
 
             <div className="card bg-base-100 shadow">
               <div className="card-body">
-                <h3 className="font-semibold">Parts Used</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-semibold">Parts Used</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs opacity-60">{inventory.length} parts available</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => void loadInventory()}
+                    >
+                      Refresh list
+                    </button>
+                    <Link href="/parts" className="btn btn-ghost btn-xs">
+                      Open Parts tab
+                    </Link>
+                  </div>
+                </div>
+                {inventoryError ? (
+                  <div className="alert alert-error mt-2 text-sm">{inventoryError}</div>
+                ) : null}
                 <form onSubmit={addPart} className="mt-2 grid gap-3 sm:grid-cols-2">
                   <FormRow label="Part">
                     <select
@@ -1510,11 +1922,15 @@ export default function TechnicianPage() {
                       value={partForm.part_id}
                       onChange={(e) => setPartForm({ ...partForm, part_id: e.target.value })}
                       required
+                      disabled={inventory.length === 0}
                     >
-                      <option value="">Select…</option>
+                      <option value="">
+                        {inventory.length === 0 ? "No parts loaded — refresh or open Parts tab" : "Select…"}
+                      </option>
                       {inventory.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.part_number} — {p.name} ({p.quantity_on_hand})
+                          {p.part_number} — {p.name} (qty {p.quantity_on_hand}
+                          {p.is_active === false ? ", inactive" : ""})
                         </option>
                       ))}
                     </select>
@@ -1528,12 +1944,25 @@ export default function TechnicianPage() {
                       onChange={(e) => setPartForm({ ...partForm, quantity_used: e.target.value })}
                     />
                   </FormRow>
-                  <div className="flex items-end">
-                    <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>
+                  <div className="flex items-end gap-2">
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-sm"
+                      disabled={busy || inventory.length === 0}
+                    >
                       Add Part
                     </button>
                   </div>
                 </form>
+                {inventory.length === 0 && !inventoryError ? (
+                  <p className="mt-2 text-sm opacity-70">
+                    No parts found. Add stock on the{" "}
+                    <Link href="/parts" className="link link-primary">
+                      Parts
+                    </Link>{" "}
+                    tab, then click Refresh list.
+                  </p>
+                ) : null}
                 {parts.length > 0 ? (
                   <table className="table table-sm mt-4">
                     <thead>
