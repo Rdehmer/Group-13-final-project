@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
-import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { EmptyState, StatusBadge } from "@/components/ui";
+import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
+import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { formatMoney } from "@/lib/calculations";
-import type { Part } from "@/lib/types";
+import type { Part, Profile, PurchaseOrder, TruckInventory, WorkOrder } from "@/lib/types";
 
 type PartForm = {
   part_number: string;
@@ -29,6 +31,10 @@ type SortKey =
 
 type SortDirection = "asc" | "desc";
 
+type TruckStockRow = TruckInventory & { parts?: Part };
+type PurchaseOrderRow = PurchaseOrder & { parts?: Pick<Part, "part_number" | "name"> };
+type JobOption = Pick<WorkOrder, "id" | "work_order_number" | "problem_description">;
+
 const EMPTY_FORM: PartForm = {
   part_number: "",
   name: "",
@@ -50,7 +56,14 @@ function isLowStock(part: Part) {
 
 export default function PartsPage() {
   const supabase = createClient();
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [parts, setParts] = useState<Part[]>([]);
+  const [truckStock, setTruckStock] = useState<TruckStockRow[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
+  const [jobs, setJobs] = useState<JobOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showPurchaseOrder, setShowPurchaseOrder] = useState(false);
+  const [showEmergencyPurchase, setShowEmergencyPurchase] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingPart, setEditingPart] = useState<Part | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,9 +72,55 @@ export default function PartsPage() {
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection } | null>(null);
   const [form, setForm] = useState<PartForm>(EMPTY_FORM);
 
+  async function loadTechnicianData(technicianId: string) {
+    const [{ data: stock, error: stockError }, { data: requests }, { data: assignedJobs }] =
+      await Promise.all([
+        supabase
+          .from("truck_inventory")
+          .select("*, parts(*)")
+          .eq("technician_id", technicianId)
+          .gt("quantity_on_hand", 0)
+          .order("quantity_on_hand"),
+        supabase
+          .from("purchase_orders")
+          .select("*, parts(part_number, name)")
+          .eq("technician_id", technicianId)
+          .neq("status", "fulfilled")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("work_orders")
+          .select("id, work_order_number, problem_description")
+          .eq("assigned_technician_id", technicianId)
+          .neq("status", "Canceled")
+          .order("scheduled_date", { ascending: false }),
+      ]);
+
+    if (stockError) setError(stockError.message);
+    setTruckStock((stock as TruckStockRow[]) ?? []);
+    setPurchaseOrders((requests as PurchaseOrderRow[]) ?? []);
+    setJobs((assignedJobs as JobOption[]) ?? []);
+  }
+
   async function load() {
-    const { data } = await supabase.from("parts").select("*").order("name");
+    setLoading(true);
+    setError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    const [{ data: currentProfile }, { data }] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", user.id).single(),
+      supabase.from("parts").select("*").order("name"),
+    ]);
+    const loadedProfile = currentProfile as Profile | null;
+    setProfile(loadedProfile);
     setParts((data as Part[]) ?? []);
+    if (loadedProfile?.role === "technician") {
+      await loadTechnicianData(loadedProfile.id);
+    }
+    setLoading(false);
   }
 
   useEffect(() => { load(); }, []);
@@ -215,6 +274,164 @@ export default function PartsPage() {
     { label: "Price", key: "standard_customer_price" },
     { label: "Status", key: "status" },
   ];
+
+  if (loading) {
+    return <div className="p-8 text-center opacity-60">Loading inventory…</div>;
+  }
+
+  if (!profile) {
+    return <EmptyState title="Inventory unavailable" description="Your user profile could not be loaded." />;
+  }
+
+  if (profile?.role === "technician") {
+    return (
+      <div>
+        <PageHeader
+          title="My truck inventory"
+          description="Parts currently on your truck"
+          actions={
+            <>
+              <button
+                type="button"
+                className="btn btn-primary min-h-12"
+                onClick={() => {
+                  setSuccess(null);
+                  setShowPurchaseOrder(true);
+                }}
+              >
+                Request purchase order
+              </button>
+              <button
+                type="button"
+                className="btn btn-warning min-h-12"
+                onClick={() => {
+                  setSuccess(null);
+                  setShowEmergencyPurchase(true);
+                }}
+              >
+                I bought a part today
+              </button>
+            </>
+          }
+        />
+
+        {success ? (
+          <div role="status" className="alert alert-success mb-4">
+            <span>{success}</span>
+          </div>
+        ) : null}
+        {error ? (
+          <div role="alert" className="alert alert-error mb-4">
+            <span>{error}</span>
+          </div>
+        ) : null}
+
+        <div className="card bg-base-100 shadow">
+          <div className="card-body p-0">
+            {truckStock.length === 0 ? (
+              <div className="p-6">
+                <EmptyState
+                  title="No parts currently on your truck"
+                  description="Request a purchase order for planned restocking, or log an emergency purchase made today."
+                />
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Part #</th>
+                      <th>Name</th>
+                      <th>Qty on truck</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {truckStock.map((stock) => {
+                      const quantity = Number(stock.quantity_on_hand);
+                      const typical = Number(stock.typical_job_quantity);
+                      const status = quantity === 0
+                        ? { label: "Out", tone: "error" as const }
+                        : quantity <= typical
+                          ? { label: "Low", tone: "warning" as const }
+                          : { label: "Sufficient", tone: "success" as const };
+                      return (
+                        <tr key={`${stock.technician_id}-${stock.part_id}`}>
+                          <td>{stock.parts?.part_number ?? "—"}</td>
+                          <td className="font-medium">{stock.parts?.name ?? "Unknown part"}</td>
+                          <td className="text-lg font-semibold">{quantity}</td>
+                          <td><StatusBadge label={status.label} tone={status.tone} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card mt-5 bg-base-100 shadow">
+          <div className="card-body">
+            <h2 className="card-title text-lg">Pending requests</h2>
+            {purchaseOrders.length === 0 ? (
+              <p className="text-sm opacity-60">No open purchase-order requests.</p>
+            ) : (
+              <ul className="space-y-3">
+                {purchaseOrders.map((request) => (
+                  <li
+                    key={request.id}
+                    className="flex flex-col gap-2 rounded-box bg-base-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <p className="font-semibold">
+                        {request.parts?.part_number ?? "Part"} — {request.parts?.name ?? "Catalog item"}
+                      </p>
+                      <p className="text-sm opacity-70">
+                        Qty {request.quantity_requested}
+                        {request.note ? ` · ${request.note}` : ""}
+                      </p>
+                    </div>
+                    <StatusBadge
+                      label={request.status}
+                      tone={request.status === "approved" ? "info" : "warning"}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {showPurchaseOrder ? (
+          <PurchaseOrderRequest
+            technicianId={profile.id}
+            parts={parts.filter((part) => part.is_active)}
+            onClose={() => setShowPurchaseOrder(false)}
+            onSubmitted={async () => {
+              setShowPurchaseOrder(false);
+              setSuccess("Purchase-order request submitted");
+              await loadTechnicianData(profile.id);
+            }}
+          />
+        ) : null}
+
+        {showEmergencyPurchase ? (
+          <EmergencyPurchaseLog
+            technicianId={profile.id}
+            parts={parts.filter((part) => part.is_active)}
+            jobs={jobs}
+            onClose={() => setShowEmergencyPurchase(false)}
+            onSubmitted={async () => {
+              setShowEmergencyPurchase(false);
+              setSuccess("Emergency purchase logged and truck inventory updated");
+              await loadTechnicianData(profile.id);
+            }}
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div>

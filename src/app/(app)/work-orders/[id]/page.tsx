@@ -8,7 +8,8 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
-import type { Profile, WorkOrder } from "@/lib/types";
+import { formatMoney } from "@/lib/calculations";
+import type { EmergencyPurchase, Profile, WorkOrder } from "@/lib/types";
 import {
   WO_STATUSES,
   scheduleFieldsForStatusChange,
@@ -25,23 +26,30 @@ export default function WorkOrderDetailPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [managerNotes, setManagerNotes] = useState("");
   const [workPerformed, setWorkPerformed] = useState("");
+  const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchase[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const [{ data }, { data: { user } }] = await Promise.all([
+    const [{ data }, { data: { user } }, { data: purchases }] = await Promise.all([
       supabase
         .from("work_orders")
         .select("*, customers(id, name), equipment(name)")
         .eq("id", id)
         .single(),
       supabase.auth.getUser(),
+      supabase
+        .from("emergency_purchases")
+        .select("*")
+        .eq("job_id", id)
+        .order("purchased_at", { ascending: false }),
     ]);
     const w = data as typeof wo;
     setWo(w);
     setManagerNotes(w?.manager_notes ?? "");
     setWorkPerformed(w?.work_performed ?? "");
+    setEmergencyPurchases((purchases as EmergencyPurchase[]) ?? []);
     if (user) {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -412,6 +420,41 @@ export default function WorkOrderDetailPage() {
           </div>
         </div>
       </div>
+
+      {emergencyPurchases.length > 0 ? (
+        <div className="card mt-4 bg-base-100 shadow">
+          <div className="card-body">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="card-title text-base">Emergency purchase reconciliation</h2>
+                <p className="text-sm opacity-70">Out-of-pocket parts logged by the assigned technician.</p>
+              </div>
+              <p className="text-lg font-bold">
+                {formatMoney(emergencyPurchases.reduce((total, purchase) => total + Number(purchase.amount_paid), 0))}
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="table table-sm">
+                <thead>
+                  <tr><th>Part</th><th>Qty</th><th>Store</th><th>Paid</th><th>Status</th><th>Receipt</th></tr>
+                </thead>
+                <tbody>
+                  {emergencyPurchases.map((purchase) => (
+                    <tr key={purchase.id}>
+                      <td>{purchase.part_name}</td>
+                      <td>{purchase.quantity}</td>
+                      <td>{purchase.store_name}</td>
+                      <td>{formatMoney(purchase.amount_paid)}</td>
+                      <td><StatusBadge label={purchase.status} tone={purchase.status === "reimbursed" ? "success" : "warning"} /></td>
+                      <td>On file</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-4">
         <ActivityFeed recordType="work_order" recordId={id} />
