@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -14,6 +15,9 @@ import type { Invoice, WorkOrder } from "@/lib/types";
  */
 export default function BillingPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const highlightInvoice = searchParams.get("invoice");
+  const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const [invoices, setInvoices] = useState<(Invoice & { customers?: { name: string } })[]>([]);
   const [completedWo, setCompletedWo] = useState<(WorkOrder & { customers?: { name: string } })[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -34,6 +38,11 @@ export default function BillingPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!highlightInvoice || invoices.length === 0) return;
+    highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightInvoice, invoices]);
 
   async function createInvoice(e: React.FormEvent) {
     e.preventDefault();
@@ -127,7 +136,15 @@ export default function BillingPage() {
                 <thead><tr><th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Balance</th><th>Status</th></tr></thead>
                 <tbody>
                   {invoices.map((inv) => (
-                    <tr key={inv.id}>
+                    <tr
+                      key={inv.id}
+                      ref={inv.invoice_number === highlightInvoice ? highlightRef : undefined}
+                      className={
+                        inv.invoice_number === highlightInvoice
+                          ? "bg-primary/10 ring-1 ring-inset ring-primary/40"
+                          : undefined
+                      }
+                    >
                       <td className="font-medium">{inv.invoice_number}</td>
                       <td>{inv.customers?.name ?? "—"}</td>
                       <td>{inv.invoice_date}</td>

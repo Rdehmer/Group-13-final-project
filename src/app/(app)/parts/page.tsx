@@ -1,19 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
-import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { EmptyState, StatusBadge } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
-import type { Part } from "@/lib/types";
+import type { Part, Profile } from "@/lib/types";
 
 export default function PartsPage() {
   const supabase = createClient();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [parts, setParts] = useState<Part[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,15 +29,25 @@ export default function PartsPage() {
     standard_customer_price: "0",
   });
 
+  const isManager = profile?.role === "service_manager";
   const filter = searchParams.get("filter");
   const focusPartId = searchParams.get("part");
 
   async function load() {
-    const { data } = await supabase.from("parts").select("*").order("name");
+    const [{ data }, { data: { user } }] = await Promise.all([
+      supabase.from("parts").select("*").order("name"),
+      supabase.auth.getUser(),
+    ]);
     setParts((data as Part[]) ?? []);
+    if (user) {
+      const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      setProfile(p as Profile);
+    }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const lowStock = parts.filter((p) => p.is_active && p.quantity_on_hand <= p.reorder_level);
 
@@ -59,7 +71,9 @@ export default function PartsPage() {
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     const payload = {
       ...form,
       quantity_on_hand: Number(form.quantity_on_hand),
@@ -68,17 +82,32 @@ export default function PartsPage() {
       standard_customer_price: Number(form.standard_customer_price),
     };
     const { data, error: insertError } = await supabase.from("parts").insert(payload).select().single();
-    if (insertError) { setError(insertError.message); return; }
-    await logActivity(supabase, { userId: user?.id ?? null, action: "created", recordType: "part", recordId: data.id, newValue: form.name });
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "created",
+      recordType: "part",
+      recordId: data.id,
+      newValue: form.name,
+    });
     setShowForm(false);
     load();
   }
 
   return (
     <div>
-      <PageHeader title="Parts Inventory" description="Track stock levels and pricing" actions={
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>Add Part</button>
-      } />
+      <PageHeader
+        title="Parts Inventory"
+        description="Track stock levels and pricing"
+        actions={
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
+            Add Part
+          </button>
+        }
+      />
 
       {lowStock.length > 0 && filter !== "low-stock" ? (
         <div role="alert" className="alert alert-warning mb-4">
@@ -102,20 +131,82 @@ export default function PartsPage() {
             <h3 className="text-lg font-bold">New Part</h3>
             {error ? <div className="alert alert-error mt-3 text-sm">{error}</div> : null}
             <form onSubmit={onCreate} className="mt-4 space-y-3">
-              <FormRow label="Part #" required><input className="input input-bordered w-full" value={form.part_number} onChange={(e) => setForm({ ...form, part_number: e.target.value })} required /></FormRow>
-              <FormRow label="Name" required><input className="input input-bordered w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></FormRow>
-              <FormRow label="Category"><input className="input input-bordered w-full" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></FormRow>
-              <FormRow label="Qty"><input type="number" min="0" className="input input-bordered w-full" value={form.quantity_on_hand} onChange={(e) => setForm({ ...form, quantity_on_hand: e.target.value })} /></FormRow>
-              <FormRow label="Reorder"><input type="number" min="0" className="input input-bordered w-full" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value })} /></FormRow>
-              <FormRow label="Unit cost"><input type="number" min="0" step="0.01" className="input input-bordered w-full" value={form.unit_cost} onChange={(e) => setForm({ ...form, unit_cost: e.target.value })} /></FormRow>
-              <FormRow label="Price"><input type="number" min="0" step="0.01" className="input input-bordered w-full" value={form.standard_customer_price} onChange={(e) => setForm({ ...form, standard_customer_price: e.target.value })} /></FormRow>
+              <FormRow label="Part #" required>
+                <input
+                  className="input input-bordered w-full"
+                  value={form.part_number}
+                  onChange={(e) => setForm({ ...form, part_number: e.target.value })}
+                  required
+                />
+              </FormRow>
+              <FormRow label="Name" required>
+                <input
+                  className="input input-bordered w-full"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  required
+                />
+              </FormRow>
+              <FormRow label="Category">
+                <input
+                  className="input input-bordered w-full"
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Qty">
+                <input
+                  type="number"
+                  min="0"
+                  className="input input-bordered w-full"
+                  value={form.quantity_on_hand}
+                  onChange={(e) => setForm({ ...form, quantity_on_hand: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Reorder">
+                <input
+                  type="number"
+                  min="0"
+                  className="input input-bordered w-full"
+                  value={form.reorder_level}
+                  onChange={(e) => setForm({ ...form, reorder_level: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Unit cost">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input-bordered w-full"
+                  value={form.unit_cost}
+                  onChange={(e) => setForm({ ...form, unit_cost: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Price">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input-bordered w-full"
+                  value={form.standard_customer_price}
+                  onChange={(e) => setForm({ ...form, standard_customer_price: e.target.value })}
+                />
+              </FormRow>
               <div className="modal-action">
-                <button type="button" className="btn" onClick={() => setShowForm(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="button" className="btn" onClick={() => setShowForm(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Save
+                </button>
               </div>
             </form>
           </div>
-          <form method="dialog" className="modal-backdrop"><button type="button" onClick={() => setShowForm(false)}>close</button></form>
+          <form method="dialog" className="modal-backdrop">
+            <button type="button" onClick={() => setShowForm(false)}>
+              close
+            </button>
+          </form>
         </dialog>
       ) : null}
 
@@ -142,7 +233,17 @@ export default function PartsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Part #</th><th>Name</th><th>On Hand</th><th>Reorder</th><th>Cost</th><th>Price</th><th>Status</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Part #</th>
+                    <th>Name</th>
+                    <th>On Hand</th>
+                    <th>Reorder</th>
+                    <th>Cost</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {displayedParts.map((p) => {
                     const low = p.quantity_on_hand <= p.reorder_level;
@@ -153,13 +254,43 @@ export default function PartsPage() {
                         id={`part-${p.id}`}
                         className={`${low ? "bg-warning/10" : ""} ${focused ? "ring-2 ring-primary ring-inset" : ""}`}
                       >
-                        <td>{p.part_number}</td>
-                        <td className="font-medium">{p.name}</td>
-                        <td>{p.quantity_on_hand}</td>
-                        <td>{p.reorder_level}</td>
-                        <td>{formatMoney(p.unit_cost)}</td>
-                        <td>{formatMoney(p.standard_customer_price)}</td>
-                        <td>{low ? <StatusBadge label="Low Stock" tone="warning" /> : <StatusBadge label="OK" tone="success" />}</td>
+                        <td className="align-top">
+                          {isManager ? (
+                            <Link
+                              href={`/parts/${p.id}`}
+                              className="link link-primary font-medium"
+                              aria-label={`Open part ${p.part_number}`}
+                            >
+                              {p.part_number}
+                            </Link>
+                          ) : (
+                            p.part_number
+                          )}
+                        </td>
+                        <td className="align-top font-medium break-words">
+                          {isManager ? (
+                            <Link
+                              href={`/parts/${p.id}`}
+                              className="link link-primary"
+                              aria-label={`Open part ${p.name}`}
+                            >
+                              {p.name}
+                            </Link>
+                          ) : (
+                            p.name
+                          )}
+                        </td>
+                        <td className="align-top">{p.quantity_on_hand}</td>
+                        <td className="align-top">{p.reorder_level}</td>
+                        <td className="align-top">{formatMoney(p.unit_cost)}</td>
+                        <td className="align-top">{formatMoney(p.standard_customer_price)}</td>
+                        <td className="align-top">
+                          {low ? (
+                            <StatusBadge label="Low Stock" tone="warning" />
+                          ) : (
+                            <StatusBadge label="OK" tone="success" />
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
