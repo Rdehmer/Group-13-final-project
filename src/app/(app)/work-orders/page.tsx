@@ -110,6 +110,7 @@ export default function WorkOrdersPage() {
               <FormRow label="Type">
                 <select className="select select-bordered w-full" value={form.work_order_type} onChange={(e) => setForm({ ...form, work_order_type: e.target.value })}>
                   <option>Preventive Maintenance</option>
+                  <option>Repair</option>
                   <option>Emergency Repair</option>
                   <option>Inspection</option>
                   <option>Warranty Repair</option>
