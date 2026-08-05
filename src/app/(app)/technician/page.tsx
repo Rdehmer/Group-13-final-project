@@ -145,6 +145,7 @@ export default function TechnicianPage() {
       description: awrForm.description,
       estimated_additional_charge: Number(awrForm.estimated_additional_charge),
       requested_by: profile.id,
+      approval_status: "Pending",
     });
     setAwrForm({ description: "", estimated_additional_charge: "0" });
     await loadDetail(selectedId);
@@ -162,10 +163,12 @@ export default function TechnicianPage() {
             <ul className="menu menu-sm rounded-box bg-base-200 p-1">
               {items.map((wo) => (
                 <li key={wo.id}>
-                  <button type="button" className={selectedId === wo.id ? "active" : ""} onClick={() => setSelectedId(wo.id)}>
-                    <span>{wo.work_order_number}</span>
-                    <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
-                  </button>
+                    <button type="button" className={selectedId === wo.id ? "active" : ""} onClick={() => setSelectedId(wo.id)}>
+                      <span className="font-medium">{wo.work_order_number}</span>
+                      <span className="text-xs opacity-70">{wo.customers?.name}</span>
+                      <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
+                      <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+                    </button>
                 </li>
               ))}
             </ul>
@@ -177,7 +180,7 @@ export default function TechnicianPage() {
 
   return (
     <div>
-      <PageHeader title="Technician Schedule" description="Today's jobs, labor entry, and parts" />
+      <PageHeader title="Technician Schedule" description="Today's jobs — arrive, labor, parts, and submit for review" />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4">
@@ -188,7 +191,7 @@ export default function TechnicianPage() {
 
         <div className="lg:col-span-2 space-y-4">
           {!selected ? (
-            <EmptyState title="Select a work order" description="Choose a job from the schedule to log time and parts." />
+            <EmptyState title="Select a job" description="Choose a job from the schedule to log time and parts." />
           ) : (
             <>
               <div className="card bg-base-100 shadow">
@@ -211,7 +214,10 @@ export default function TechnicianPage() {
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => woAction("start")} disabled={busy}>Start Work</button>
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => woAction("pause")} disabled={busy}>Pause</button>
                     <button type="button" className="btn btn-primary btn-sm" onClick={() => woAction("ready")} disabled={busy}>Ready for Review</button>
-                    <Link href={`/work-orders/${selected.id}`} className="btn btn-ghost btn-sm">Full Detail</Link>
+                    <Link href={`/work-orders/${selected.id}`} className="btn btn-ghost btn-sm">Open full job</Link>
+                    {selected.customers ? (
+                      <Link href={`/customers/${selected.customer_id}`} className="btn btn-ghost btn-sm">Customer</Link>
+                    ) : null}
                   </div>
                 </div>
               </div>

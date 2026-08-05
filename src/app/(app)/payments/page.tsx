@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -14,6 +15,8 @@ import type { Invoice, Payment } from "@/lib/types";
  */
 export default function PaymentsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const preselectedInvoice = searchParams.get("invoice");
   const [invoices, setInvoices] = useState<(Invoice & { customers?: { name: string } })[]>([]);
   const [payments, setPayments] = useState<(Payment & { customers?: { name: string } })[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -26,11 +29,23 @@ export default function PaymentsPage() {
       supabase.from("invoices").select("*, customers(name)").gt("remaining_balance", 0).not("status", "eq", "Canceled"),
       supabase.from("payments").select("*, customers(name)").order("created_at", { ascending: false }).limit(20),
     ]);
-    setInvoices((inv as typeof invoices) ?? []);
+    const openInvoices = (inv as typeof invoices) ?? [];
+    setInvoices(openInvoices);
     setPayments((pay as typeof payments) ?? []);
+    if (preselectedInvoice) {
+      const match = openInvoices.find((i) => i.id === preselectedInvoice);
+      if (match) {
+        setForm((f) => ({
+          ...f,
+          invoice_id: match.id,
+          payment_amount: String(match.remaining_balance),
+        }));
+        setShowForm(true);
+      }
+    }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [preselectedInvoice]);
 
   const today = new Date();
   const aging = { current: 0, d30: 0, d60: 0, d90: 0 };

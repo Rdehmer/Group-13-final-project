@@ -82,14 +82,14 @@ export default async function DashboardPage() {
         description="Operations overview for Ridley Equipment Services"
         actions={
           <Link href="/work-orders" className="btn btn-primary btn-sm">
-            New Work Order
+            Book job
           </Link>
         }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Active Customers" value={customerCount ?? 0} />
-        <StatCard label="Open Work Orders" value={openWoCount ?? 0} hint={`${criticalCount ?? 0} high/critical`} />
+        <StatCard label="Open Jobs" value={openWoCount ?? 0} hint={`${criticalCount ?? 0} high/critical`} />
         <StatCard label="Active Contracts" value={activeContracts} hint={`${expiringSoon.length} expiring soon`} />
         <StatCard label="Open AR" value={formatMoney(arBalance)} danger={arBalance > 0} />
       </div>
@@ -101,15 +101,15 @@ export default async function DashboardPage() {
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <div className="card bg-base-100 shadow">
           <div className="card-body">
-            <h2 className="card-title text-base">Action Required — Work Orders</h2>
+            <h2 className="card-title text-base">Action Required — Jobs</h2>
             {(openWorkOrders ?? []).length === 0 ? (
-              <EmptyState title="No open work orders" description="Create a work order to get started." />
+              <EmptyState title="No open jobs" description="Book a job to get started." />
             ) : (
               <div className="overflow-x-auto">
                 <table className="table table-sm">
                   <thead>
                     <tr>
-                      <th>WO #</th>
+                      <th>Job #</th>
                       <th>Customer</th>
                       <th>Priority</th>
                       <th>Status</th>
