@@ -69,6 +69,7 @@ import {
   DURATION_PRESETS_MIN,
   isOpenPastJob,
 } from "@/lib/technician-schedule";
+import { statusAfterPlacingOnSchedule } from "@/lib/work-order-status";
 
 /**
  * Field execution gap risk when technicians lack a single workspace.
@@ -204,7 +205,8 @@ export default function TechnicianPage() {
   const [scheduleSaved, setScheduleSaved] = useState(false);
   const [scheduleDirty, setScheduleDirty] = useState(false);
 
-  const isManager = profile?.role === "administrator" || profile?.role === "service_manager";
+  const isServiceManager = profile?.role === "service_manager";
+  const isManager = profile?.role === "administrator" || isServiceManager;
   const rowHeight = densityRowHeight(density);
 
   useEffect(() => {
@@ -420,6 +422,7 @@ export default function TechnicianPage() {
   const categoryCounts = useMemo(() => {
     const counts: Record<ScheduleCategory, number> = {
       in_progress: 0,
+      waiting_parts: 0,
       completed: 0,
       overdue: 0,
       upcoming: 0,
@@ -562,10 +565,12 @@ export default function TechnicianPage() {
   function applyLocalScheduleUpdate(
     woId: string,
     patch: {
-      scheduled_date: string;
-      scheduled_start_time: string;
+      scheduled_date?: string | null;
+      scheduled_start_time?: string | null;
       scheduled_end_time?: string;
-      estimated_labor_hours: number;
+      estimated_labor_hours?: number;
+      status?: string;
+      assigned_technician_id?: string | null;
     },
   ) {
     setWorkOrders((prev) =>
@@ -583,9 +588,17 @@ export default function TechnicianPage() {
       assigned_technician_id?: string | null;
     },
   ): Promise<boolean> {
+    const current = workOrders.find((w) => w.id === woId);
+    const nextStatus =
+      isServiceManager &&
+      patch.scheduled_date != null &&
+      String(patch.scheduled_date).trim() !== ""
+        ? statusAfterPlacingOnSchedule(current?.status)
+        : null;
     const payload: Record<string, unknown> = {
       ...patch,
       updated_at: new Date().toISOString(),
+      ...(nextStatus ? { status: nextStatus } : {}),
     };
 
     const { error } = await supabase.from("work_orders").update(payload).eq("id", woId);
@@ -593,7 +606,11 @@ export default function TechnicianPage() {
       const { scheduled_end_time: _, ...fallback } = payload;
       const { error: err2 } = await supabase.from("work_orders").update(fallback).eq("id", woId);
       if (err2) return false;
+      if (nextStatus) applyLocalScheduleUpdate(woId, { status: nextStatus });
       return true;
+    }
+    if (!error && nextStatus) {
+      applyLocalScheduleUpdate(woId, { status: nextStatus });
     }
     return !error;
   }
@@ -740,6 +757,10 @@ export default function TechnicianPage() {
       data: { user },
     } = await supabase.auth.getUser();
 
+    const nextStatus = isServiceManager
+      ? statusAfterPlacingOnSchedule(workOrders.find((w) => w.id === selectedId)?.status)
+      : null;
+
     const payload = {
       scheduled_date: scheduleForm.scheduled_date,
       scheduled_start_time: startTimeDb,
@@ -747,6 +768,7 @@ export default function TechnicianPage() {
       estimated_labor_hours: hours,
       assigned_technician_id: scheduleForm.assigned_technician_id || null,
       updated_at: new Date().toISOString(),
+      ...(nextStatus ? { status: nextStatus } : {}),
     };
 
     const { data: updated, error } = await supabase
@@ -905,7 +927,11 @@ export default function TechnicianPage() {
       problem_description: wo.problem_description,
       requested_service: wo.requested_service,
       estimated_labor_hours: wo.estimated_labor_hours,
-      status: wo.assigned_technician_id ? "Assigned" : "Requested",
+      status: isServiceManager
+        ? "Scheduled"
+        : wo.assigned_technician_id
+          ? "Assigned"
+          : "Requested",
     };
     const { data, error } = await supabase.from("work_orders").insert(insertPayload).select().single();
     if (!error && data) {

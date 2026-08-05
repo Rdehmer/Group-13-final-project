@@ -15,7 +15,7 @@ export type ScheduleWo = WorkOrder & {
   scheduled_end_time?: string | null;
 };
 
-export type ScheduleCategory = "in_progress" | "completed" | "overdue" | "upcoming";
+export type ScheduleCategory = "in_progress" | "waiting_parts" | "completed" | "overdue" | "upcoming";
 
 export type TimedWo = ScheduleWo & {
   startMinutes: number;
@@ -60,10 +60,16 @@ export const CATEGORY_STYLES: Record<
   { chip: string; block: string; ring: string; label: string }
 > = {
   in_progress: {
-    chip: "bg-warning/90 text-warning-content",
-    block: "border-warning bg-warning/80 text-warning-content",
-    ring: "ring-warning",
+    chip: "bg-amber-300 text-amber-950",
+    block: "border-amber-400 bg-amber-300 text-amber-950",
+    ring: "ring-amber-400",
     label: "In Progress",
+  },
+  waiting_parts: {
+    chip: "border border-base-300 bg-white text-base-content",
+    block: "border-base-300 bg-white text-base-content",
+    ring: "ring-base-300",
+    label: "Waiting on Parts",
   },
   completed: {
     chip: "bg-success/90 text-success-content",
@@ -177,15 +183,13 @@ export function getScheduleCategory(wo: ScheduleWo, now = new Date()): ScheduleC
   const status = (wo.status ?? "").toLowerCase();
   if (status.includes("complete") || status === "closed") return "completed";
 
-  if (wo.scheduled_date) {
-    const day = startOfDay(parseISO(wo.scheduled_date));
-    if (isBefore(day, startOfDay(now))) return "completed";
+  if (status.includes("waiting on parts") || status.includes("waiting for parts")) {
+    return "waiting_parts";
   }
 
   if (
     status.includes("progress") ||
     status.includes("ready for review") ||
-    status.includes("waiting") ||
     !!wo.started_at ||
     !!wo.arrival_at
   ) {
@@ -193,6 +197,11 @@ export function getScheduleCategory(wo: ScheduleWo, now = new Date()): ScheduleC
   }
 
   if (status.includes("overdue") || status.includes("past due")) return "overdue";
+
+  // Past-dated open jobs are overdue, not completed — status must still show on Work Orders.
+  if (wo.scheduled_date && isBefore(startOfDay(parseISO(wo.scheduled_date)), startOfDay(now))) {
+    return "overdue";
+  }
 
   if (wo.scheduled_date && isSameDay(startOfDay(parseISO(wo.scheduled_date)), now)) {
     const timed = withDerivedTimesBase(wo);

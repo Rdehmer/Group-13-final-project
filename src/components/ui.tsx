@@ -7,6 +7,10 @@ const TONE: Record<string, string> = {
   info: "badge-info",
   neutral: "badge-ghost",
   critical: "badge-error",
+  /** In Progress — amber yellow, distinct from Daisy warning */
+  progress: "border-amber-400/80 bg-amber-300 text-amber-950",
+  /** Waiting on Parts — white / light */
+  white: "border border-base-300 bg-white text-base-content",
 };
 
 export function StatusBadge({
@@ -29,8 +33,10 @@ export function statusTone(status: string): keyof typeof TONE {
   const s = status.toLowerCase();
   if (["critical", "past due", "disputed", "out of service", "canceled"].some((x) => s.includes(x)))
     return "error";
+  if (s.includes("waiting on parts") || s === "waiting for parts") return "white";
+  if (s.includes("in progress")) return "progress";
   if (
-    ["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue", "needs service"].some((x) =>
+    ["emergency", "high", "pending", "on hold", "low stock", "overdue", "needs service"].some((x) =>
       s.includes(x),
     )
   )

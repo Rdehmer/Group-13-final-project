@@ -9,19 +9,10 @@ import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import type { Profile, WorkOrder } from "@/lib/types";
-
-const WO_STATUSES = [
-  "Requested",
-  "Assigned",
-  "Scheduled",
-  "In Progress",
-  "On Hold",
-  "Waiting for Parts",
-  "Ready for Review",
-  "Completed",
-  "Closed",
-  "Canceled",
-] as const;
+import {
+  WO_STATUSES,
+  scheduleFieldsForStatusChange,
+} from "@/lib/work-order-status";
 
 const PRIORITIES: WorkOrder["priority"][] = ["Low", "Normal", "High", "Critical"];
 
@@ -73,9 +64,20 @@ export default function WorkOrderDetailPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const scheduleExtra = isServiceManager
+      ? scheduleFieldsForStatusChange(
+          status,
+          {
+            scheduled_date: wo.scheduled_date,
+            scheduled_start_time: wo.scheduled_start_time,
+          },
+          todayIso,
+        )
+      : {};
     const { error: updateError } = await supabase
       .from("work_orders")
-      .update({ status, ...extra, updated_at: new Date().toISOString() })
+      .update({ status, ...scheduleExtra, ...extra, updated_at: new Date().toISOString() })
       .eq("id", id);
     if (updateError) {
       setError(updateError.message);
@@ -369,7 +371,7 @@ export default function WorkOrderDetailPage() {
                 <button
                   type="button"
                   className="btn btn-outline btn-sm w-full"
-                  onClick={() => updateStatus("Waiting for Parts")}
+                  onClick={() => updateStatus("Waiting on Parts")}
                   disabled={saving}
                 >
                   Waiting on Parts

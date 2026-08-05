@@ -3,12 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { isBefore, parseISO, startOfDay } from "date-fns";
+import { format, isBefore, parseISO, startOfDay } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Customer, Equipment, Profile, WorkOrder } from "@/lib/types";
+import {
+  WO_STATUSES,
+  scheduleFieldsForStatusChange,
+  statusForNewWorkOrder,
+} from "@/lib/work-order-status";
 
 type WorkOrderRow = WorkOrder & { customers?: { id: string; name: string } | null };
 
@@ -17,19 +22,6 @@ function nextWoNumber() {
 }
 
 const CLOSED = new Set(["Completed", "Closed", "Canceled"]);
-
-const WO_STATUSES = [
-  "Requested",
-  "Assigned",
-  "Scheduled",
-  "In Progress",
-  "On Hold",
-  "Waiting for Parts",
-  "Ready for Review",
-  "Completed",
-  "Closed",
-  "Canceled",
-] as const;
 
 const emptyCustomerForm = {
   name: "",
@@ -339,7 +331,14 @@ export default function WorkOrdersPage() {
       assigned_technician_id: form.assigned_technician_id || null,
       scheduled_date: form.scheduled_date || null,
       problem_description: form.problem_description || null,
-      status: form.assigned_technician_id ? "Assigned" : "Requested",
+      status: isManager
+        ? statusForNewWorkOrder({
+            scheduled_date: form.scheduled_date || null,
+            assigned_technician_id: form.assigned_technician_id || null,
+          })
+        : form.assigned_technician_id
+          ? "Assigned"
+          : "Requested",
     };
     const { data, error: insertError } = await supabase
       .from("work_orders")
@@ -379,20 +378,39 @@ export default function WorkOrdersPage() {
   }
 
   async function updateStatus(workOrderId: string, previous: string, next: string) {
+    if (!isManager) return;
     if (previous === next) return;
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const current = workOrders.find((wo) => wo.id === workOrderId);
+    const todayIso = format(new Date(), "yyyy-MM-dd");
+    const scheduleExtra = scheduleFieldsForStatusChange(
+      next,
+      {
+        scheduled_date: current?.scheduled_date,
+        scheduled_start_time: current?.scheduled_start_time,
+      },
+      todayIso,
+    );
     const { error: updateError } = await supabase
       .from("work_orders")
-      .update({ status: next, updated_at: new Date().toISOString() })
+      .update({ status: next, ...scheduleExtra, updated_at: new Date().toISOString() })
       .eq("id", workOrderId);
     if (updateError) {
       setError(updateError.message);
       return;
     }
     setWorkOrders((prev) =>
-      prev.map((wo) => (wo.id === workOrderId ? { ...wo, status: next } : wo)),
+      prev.map((wo) =>
+        wo.id === workOrderId
+          ? {
+              ...wo,
+              status: next,
+              ...(scheduleExtra as Partial<WorkOrderRow>),
+            }
+          : wo,
+      ),
     );
     await logActivity(supabase, {
       userId: user?.id ?? null,
