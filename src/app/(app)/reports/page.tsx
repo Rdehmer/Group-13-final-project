@@ -22,24 +22,33 @@ import {
   FileSpreadsheet,
   ChevronRight,
   BookOpen,
+  Scale,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import {
+  ACCOUNTING_POLICIES,
   AGING_LABELS,
   REPORT_CATALOG,
   REPORT_NAME,
   arAgingSummary,
-  balanceSheetSummary,
-  cashFlowFromPayments,
-  contractProfitability,
+  balanceSheetGaap,
+  cashFlowStatement,
+  collectionsAnalysis,
+  comparePnl,
+  contractProfitabilityGaap,
+  customerBalanceSummary,
   defaultLast12Months,
   defaultYtdRange,
+  executiveSnapshot,
   exportCsv,
   formatReportMoney,
   formatReportPct,
+  inventoryValuation,
   invoicesInRange,
+  isRecognizedRevenue,
+  jobProfitability,
   jobStatusSummary,
   monthLabel,
   openInvoicesAt,
@@ -47,12 +56,22 @@ import {
   salesByCustomer,
   salesByMonth,
   salesByService,
+  salesTaxReport,
+  technicianLaborReport,
   unbilledJobs,
   type DateRange,
   type InvoiceWithCustomer,
   type ReportId,
+  type TechProfile,
 } from "@/lib/reports";
-import type { Payment, ServiceContract, WorkOrder } from "@/lib/types";
+import type {
+  Part,
+  Payment,
+  ServiceContract,
+  TechnicianLabor,
+  WorkOrder,
+  WorkOrderPart,
+} from "@/lib/types";
 
 type JobRow = WorkOrder & { customers?: { name: string } };
 type ContractRow = ServiceContract & { customers?: { name: string } };
@@ -61,15 +80,14 @@ type PaymentRow = Payment & { customers?: { name: string } };
 const CHART_COLORS = ["#0f766e", "#0369a1", "#b45309", "#be123c", "#4f46e5", "#15803d"];
 
 /**
- * QuickBooks Online–style reporting center for Ridley Equipment Services.
- * This business faces delayed decisions when financials live only in spreadsheets.
- * Reports pull live AR, sales, cash, jobs, and contracts into one run-date filterable hub.
+ * GAAP-oriented financial reporting center for Ridley Equipment Services.
+ * Full suite: financials, collections, job profitability, labor, inventory, tax.
  */
 export default function ReportsPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reportId, setReportId] = useState<ReportId>("pnl");
+  const [reportId, setReportId] = useState<ReportId>("executive");
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRange>(() => defaultYtdRange());
   const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
@@ -77,11 +95,24 @@ export default function ReportsPage() {
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [contracts, setContracts] = useState<ContractRow[]>([]);
   const [jobs, setJobs] = useState<JobRow[]>([]);
+  const [labor, setLabor] = useState<TechnicianLabor[]>([]);
+  const [partsUsed, setPartsUsed] = useState<WorkOrderPart[]>([]);
+  const [parts, setParts] = useState<Part[]>([]);
+  const [profiles, setProfiles] = useState<TechProfile[]>([]);
 
   async function load() {
     setLoading(true);
     setError(null);
-    const [{ data: inv }, { data: pay }, { data: sc }, { data: wo }] = await Promise.all([
+    const [
+      { data: inv, error: e1 },
+      { data: pay, error: e2 },
+      { data: sc, error: e3 },
+      { data: wo, error: e4 },
+      { data: lab, error: e5 },
+      { data: wop, error: e6 },
+      { data: pts, error: e7 },
+      { data: prof, error: e8 },
+    ] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, customers(name), work_orders(work_order_number)")
@@ -89,17 +120,31 @@ export default function ReportsPage() {
       supabase.from("payments").select("*, customers(name)").order("payment_date", { ascending: false }),
       supabase.from("service_contracts").select("*, customers(name)").order("name"),
       supabase.from("work_orders").select("*, customers(name)").order("created_at", { ascending: false }),
+      supabase.from("technician_labor").select("*"),
+      supabase.from("work_order_parts").select("*"),
+      supabase.from("parts").select("*"),
+      supabase.from("profiles").select("id, full_name, email, role"),
     ]);
+
+    const err = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8;
+    if (err) setError(err.message);
+
     setInvoices((inv as InvoiceWithCustomer[]) ?? []);
     setPayments((pay as PaymentRow[]) ?? []);
     setContracts((sc as ContractRow[]) ?? []);
     setJobs((wo as JobRow[]) ?? []);
+    setLabor((lab as TechnicianLabor[]) ?? []);
+    setPartsUsed((wop as WorkOrderPart[]) ?? []);
+    setParts((pts as Part[]) ?? []);
+    setProfiles((prof as TechProfile[]) ?? []);
     setLoading(false);
   }
 
   useEffect(() => {
     load();
   }, []);
+
+  const costs = useMemo(() => ({ labor, partsUsed, jobs }), [labor, partsUsed, jobs]);
 
   const filteredCatalog = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -112,37 +157,72 @@ export default function ReportsPage() {
     })).filter((g) => g.reports.length > 0);
   }, [query]);
 
-  const completedInRange = useMemo(
-    () =>
-      jobs.filter(
-        (j) =>
-          ["Completed", "Closed"].includes(j.status) &&
-          (j.completion_date
-            ? j.completion_date >= range.start && j.completion_date <= range.end
-            : true),
-      ).length,
-    [jobs, range],
-  );
-
-  const pnl = useMemo(
-    () => profitAndLoss(invoices, range, { completedJobsInRange: completedInRange }),
-    [invoices, range, completedInRange],
-  );
+  const pnl = useMemo(() => profitAndLoss(invoices, range, costs), [invoices, range, costs]);
+  const pnlCmp = useMemo(() => comparePnl(invoices, range, costs), [invoices, range, costs]);
   const openAr = useMemo(() => openInvoicesAt(invoices, new Date(asOf + "T12:00:00")), [invoices, asOf]);
   const aging = useMemo(() => arAgingSummary(openAr), [openAr]);
   const byCustomer = useMemo(() => salesByCustomer(invoices, range), [invoices, range]);
   const byMonth = useMemo(() => salesByMonth(invoices, range), [invoices, range]);
   const byService = useMemo(() => salesByService(invoices, range), [invoices, range]);
-  const cash = useMemo(() => cashFlowFromPayments(payments, range), [payments, range]);
-  const sheet = useMemo(() => balanceSheetSummary(invoices, payments, asOf), [invoices, payments, asOf]);
-  const contractsProfit = useMemo(() => contractProfitability(contracts), [contracts]);
+  const cash = useMemo(() => cashFlowStatement(invoices, payments, range), [invoices, payments, range]);
+  const sheet = useMemo(
+    () => balanceSheetGaap(invoices, payments, parts, jobs, costs, asOf),
+    [invoices, payments, parts, jobs, costs, asOf],
+  );
+  const contractsProfit = useMemo(
+    () => contractProfitabilityGaap(contracts, invoices, costs),
+    [contracts, invoices, costs],
+  );
   const jobSummary = useMemo(() => jobStatusSummary(jobs), [jobs]);
-  const unbilled = useMemo(() => unbilledJobs(jobs), [jobs]);
+  const unbilled = useMemo(() => unbilledJobs(jobs, costs), [jobs, costs]);
   const invList = useMemo(() => invoicesInRange(invoices, range), [invoices, range]);
+  const executive = useMemo(
+    () => executiveSnapshot(invoices, payments, parts, jobs, costs, range, asOf),
+    [invoices, payments, parts, jobs, costs, range, asOf],
+  );
+  const collections = useMemo(
+    () => collectionsAnalysis(invoices, payments, range, asOf),
+    [invoices, payments, range, asOf],
+  );
+  const custBalances = useMemo(
+    () => customerBalanceSummary(invoices, payments, range, asOf),
+    [invoices, payments, range, asOf],
+  );
+  const jobProfit = useMemo(
+    () => jobProfitability(invoices, jobs, costs, range),
+    [invoices, jobs, costs, range],
+  );
+  const techLabor = useMemo(
+    () => technicianLaborReport(labor, profiles, range),
+    [labor, profiles, range],
+  );
+  const inventory = useMemo(
+    () => inventoryValuation(parts, partsUsed, range),
+    [parts, partsUsed, range],
+  );
+  const salesTax = useMemo(
+    () => salesTaxReport(invoices, range, asOf),
+    [invoices, range, asOf],
+  );
 
-  const needsAsOf =
-    reportId === "ar_aging" || reportId === "ar_detail" || reportId === "balance_sheet";
-  const needsRange = reportId !== "ar_aging" && reportId !== "ar_detail";
+  const needsAsOf = [
+    "ar_aging",
+    "ar_detail",
+    "balance_sheet",
+    "executive",
+    "customer_balances",
+    "collections",
+    "sales_tax",
+  ].includes(reportId);
+  const needsRange = ![
+    "ar_aging",
+    "ar_detail",
+    "policies",
+    "job_summary",
+    "unbilled",
+    "contract_profit",
+    "balance_sheet",
+  ].includes(reportId);
 
   function printReport() {
     window.print();
@@ -151,21 +231,48 @@ export default function ReportsPage() {
   function exportCurrent() {
     const name = `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${range.start}_${range.end}`;
     switch (reportId) {
+      case "executive":
+        exportCsv(name, ["KPI", "Value"], [
+          ["Service revenue", executive.pnl.serviceRevenue],
+          ["Gross profit", executive.pnl.gross],
+          ["Gross margin", executive.pnl.margin != null ? (executive.pnl.margin * 100).toFixed(1) + "%" : "N/A"],
+          ["Cash collected", executive.periodCash],
+          ["DSO (days)", executive.dso != null ? executive.dso.toFixed(1) : "N/A"],
+          ["AR net", executive.arNet],
+          ["Unbilled contract assets", executive.unbilledValue],
+          ["Inventory", executive.inventory],
+          ["Sales tax payable", executive.taxPayable],
+        ]);
+        break;
       case "pnl":
         exportCsv(name, ["Account", "Amount"], [
-          ["Labor income", pnl.laborIncome],
-          ["Parts income", pnl.partsIncome],
-          ["Recurring", pnl.recurringIncome],
-          ["Additional", pnl.otherIncome],
-          ["Discounts", -pnl.discounts],
-          ["Warranty deductions", -pnl.warranty],
-          ["Total income", pnl.income],
-          ["COGS labor (est.)", pnl.cogsLabor],
-          ["COGS parts (est.)", pnl.cogsParts],
-          ["Total COGS (est.)", pnl.cogs],
+          ["Labor services revenue", pnl.laborIncome],
+          ["Parts revenue", pnl.partsIncome],
+          ["Recurring service revenue", pnl.recurringIncome],
+          ["Additional revenue", pnl.otherIncome],
+          ["Discounts (contra)", -pnl.discounts],
+          ["Warranty deductions (contra)", -pnl.warranty],
+          ["Service revenue (ex-tax)", pnl.serviceRevenue],
+          ["Sales tax (liability; not revenue)", pnl.salesTax],
+          ["COGS — direct labor (actual)", pnl.cogsLabor],
+          ["COGS — parts at cost (actual)", pnl.cogsParts],
+          ["Total cost of services", pnl.cogs],
           ["Gross profit", pnl.gross],
           ["Gross margin", pnl.margin != null ? (pnl.margin * 100).toFixed(1) + "%" : "N/A"],
         ]);
+        break;
+      case "pnl_compare":
+        exportCsv(
+          name,
+          ["Line", "Current", "Prior", "Variance", "% change"],
+          pnlCmp.lines.map((l) => [
+            l.label,
+            l.current,
+            l.previous,
+            l.variance,
+            l.pctChange != null ? (l.pctChange * 100).toFixed(1) + "%" : "N/A",
+          ]),
+        );
         break;
       case "ar_detail":
         exportCsv(
@@ -193,25 +300,71 @@ export default function ReportsPage() {
           ]),
         );
         break;
+      case "customer_balances":
+        exportCsv(
+          name,
+          ["Customer", "Billed", "Collected", "Open balance", "Overdue", "Open invoices"],
+          custBalances.map((r) => [
+            r.name,
+            r.billed,
+            r.collected,
+            r.openBalance,
+            r.overdueBalance,
+            r.openInvoices,
+          ]),
+        );
+        break;
+      case "collections":
+        exportCsv(
+          name,
+          ["Invoice", "Customer", "Due", "Days past", "Balance"],
+          collections.overdue.map((i) => [
+            i.invoice_number,
+            i.customers?.name ?? "",
+            i.due_date,
+            i.daysPast,
+            Number(i.remaining_balance),
+          ]),
+        );
+        break;
       case "sales_customer":
         exportCsv(
           name,
-          ["Customer", "Invoices", "Revenue", "Paid", "Balance"],
-          byCustomer.map((r) => [r.name, r.count, r.revenue, r.paid, r.balance]),
+          ["Customer", "Invoices", "Service revenue", "Tax", "Paid", "Balance"],
+          byCustomer.map((r) => [r.name, r.count, r.revenue, r.tax, r.paid, r.balance]),
         );
         break;
       case "sales_month":
         exportCsv(
           name,
-          ["Month", "Invoices", "Revenue", "Collected"],
-          byMonth.map((r) => [r.month, r.count, r.revenue, r.collected]),
+          ["Month", "Invoices", "Service revenue", "Tax"],
+          byMonth.map((r) => [r.month, r.count, r.revenue, r.tax]),
         );
         break;
       case "sales_service":
         exportCsv(
           name,
-          ["Service", "Amount"],
+          ["Component", "Amount"],
           byService.map((r) => [r.service, r.amount]),
+        );
+        break;
+      case "sales_tax":
+        exportCsv(
+          name,
+          ["Invoice", "Date", "Customer", "Taxable service rev", "Tax", "Balance"],
+          salesTax.invoices.map((i) => [
+            i.invoice_number,
+            i.invoice_date,
+            i.customers?.name ?? "",
+            Number(i.labor_charges) +
+              Number(i.parts_charges) +
+              Number(i.recurring_service_charge) +
+              Number(i.additional_charges) -
+              Number(i.warranty_deductions) -
+              Number(i.discounts),
+            Number(i.tax),
+            Number(i.remaining_balance),
+          ]),
         );
         break;
       case "cash_flow":
@@ -230,38 +383,96 @@ export default function ReportsPage() {
       case "contract_profit":
         exportCsv(
           name,
-          ["Contract", "Customer", "Revenue", "Est. cost", "Profit", "Margin", "Status"],
+          ["Contract", "Customer", "Recognized revenue", "Matched COGS", "Gross profit", "Margin", "Status"],
           contractsProfit.map((r) => [
             r.name,
             r.customerName,
             r.revenue,
-            r.cost,
+            r.cogs,
             r.profit,
             r.margin != null ? (r.margin * 100).toFixed(1) + "%" : "N/A",
             r.status,
           ]),
         );
         break;
+      case "job_profit":
+        exportCsv(
+          name,
+          ["Job", "Customer", "Revenue", "Labor cost", "Parts cost", "COGS", "Profit", "Margin", "Hours"],
+          jobProfit.rows.map((r) => [
+            r.workOrderNumber,
+            r.customerName,
+            r.revenue,
+            r.laborCost,
+            r.partsCost,
+            r.cogs,
+            r.profit,
+            r.margin != null ? (r.margin * 100).toFixed(1) + "%" : "N/A",
+            r.laborHours,
+          ]),
+        );
+        break;
+      case "tech_labor":
+        exportCsv(
+          name,
+          ["Technician", "Reg hrs", "OT hrs", "Total hrs", "Labor cost", "Billable $", "Recovery"],
+          techLabor.rows.map((r) => [
+            r.name,
+            r.regularHours,
+            r.overtimeHours,
+            r.totalHours,
+            r.laborCost,
+            r.billableAmount,
+            r.recovery != null ? r.recovery.toFixed(2) + "x" : "N/A",
+          ]),
+        );
+        break;
+      case "inventory":
+        exportCsv(
+          name,
+          ["Part #", "Name", "Qty", "Unit cost", "Value cost", "Value sell", "Used in range", "Below reorder"],
+          inventory.rows.map((r) => [
+            r.partNumber,
+            r.name,
+            r.qty,
+            r.unitCost,
+            r.valueAtCost,
+            r.valueAtSell,
+            r.usedInRange,
+            r.belowReorder ? "Yes" : "No",
+          ]),
+        );
+        break;
       case "unbilled":
         exportCsv(
           name,
-          ["Job", "Customer", "Completed", "Type"],
+          ["Job", "Customer", "Completed", "Type", "Est. billable", "Direct cost"],
           unbilled.map((j) => [
             j.work_order_number,
             j.customers?.name ?? "",
             j.completion_date ?? "",
             j.work_order_type,
+            j.billableEstimate,
+            j.directCost,
           ]),
         );
         break;
       case "invoice_list":
         exportCsv(
           name,
-          ["Invoice", "Date", "Customer", "Total", "Paid", "Balance", "Status"],
+          ["Invoice", "Date", "Customer", "Recognized", "Service rev", "Tax", "Total", "Paid", "Balance", "Status"],
           invList.map((i) => [
             i.invoice_number,
             i.invoice_date,
             i.customers?.name ?? "",
+            isRecognizedRevenue(i) ? "Yes" : "No",
+            Number(i.labor_charges) +
+              Number(i.parts_charges) +
+              Number(i.recurring_service_charge) +
+              Number(i.additional_charges) -
+              Number(i.warranty_deductions) -
+              Number(i.discounts),
+            Number(i.tax),
             Number(i.invoice_total),
             Number(i.amount_paid),
             Number(i.remaining_balance),
@@ -271,11 +482,16 @@ export default function ReportsPage() {
         break;
       case "balance_sheet":
         exportCsv(name, ["Line", "Amount"], [
-          ["Cash (from recorded payments)", sheet.cash],
-          ["Accounts receivable", sheet.ar],
+          ["Cash (collections through as of)", sheet.cash],
+          ["Accounts receivable, gross", sheet.arGross],
+          ["Allowance for credit losses", -sheet.allowance],
+          ["Accounts receivable, net", sheet.arNet],
+          ["Inventory at cost", sheet.inventory],
+          ["Contract assets (unbilled)", sheet.contractAsset],
           ["Total assets", sheet.totalAssets],
-          ["Liabilities", sheet.liabilities],
-          ["Equity (plug)", sheet.equity],
+          ["Sales tax payable", sheet.salesTaxPayable],
+          ["Total liabilities", sheet.totalLiabilities],
+          ["Equity (assets − liabilities)", sheet.equity],
         ]);
         break;
       case "job_summary":
@@ -294,11 +510,14 @@ export default function ReportsPage() {
     <div className="reports-page">
       <PageHeader
         title="Reports"
-        description="QuickBooks-style financial and operational reports — live from your Ridley data"
+        description="GAAP financials plus collections, job profitability, labor productivity, inventory, and tax — live from Ridley data"
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+            </button>
+            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => setReportId("policies")}>
+              <Scale className="h-4 w-4" /> Policies
             </button>
             <Link href="/billing" className="btn btn-outline btn-sm">
               Billing
@@ -313,7 +532,6 @@ export default function ReportsPage() {
       {error ? <div className="alert alert-error mb-4 text-sm">{error}</div> : null}
 
       <div className="grid gap-4 xl:grid-cols-[16rem_1fr]">
-        {/* Report menu (QBO left rail) */}
         <aside className="print:hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
           <div className="border-b border-base-200 p-3">
             <label className="input input-bordered input-sm flex items-center gap-2">
@@ -367,13 +585,12 @@ export default function ReportsPage() {
           </nav>
         </aside>
 
-        {/* Report viewer */}
         <div className="min-w-0 space-y-4">
           <div className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm print:border-0 print:shadow-none">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-base-content/45">
-                  Ridley Equipment Services
+                  Ridley Equipment Services · U.S. GAAP orientation
                 </p>
                 <h2 className="text-xl font-bold tracking-tight sm:text-2xl">{REPORT_NAME[reportId]}</h2>
                 <p className="mt-1 text-sm opacity-60">
@@ -382,20 +599,27 @@ export default function ReportsPage() {
                       As of <strong>{asOf}</strong>
                     </>
                   ) : null}
-                  {needsRange && reportId !== "balance_sheet" ? (
+                  {needsRange ? (
                     <>
                       {needsAsOf ? " · " : null}
                       {range.start} → {range.end}
                     </>
                   ) : null}
-                  {reportId === "pnl" ? " · Accrual (invoice date)" : null}
-                  {reportId === "cash_flow" ? " · Cash basis (payment date)" : null}
+                  {reportId === "pnl" ? " · Accrual · invoice date · revenue ex-tax" : null}
+                  {reportId === "pnl_compare" ? " · Period comparison" : null}
+                  {reportId === "executive" ? " · KPI snapshot" : null}
+                  {reportId === "collections" ? " · DSO & overdue priority" : null}
+                  {reportId === "job_profit" ? " · Job-level margin" : null}
+                  {reportId === "cash_flow" ? " · Cash · payment date" : null}
+                  {reportId === "balance_sheet" ? " · Accrual position" : null}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 print:hidden">
-                <button type="button" className="btn btn-outline btn-sm gap-1" onClick={exportCurrent}>
-                  <Download className="h-4 w-4" /> Export CSV
-                </button>
+                {reportId !== "policies" ? (
+                  <button type="button" className="btn btn-outline btn-sm gap-1" onClick={exportCurrent}>
+                    <Download className="h-4 w-4" /> Export CSV
+                  </button>
+                ) : null}
                 <button type="button" className="btn btn-outline btn-sm gap-1" onClick={printReport}>
                   <Printer className="h-4 w-4" /> Print
                 </button>
@@ -424,11 +648,7 @@ export default function ReportsPage() {
                     />
                   </label>
                   <div className="flex flex-wrap gap-1 pb-0.5">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => setRange(defaultYtdRange())}
-                    >
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => setRange(defaultYtdRange())}>
                       YTD
                     </button>
                     <button
@@ -471,18 +691,29 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="report-body rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-6 print:border-0 print:p-0 print:shadow-none">
+              {reportId === "executive" ? (
+                <ExecutiveReport data={executive} onOpen={(id) => setReportId(id)} />
+              ) : null}
               {reportId === "pnl" ? <PnLReport pnl={pnl} /> : null}
+              {reportId === "pnl_compare" ? <PnlCompareReport data={pnlCmp} /> : null}
               {reportId === "balance_sheet" ? <BalanceSheetReport sheet={sheet} /> : null}
               {reportId === "ar_aging" ? <ArAgingSummary aging={aging} open={openAr} /> : null}
               {reportId === "ar_detail" ? <ArAgingDetail open={openAr} /> : null}
+              {reportId === "customer_balances" ? <CustomerBalancesReport rows={custBalances} /> : null}
+              {reportId === "collections" ? <CollectionsReport data={collections} /> : null}
               {reportId === "sales_customer" ? <SalesByCustomer rows={byCustomer} /> : null}
               {reportId === "sales_month" ? <SalesByMonth rows={byMonth} /> : null}
               {reportId === "sales_service" ? <SalesByService rows={byService} /> : null}
+              {reportId === "sales_tax" ? <SalesTaxReportView data={salesTax} /> : null}
               {reportId === "cash_flow" ? <CashFlowReport cash={cash} /> : null}
               {reportId === "contract_profit" ? <ContractProfitReport rows={contractsProfit} /> : null}
+              {reportId === "job_profit" ? <JobProfitReport data={jobProfit} /> : null}
               {reportId === "job_summary" ? <JobSummaryReport summary={jobSummary} /> : null}
               {reportId === "unbilled" ? <UnbilledReport rows={unbilled} /> : null}
+              {reportId === "tech_labor" ? <TechLaborReport data={techLabor} /> : null}
+              {reportId === "inventory" ? <InventoryReport data={inventory} /> : null}
               {reportId === "invoice_list" ? <InvoiceListReport rows={invList} /> : null}
+              {reportId === "policies" ? <PoliciesReport /> : null}
             </div>
           )}
         </div>
@@ -527,25 +758,587 @@ function MoneyCell({ n, bold }: { n: number; bold?: boolean }) {
   );
 }
 
+function PolicyNote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex items-start gap-2 text-xs opacity-55">
+      <BookOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+function VarianceCell({ n }: { n: number }) {
+  return (
+    <td
+      className={`text-right tabular-nums ${n > 0.005 ? "text-success" : n < -0.005 ? "text-error" : ""}`}
+    >
+      {n > 0 ? "+" : ""}
+      {formatReportMoney(n)}
+    </td>
+  );
+}
+
+function ExecutiveReport({
+  data,
+  onOpen,
+}: {
+  data: ReturnType<typeof executiveSnapshot>;
+  onOpen: (id: ReportId) => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Service revenue"
+          value={formatReportMoney(data.pnl.serviceRevenue)}
+          hint={
+            data.revChange != null
+              ? `${data.revChange >= 0 ? "▲" : "▼"} ${Math.abs(data.revChange * 100).toFixed(1)}% vs prior period`
+              : "vs prior period N/A"
+          }
+        />
+        <StatCard
+          label="Gross profit"
+          value={formatReportMoney(data.pnl.gross)}
+          hint={`Margin ${formatReportPct(data.pnl.margin)}`}
+        />
+        <StatCard
+          label="Cash collected"
+          value={formatReportMoney(data.periodCash)}
+          hint={
+            data.collectionRate != null
+              ? `Collection ratio ${(data.collectionRate * 100).toFixed(0)}% of billed`
+              : "Payment period cash"
+          }
+        />
+        <StatCard
+          label="Days sales outstanding"
+          value={data.dso != null ? `${data.dso.toFixed(0)} days` : "N/A"}
+          hint={`AR net ${formatReportMoney(data.arNet)}`}
+          danger={data.dso != null && data.dso > 45}
+        />
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Unbilled (contract assets)"
+          value={formatReportMoney(data.unbilledValue)}
+          hint={`${data.unbilledCount} completed jobs`}
+          danger={data.unbilledCount > 0}
+        />
+        <StatCard label="Inventory at cost" value={formatReportMoney(data.inventory)} />
+        <StatCard label="Sales tax payable" value={formatReportMoney(data.taxPayable)} />
+        <StatCard
+          label="Job losses in range"
+          value={data.jobLossCount}
+          hint={`${data.jobCount} billed jobs analyzed`}
+          danger={data.jobLossCount > 0}
+        />
+      </div>
+
+      <section>
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Drill into detail</h3>
+        <div className="flex flex-wrap gap-2 print:hidden">
+          {(
+            [
+              ["pnl", "P&L"],
+              ["pnl_compare", "vs Prior"],
+              ["collections", "Collections"],
+              ["job_profit", "Job profit"],
+              ["unbilled", "Unbilled"],
+              ["sales_tax", "Sales tax"],
+              ["balance_sheet", "Balance sheet"],
+            ] as const
+          ).map(([id, label]) => (
+            <button key={id} type="button" className="btn btn-outline btn-sm" onClick={() => onOpen(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <PolicyNote>
+        Snapshot uses the same measurement bases as the GAAP reports (accrual revenue, matched costs, AR net of
+        allowance). DSO = ending AR ÷ (period credit sales ÷ days in range).
+      </PolicyNote>
+    </div>
+  );
+}
+
+function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatCard
+          label="Current revenue"
+          value={formatReportMoney(data.current.serviceRevenue)}
+          hint={`${data.range.start} → ${data.range.end}`}
+        />
+        <StatCard
+          label="Prior revenue"
+          value={formatReportMoney(data.previous.serviceRevenue)}
+          hint={`${data.prior.start} → ${data.prior.end}`}
+        />
+        <StatCard
+          label="Revenue change"
+          value={
+            data.revenueGrowth != null
+              ? `${data.revenueGrowth >= 0 ? "+" : ""}${(data.revenueGrowth * 100).toFixed(1)}%`
+              : "N/A"
+          }
+          hint={`Margin ${formatReportPct(data.marginCurrent)} vs ${formatReportPct(data.marginPrior)}`}
+        />
+      </div>
+      <ReportTable headers={["Line", "Current", "Prior period", "Variance", "% change"]}>
+        {data.lines.map((l) => (
+          <tr key={l.label} className={l.label === "Gross profit" ? "font-semibold border-t-2" : ""}>
+            <td className={l.label.startsWith("  ") ? "pl-6 opacity-80" : ""}>{l.label.trim()}</td>
+            <MoneyCell n={l.current} />
+            <MoneyCell n={l.previous} />
+            <VarianceCell n={l.variance} />
+            <td className="text-right tabular-nums opacity-70">
+              {l.pctChange != null ? `${(l.pctChange * 100).toFixed(1)}%` : "—"}
+            </td>
+          </tr>
+        ))}
+      </ReportTable>
+      <PolicyNote>
+        Prior period is the same number of days immediately before the current range start. Costs match actual
+        labor and parts on work orders linked to recognized invoices in each window.
+      </PolicyNote>
+    </div>
+  );
+}
+
+function CustomerBalancesReport({ rows }: { rows: ReturnType<typeof customerBalanceSummary> }) {
+  if (rows.length === 0) {
+    return <EmptyState title="No customer activity" description="No open balances or period activity." />;
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatCard label="Customers" value={rows.length} />
+        <StatCard
+          label="Open AR"
+          value={formatReportMoney(rows.reduce((s, r) => s + r.openBalance, 0))}
+        />
+        <StatCard
+          label="Overdue"
+          value={formatReportMoney(rows.reduce((s, r) => s + r.overdueBalance, 0))}
+          danger={rows.some((r) => r.overdueBalance > 0)}
+        />
+      </div>
+      <ReportTable
+        headers={["Customer", "Period billed", "Period collected", "Open balance", "Overdue", "# Open"]}
+      >
+        {rows.map((r) => (
+          <tr key={r.customerId ?? r.name} className={r.overdueBalance > 0 ? "bg-error/5" : ""}>
+            <td>
+              {r.customerId ? (
+                <Link href={`/customers/${r.customerId}`} className="link link-hover font-medium">
+                  {r.name}
+                </Link>
+              ) : (
+                r.name
+              )}
+            </td>
+            <MoneyCell n={r.billed} />
+            <MoneyCell n={r.collected} />
+            <MoneyCell n={r.openBalance} />
+            <MoneyCell n={r.overdueBalance} />
+            <td className="text-right tabular-nums">{r.openInvoices}</td>
+          </tr>
+        ))}
+        <tr className="border-t-2 font-bold">
+          <td>Total</td>
+          <MoneyCell n={rows.reduce((s, r) => s + r.billed, 0)} bold />
+          <MoneyCell n={rows.reduce((s, r) => s + r.collected, 0)} bold />
+          <MoneyCell n={rows.reduce((s, r) => s + r.openBalance, 0)} bold />
+          <MoneyCell n={rows.reduce((s, r) => s + r.overdueBalance, 0)} bold />
+          <td className="text-right tabular-nums">{rows.reduce((s, r) => s + r.openInvoices, 0)}</td>
+        </tr>
+      </ReportTable>
+      <PolicyNote>
+        Open balance is remaining receivable as of the as-of date (recognized invoices only). Period billed /
+        collected use the selected date range.
+      </PolicyNote>
+    </div>
+  );
+}
+
+function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalysis> }) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="DSO"
+          value={data.dso != null ? `${data.dso.toFixed(1)} days` : "N/A"}
+          danger={data.dso != null && data.dso > 45}
+        />
+        <StatCard
+          label="Collection ratio"
+          value={data.collectionRate != null ? `${(data.collectionRate * 100).toFixed(0)}%` : "N/A"}
+          hint="Cash ÷ billed (period)"
+        />
+        <StatCard label="Open AR (gross)" value={formatReportMoney(data.arGross)} />
+        <StatCard
+          label="Avg days past due"
+          value={data.avgDaysPastDue.toFixed(0)}
+          hint={`${data.openCount} open invoices`}
+        />
+      </div>
+
+      <section>
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Top open AR by customer</h3>
+        <ReportTable headers={["Customer", "Open balance", "Invoices", "Max days late"]}>
+          {data.topCustomers.map((c) => (
+            <tr key={c.customerId ?? c.name}>
+              <td>
+                {c.customerId ? (
+                  <Link href={`/customers/${c.customerId}`} className="link link-hover font-medium">
+                    {c.name}
+                  </Link>
+                ) : (
+                  c.name
+                )}
+              </td>
+              <MoneyCell n={c.balance} />
+              <td className="text-right tabular-nums">{c.invoices}</td>
+              <td className={`text-right tabular-nums ${c.maxDays > 60 ? "text-error font-semibold" : ""}`}>
+                {c.maxDays}
+              </td>
+            </tr>
+          ))}
+        </ReportTable>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Priority overdue invoices</h3>
+        {data.overdue.length === 0 ? (
+          <EmptyState title="Nothing past due" description="No open invoices past their due date." />
+        ) : (
+          <ReportTable headers={["Invoice", "Customer", "Due", "Days late", "Balance", "Aging"]}>
+            {data.overdue.map((inv) => (
+              <tr key={inv.id} className={inv.bucket === "d90" ? "bg-error/5" : ""}>
+                <td>
+                  <Link href={`/billing/${inv.id}`} className="link link-primary font-medium">
+                    {inv.invoice_number}
+                  </Link>
+                </td>
+                <td>{inv.customers?.name ?? "—"}</td>
+                <td className="tabular-nums">{inv.due_date}</td>
+                <td className="text-right tabular-nums font-medium">{inv.daysPast}</td>
+                <MoneyCell n={Number(inv.remaining_balance)} />
+                <td>
+                  <StatusBadge
+                    label={AGING_LABELS[inv.bucket]}
+                    tone={inv.bucket === "d90" ? "error" : "warning"}
+                  />
+                </td>
+              </tr>
+            ))}
+          </ReportTable>
+        )}
+      </section>
+      <PolicyNote>
+        DSO approximates how many days of sales sit in AR. Follow up overdue list first for cash acceleration.
+      </PolicyNote>
+    </div>
+  );
+}
+
+function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }) {
+  if (data.rows.length === 0) {
+    return (
+      <EmptyState
+        title="No billed jobs in range"
+        description="Job profitability requires recognized invoices linked to work orders."
+      />
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Jobs" value={data.totals.jobCount} />
+        <StatCard label="Revenue" value={formatReportMoney(data.totals.revenue)} />
+        <StatCard label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
+        <StatCard
+          label="Gross profit"
+          value={formatReportMoney(data.totals.profit)}
+          hint={formatReportPct(data.totals.margin)}
+          danger={data.totals.lossCount > 0}
+        />
+      </div>
+      {data.totals.lossCount > 0 ? (
+        <div className="alert alert-warning text-sm">
+          <span>
+            <strong>{data.totals.lossCount}</strong> job{data.totals.lossCount === 1 ? "" : "s"} with negative
+            gross profit — review labor rates or parts cost vs price.
+          </span>
+        </div>
+      ) : null}
+      <ReportTable
+        headers={["Job", "Customer", "Type", "Revenue", "Labor", "Parts", "Profit", "Margin", "Hrs"]}
+      >
+        {data.rows.map((r) => (
+          <tr key={r.jobId} className={r.profit < 0 ? "bg-error/5" : ""}>
+            <td>
+              <Link href={`/work-orders/${r.jobId}`} className="link link-primary font-medium">
+                {r.workOrderNumber}
+              </Link>
+            </td>
+            <td>
+              {r.customerId ? (
+                <Link href={`/customers/${r.customerId}`} className="link link-hover">
+                  {r.customerName}
+                </Link>
+              ) : (
+                r.customerName
+              )}
+            </td>
+            <td className="text-xs opacity-70">{r.type}</td>
+            <MoneyCell n={r.revenue} />
+            <MoneyCell n={r.laborCost} />
+            <MoneyCell n={r.partsCost} />
+            <MoneyCell n={r.profit} />
+            <td className="text-right tabular-nums">{formatReportPct(r.margin)}</td>
+            <td className="text-right tabular-nums">{r.laborHours.toFixed(1)}</td>
+          </tr>
+        ))}
+        <tr className="border-t-2 font-bold">
+          <td colSpan={3}>Total</td>
+          <MoneyCell n={data.totals.revenue} bold />
+          <td colSpan={2} />
+          <MoneyCell n={data.totals.profit} bold />
+          <td className="text-right tabular-nums">{formatReportPct(data.totals.margin)}</td>
+          <td className="text-right tabular-nums">{data.totals.laborHours.toFixed(1)}</td>
+        </tr>
+      </ReportTable>
+      <PolicyNote>
+        Revenue is recognized service revenue (ex-tax) on linked invoices. COGS is actual technician cost rates
+        and parts unit costs on that work order.
+      </PolicyNote>
+    </div>
+  );
+}
+
+function TechLaborReport({ data }: { data: ReturnType<typeof technicianLaborReport> }) {
+  if (data.rows.length === 0) {
+    return <EmptyState title="No labor in range" description="Technicians need time entries on work dates in range." />;
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Total hours" value={data.totals.totalHours.toFixed(1)} />
+        <StatCard label="Labor cost" value={formatReportMoney(data.totals.laborCost)} />
+        <StatCard label="Billable amount" value={formatReportMoney(data.totals.billableAmount)} />
+        <StatCard
+          label="Cost recovery"
+          value={data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "N/A"}
+          hint="Billable $ ÷ cost $"
+        />
+      </div>
+      <div className="h-56">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data.rows.slice(0, 10)} layout="vertical" margin={{ left: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="oklch(var(--bc) / 0.08)" horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 11 }} />
+            <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Bar dataKey="totalHours" name="Hours" fill="#0f766e" radius={[0, 6, 6, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <ReportTable
+        headers={["Technician", "Reg", "OT", "Total hrs", "Cost", "Billable", "Recovery", "Avg bill rate"]}
+      >
+        {data.rows.map((r) => (
+          <tr key={r.technicianId}>
+            <td className="font-medium">{r.name}</td>
+            <td className="text-right tabular-nums">{r.regularHours.toFixed(1)}</td>
+            <td className="text-right tabular-nums">{r.overtimeHours.toFixed(1)}</td>
+            <td className="text-right tabular-nums font-medium">{r.totalHours.toFixed(1)}</td>
+            <MoneyCell n={r.laborCost} />
+            <MoneyCell n={r.billableAmount} />
+            <td className="text-right tabular-nums">
+              {r.recovery != null ? `${r.recovery.toFixed(2)}×` : "—"}
+            </td>
+            <td className="text-right tabular-nums">{formatReportMoney(r.avgBillRate)}</td>
+          </tr>
+        ))}
+        <tr className="border-t-2 font-bold">
+          <td>Total</td>
+          <td className="text-right tabular-nums">{data.totals.regularHours.toFixed(1)}</td>
+          <td className="text-right tabular-nums">{data.totals.overtimeHours.toFixed(1)}</td>
+          <td className="text-right tabular-nums">{data.totals.totalHours.toFixed(1)}</td>
+          <MoneyCell n={data.totals.laborCost} bold />
+          <MoneyCell n={data.totals.billableAmount} bold />
+          <td className="text-right tabular-nums">
+            {data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "—"}
+          </td>
+          <td />
+        </tr>
+      </ReportTable>
+      <PolicyNote>
+        Billable amount uses customer billing rates on labor lines (potential income). Recovery below 1.0× means
+        list rates do not cover labor cost for that tech in the period.
+      </PolicyNote>
+    </div>
+  );
+}
+
+function InventoryReport({ data }: { data: ReturnType<typeof inventoryValuation> }) {
+  if (data.rows.length === 0) {
+    return <EmptyState title="No parts inventory" description="Add parts in the Parts catalog." />;
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Active SKUs" value={data.totals.sku} />
+        <StatCard label="Value at cost" value={formatReportMoney(data.totals.valueAtCost)} />
+        <StatCard label="Value at list" value={formatReportMoney(data.totals.valueAtSell)} />
+        <StatCard
+          label="Below reorder"
+          value={data.totals.reorderCount}
+          danger={data.totals.reorderCount > 0}
+        />
+      </div>
+      <ReportTable
+        headers={[
+          "Part #",
+          "Name",
+          "On hand",
+          "Reorder",
+          "Unit cost",
+          "At cost",
+          "At list",
+          "Used (range)",
+          "Flag",
+        ]}
+      >
+        {data.rows.map((r) => (
+          <tr key={r.id} className={r.belowReorder ? "bg-warning/10" : ""}>
+            <td className="font-mono text-xs">{r.partNumber}</td>
+            <td>
+              <Link href="/parts" className="link link-hover">
+                {r.name}
+              </Link>
+            </td>
+            <td className="text-right tabular-nums">{r.qty}</td>
+            <td className="text-right tabular-nums opacity-60">{r.reorderLevel}</td>
+            <MoneyCell n={r.unitCost} />
+            <MoneyCell n={r.valueAtCost} />
+            <MoneyCell n={r.valueAtSell} />
+            <td className="text-right tabular-nums">{r.usedInRange}</td>
+            <td>
+              {r.belowReorder ? (
+                <StatusBadge label="Reorder" tone="warning" />
+              ) : (
+                <span className="text-xs opacity-40">—</span>
+              )}
+            </td>
+          </tr>
+        ))}
+        <tr className="border-t-2 font-bold">
+          <td colSpan={5}>Total</td>
+          <MoneyCell n={data.totals.valueAtCost} bold />
+          <MoneyCell n={data.totals.valueAtSell} bold />
+          <td colSpan={2} />
+        </tr>
+      </ReportTable>
+      <PolicyNote>
+        Valuation is quantity on hand × unit cost (inventory asset on the balance sheet). Usage column is
+        work-order consumption in the selected range.
+      </PolicyNote>
+    </div>
+  );
+}
+
+function SalesTaxReportView({ data }: { data: ReturnType<typeof salesTaxReport> }) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Tax billed (period)"
+          value={formatReportMoney(data.taxBilled)}
+          hint={`${data.invoiceCount} invoices`}
+        />
+        <StatCard
+          label="Taxable base"
+          value={formatReportMoney(data.taxableBase)}
+          hint={`Avg effective ${(data.avgRate * 100).toFixed(2)}%`}
+        />
+        <StatCard label="Tax on open AR" value={formatReportMoney(data.taxOnOpen)} />
+        <StatCard
+          label="Remittance estimate"
+          value={formatReportMoney(data.remittanceEstimate)}
+          hint="Open tax + held collected"
+        />
+      </div>
+      {data.byMonth.length > 0 ? (
+        <div className="h-52">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data.byMonth.map((m) => ({ ...m, label: monthLabel(m.month) }))}>
+              <CartesianGrid strokeDasharray="3 3" stroke="oklch(var(--bc) / 0.08)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tickFormatter={(v) => `$${Math.round(v)}`} tick={{ fontSize: 11 }} width={48} />
+              <Tooltip formatter={(v) => formatReportMoney(Number(v))} />
+              <Bar dataKey="tax" name="Sales tax" fill="#b45309" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+      <ReportTable headers={["Month", "Invoices", "Taxable (ex-tax rev)", "Sales tax"]}>
+        {data.byMonth.map((m) => (
+          <tr key={m.month}>
+            <td>{monthLabel(m.month)}</td>
+            <td className="text-right tabular-nums">{m.count}</td>
+            <MoneyCell n={m.taxable} />
+            <MoneyCell n={m.tax} />
+          </tr>
+        ))}
+        <tr className="border-t-2 font-bold">
+          <td>Total</td>
+          <td className="text-right tabular-nums">{data.invoiceCount}</td>
+          <MoneyCell n={data.taxableBase} bold />
+          <MoneyCell n={data.taxBilled} bold />
+        </tr>
+      </ReportTable>
+      <PolicyNote>
+        {ACCOUNTING_POLICIES.taxLiability} Remittance estimate supports filing prep; remittances are not recorded
+        in-app.
+      </PolicyNote>
+    </div>
+  );
+}
+
 function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
   const incomeLines = [
-    ["Labor income", pnl.laborIncome],
-    ["Parts / materials", pnl.partsIncome],
-    ["Recurring service", pnl.recurringIncome],
-    ["Additional charges", pnl.otherIncome],
+    ["Labor services", pnl.laborIncome],
+    ["Parts transferred", pnl.partsIncome],
+    ["Recurring / contract services", pnl.recurringIncome],
+    ["Additional performance obligations", pnl.otherIncome],
   ] as const;
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="Income" value={formatReportMoney(pnl.income)} hint={`${pnl.invoiceCount} invoices`} />
-        <StatCard label="Est. COGS" value={formatReportMoney(pnl.cogs)} />
+        <StatCard
+          label="Service revenue"
+          value={formatReportMoney(pnl.serviceRevenue)}
+          hint={`${pnl.invoiceCount} recognized invoices`}
+        />
+        <StatCard
+          label="Cost of services"
+          value={formatReportMoney(pnl.cogs)}
+          hint={`${pnl.matchedJobCount} jobs matched`}
+        />
         <StatCard label="Gross profit" value={formatReportMoney(pnl.gross)} />
         <StatCard label="Gross margin" value={formatReportPct(pnl.margin)} />
       </div>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
-          Ordinary income
+          Revenue (accrual)
         </h3>
         <ReportTable headers={["Account", "Total"]}>
           {incomeLines.map(([label, amt]) => (
@@ -556,43 +1349,41 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
           ))}
           {pnl.discounts > 0 ? (
             <tr>
-              <td className="pl-4">Discounts given</td>
+              <td className="pl-4">Less: customer discounts</td>
               <MoneyCell n={-pnl.discounts} />
             </tr>
           ) : null}
           {pnl.warranty > 0 ? (
             <tr>
-              <td className="pl-4">Warranty deductions</td>
+              <td className="pl-4">Less: warranty deductions</td>
               <MoneyCell n={-pnl.warranty} />
             </tr>
           ) : null}
           <tr className="border-t-2 border-base-content/15 font-semibold">
-            <td>Total income</td>
-            <MoneyCell n={pnl.income} bold />
+            <td>Service revenue (excludes sales tax)</td>
+            <MoneyCell n={pnl.serviceRevenue} bold />
           </tr>
         </ReportTable>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
-          Cost of goods sold (estimated)
+          Cost of services (matched actual costs)
         </h3>
         <ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
-              Direct labor ({pnl.assumptions.completedJobs} jobs × {pnl.assumptions.avgHours}h × $
-              {pnl.assumptions.laborCostPerHr})
+              Direct labor at cost rates
+              {pnl.laborHours > 0 ? ` (${pnl.laborHours.toFixed(1)} hrs on matched jobs)` : ""}
             </td>
             <MoneyCell n={pnl.cogsLabor} />
           </tr>
           <tr>
-            <td className="pl-4">
-              Parts cost ({(pnl.assumptions.partsCostRatio * 100).toFixed(0)}% of billed parts)
-            </td>
+            <td className="pl-4">Parts consumed at unit cost</td>
             <MoneyCell n={pnl.cogsParts} />
           </tr>
           <tr className="border-t-2 border-base-content/15 font-semibold">
-            <td>Total COGS</td>
+            <td>Total cost of services</td>
             <MoneyCell n={pnl.cogs} bold />
           </tr>
         </ReportTable>
@@ -607,41 +1398,68 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
           <span className="opacity-70">Gross margin</span>
           <span className="font-semibold tabular-nums">{formatReportPct(pnl.margin)}</span>
         </div>
-        {pnl.tax > 0 ? (
+        {pnl.salesTax > 0 ? (
           <p className="mt-2 text-xs opacity-50">
-            Tax collected (not profit): {formatReportMoney(pnl.tax)} · Invoice totals including tax:{" "}
-            {formatReportMoney(pnl.grossSales)}
+            Sales tax on recognized invoices (liability, not revenue): {formatReportMoney(pnl.salesTax)}. Invoice
+            grand totals: {formatReportMoney(pnl.invoiceTotals)}.
+          </p>
+        ) : null}
+        {pnl.unmatchedRevenue > 0.01 ? (
+          <p className="mt-2 text-xs text-warning">
+            {formatReportMoney(pnl.unmatchedRevenue)} of revenue has no linked work order — COGS cannot be matched
+            for those invoices.
           </p>
         ) : null}
       </div>
 
-      <p className="flex items-start gap-2 text-xs opacity-55">
-        <BookOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        COGS uses labeled estimates when true job cost journals are not posted. Accrual uses invoice date, similar to
-        QBO Accrual P&amp;L.
-      </p>
+      <PolicyNote>
+        {ACCOUNTING_POLICIES.revenue} {ACCOUNTING_POLICIES.cogs}
+      </PolicyNote>
     </div>
   );
 }
 
-function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetSummary> }) {
+function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGaap> }) {
   return (
     <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <StatCard label="Total assets" value={formatReportMoney(sheet.totalAssets)} />
-        <StatCard label="Cash (payments)" value={formatReportMoney(sheet.cash)} />
-        <StatCard label="Accounts receivable" value={formatReportMoney(sheet.ar)} />
+        <StatCard label="Cash (collections)" value={formatReportMoney(sheet.cash)} />
+        <StatCard label="AR, net" value={formatReportMoney(sheet.arNet)} hint={`${sheet.openCount} open`} />
+        <StatCard label="Sales tax payable" value={formatReportMoney(sheet.salesTaxPayable)} />
       </div>
+
       <section>
-        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">ASSETS</h3>
+        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
+          Assets
+        </h3>
         <ReportTable headers={["Account", "Total"]}>
           <tr>
-            <td className="pl-4">Cash (sum of recorded payments)</td>
+            <td className="pl-4">Cash — customer collections ledger</td>
             <MoneyCell n={sheet.cash} />
           </tr>
           <tr>
-            <td className="pl-4">Accounts receivable</td>
-            <MoneyCell n={sheet.ar} />
+            <td className="pl-4">Accounts receivable, gross</td>
+            <MoneyCell n={sheet.arGross} />
+          </tr>
+          <tr>
+            <td className="pl-6 text-sm opacity-70">Less: allowance for credit losses</td>
+            <MoneyCell n={-sheet.allowance} />
+          </tr>
+          <tr>
+            <td className="pl-4 font-medium">Accounts receivable, net</td>
+            <MoneyCell n={sheet.arNet} />
+          </tr>
+          <tr>
+            <td className="pl-4">Inventory (parts at unit cost)</td>
+            <MoneyCell n={sheet.inventory} />
+          </tr>
+          <tr>
+            <td className="pl-4">
+              Contract assets — unbilled completions
+              {sheet.wipCount > 0 ? ` (${sheet.wipCount})` : ""}
+            </td>
+            <MoneyCell n={sheet.contractAsset} />
           </tr>
           <tr className="border-t-2 font-semibold">
             <td>Total assets</td>
@@ -649,26 +1467,41 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetSu
           </tr>
         </ReportTable>
       </section>
+
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
-          LIABILITIES
+          Liabilities
         </h3>
         <ReportTable headers={["Account", "Total"]}>
           <tr>
-            <td className="pl-4 opacity-60">Accounts payable (not tracked in v1)</td>
+            <td className="pl-4">
+              Sales tax payable
+              <span className="block text-[11px] font-normal opacity-50">
+                Open-invoice share {formatReportMoney(sheet.taxOnOpen)} · Collected held{" "}
+                {formatReportMoney(sheet.taxCollectedHeld)}
+              </span>
+            </td>
+            <MoneyCell n={sheet.salesTaxPayable} />
+          </tr>
+          <tr>
+            <td className="pl-4 opacity-50">Accounts payable (not in subledger)</td>
             <MoneyCell n={0} />
           </tr>
           <tr className="border-t-2 font-semibold">
             <td>Total liabilities</td>
-            <MoneyCell n={sheet.liabilities} bold />
+            <MoneyCell n={sheet.totalLiabilities} bold />
           </tr>
         </ReportTable>
       </section>
+
       <section>
-        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">EQUITY</h3>
+        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">Equity</h3>
         <ReportTable headers={["Account", "Total"]}>
           <tr>
-            <td className="pl-4">Net assets / retained equity (plug)</td>
+            <td className="pl-4">
+              Net assets / equity
+              <span className="block text-[11px] font-normal opacity-50">Assets − liabilities (balancing figure)</span>
+            </td>
             <MoneyCell n={sheet.equity} />
           </tr>
           <tr className="border-t-2 font-semibold">
@@ -677,14 +1510,21 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetSu
           </tr>
           <tr className="border-t-2 font-bold">
             <td>Liabilities + equity</td>
-            <MoneyCell n={sheet.liabilities + sheet.equity} bold />
+            <MoneyCell n={sheet.totalLiabilities + sheet.equity} bold />
           </tr>
         </ReportTable>
       </section>
-      <p className="text-xs opacity-55">
-        Simplified balance sheet for a service company without a full GL. Billed YTD (posted invoices):{" "}
-        {formatReportMoney(sheet.billedYtd)}.
-      </p>
+
+      {sheet.balances ? (
+        <p className="text-xs text-success">Balance sheet equation holds (assets = liabilities + equity).</p>
+      ) : (
+        <p className="text-xs text-error">Balance sheet out of balance — check data.</p>
+      )}
+
+      <PolicyNote>
+        {ACCOUNTING_POLICIES.cash} {ACCOUNTING_POLICIES.inventory} {ACCOUNTING_POLICIES.wip}{" "}
+        {ACCOUNTING_POLICIES.limitations}
+      </PolicyNote>
     </div>
   );
 }
@@ -703,7 +1543,7 @@ function ArAgingSummary({
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {(Object.keys(AGING_LABELS) as (keyof typeof AGING_LABELS)[]).map((k) => (
           <StatCard
             key={k}
@@ -713,10 +1553,15 @@ function ArAgingSummary({
             danger={k === "d90" && aging.totals[k] > 0}
           />
         ))}
-        <StatCard label="Total AR" value={formatReportMoney(aging.total)} />
+        <StatCard label="Gross AR" value={formatReportMoney(aging.gross)} />
+        <StatCard
+          label="Net AR"
+          value={formatReportMoney(aging.net)}
+          hint={`Allowance ${formatReportMoney(aging.allowance)}`}
+        />
       </div>
 
-      {aging.total > 0 ? (
+      {aging.gross > 0 ? (
         <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData}>
@@ -730,7 +1575,7 @@ function ArAgingSummary({
         </div>
       ) : null}
 
-      <ReportTable headers={["Aging", "# Invoices", "Total"]}>
+      <ReportTable headers={["Aging", "# Invoices", "Balance"]}>
         {(Object.keys(AGING_LABELS) as (keyof typeof AGING_LABELS)[]).map((k) => (
           <tr key={k}>
             <td>{AGING_LABELS[k]}</td>
@@ -739,14 +1584,22 @@ function ArAgingSummary({
           </tr>
         ))}
         <tr className="border-t-2 font-bold">
-          <td>Total</td>
+          <td>Total gross</td>
           <td className="text-right tabular-nums">{open.length}</td>
-          <MoneyCell n={aging.total} bold />
+          <MoneyCell n={aging.gross} bold />
+        </tr>
+        <tr>
+          <td colSpan={2} className="pl-4 opacity-70">
+            Less: allowance for credit losses
+          </td>
+          <MoneyCell n={-aging.allowance} />
+        </tr>
+        <tr className="font-semibold">
+          <td colSpan={2}>Accounts receivable, net</td>
+          <MoneyCell n={aging.net} bold />
         </tr>
       </ReportTable>
-      <p className="text-xs opacity-55">
-        Open detail by customer is on <strong>A/R Aging Detail</strong>. Also available under Payments.
-      </p>
+      <PolicyNote>{ACCOUNTING_POLICIES.receivables} {ACCOUNTING_POLICIES.allowance}</PolicyNote>
     </div>
   );
 }
@@ -798,7 +1651,7 @@ function ArAgingDetail({ open }: { open: ReturnType<typeof openInvoicesAt> }) {
 
 function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> }) {
   if (rows.length === 0) {
-    return <EmptyState title="No sales in range" description="Adjust dates or post invoices." />;
+    return <EmptyState title="No recognized revenue in range" description="Adjust dates or finalize invoices." />;
   }
   const top = rows.slice(0, 8);
   return (
@@ -814,7 +1667,7 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <ReportTable headers={["Customer", "Invoices", "Revenue", "Paid", "Open balance"]}>
+      <ReportTable headers={["Customer", "Invoices", "Service revenue", "Tax", "Paid", "Open balance"]}>
         {rows.map((r) => (
           <tr key={r.customerId ?? r.name}>
             <td>
@@ -828,6 +1681,7 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
             </td>
             <td className="text-right tabular-nums">{r.count}</td>
             <MoneyCell n={r.revenue} />
+            <MoneyCell n={r.tax} />
             <MoneyCell n={r.paid} />
             <MoneyCell n={r.balance} />
           </tr>
@@ -836,17 +1690,19 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
           <td>Total</td>
           <td className="text-right tabular-nums">{rows.reduce((s, r) => s + r.count, 0)}</td>
           <MoneyCell n={rows.reduce((s, r) => s + r.revenue, 0)} bold />
+          <MoneyCell n={rows.reduce((s, r) => s + r.tax, 0)} bold />
           <MoneyCell n={rows.reduce((s, r) => s + r.paid, 0)} bold />
           <MoneyCell n={rows.reduce((s, r) => s + r.balance, 0)} bold />
         </tr>
       </ReportTable>
+      <PolicyNote>Recognized service revenue excludes sales tax (not revenue under GAAP).</PolicyNote>
     </div>
   );
 }
 
 function SalesByMonth({ rows }: { rows: ReturnType<typeof salesByMonth> }) {
   if (rows.length === 0) {
-    return <EmptyState title="No monthly sales" description="No invoices in this period." />;
+    return <EmptyState title="No monthly sales" description="No recognized invoices in this period." />;
   }
   const chart = rows.map((r) => ({ ...r, label: monthLabel(r.month) }));
   return (
@@ -858,31 +1714,30 @@ function SalesByMonth({ rows }: { rows: ReturnType<typeof salesByMonth> }) {
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
             <YAxis tickFormatter={(v) => `$${Math.round(v / 1000)}k`} tick={{ fontSize: 11 }} width={44} />
             <Tooltip formatter={(v) => formatReportMoney(Number(v))} />
-            <Bar dataKey="revenue" name="Billed" fill="#0f766e" radius={[6, 6, 0, 0]} />
-            <Bar dataKey="collected" name="Collected" fill="#94a3b8" radius={[6, 6, 0, 0]} />
+            <Bar dataKey="revenue" name="Service revenue" fill="#0f766e" radius={[6, 6, 0, 0]} />
+            <Bar dataKey="tax" name="Sales tax" fill="#94a3b8" radius={[6, 6, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <ReportTable headers={["Month", "Invoices", "Billed", "Cash applied*"]}>
+      <ReportTable headers={["Month", "Invoices", "Service revenue", "Sales tax"]}>
         {rows.map((r) => (
           <tr key={r.month}>
             <td>{monthLabel(r.month)}</td>
             <td className="text-right tabular-nums">{r.count}</td>
             <MoneyCell n={r.revenue} />
-            <MoneyCell n={r.collected} />
+            <MoneyCell n={r.tax} />
           </tr>
         ))}
         <tr className="border-t-2 font-bold">
           <td>Total</td>
           <td className="text-right tabular-nums">{rows.reduce((s, r) => s + r.count, 0)}</td>
           <MoneyCell n={rows.reduce((s, r) => s + r.revenue, 0)} bold />
-          <MoneyCell n={rows.reduce((s, r) => s + r.collected, 0)} bold />
+          <MoneyCell n={rows.reduce((s, r) => s + r.tax, 0)} bold />
         </tr>
       </ReportTable>
-      <p className="text-xs opacity-50">
-        *Cash applied is amount paid recorded on invoices dated in the month (not pure cash-basis). See Cash Flow for
-        payment-date cash.
-      </p>
+      <PolicyNote>
+        Accrual revenue by invoice date. For cash collections use the Statement of Cash Flows (payment date).
+      </PolicyNote>
     </div>
   );
 }
@@ -904,7 +1759,7 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
               cx="50%"
               cy="50%"
               outerRadius={90}
-              label={({ name }) => name}
+              label={({ name }) => String(name ?? "").split(" ")[0]}
             >
               {rows
                 .filter((r) => r.amount > 0)
@@ -916,7 +1771,7 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
           </PieChart>
         </ResponsiveContainer>
       </div>
-      <ReportTable headers={["Product / service", "Amount", "% of positive"]}>
+      <ReportTable headers={["Transaction-price component", "Amount", "% of positive"]}>
         {rows.map((r) => (
           <tr key={r.service}>
             <td>{r.service}</td>
@@ -931,36 +1786,76 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
   );
 }
 
-function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowFromPayments> }) {
+function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Cash received" value={formatReportMoney(cash.total)} hint={`${cash.count} payments`} />
         <StatCard
-          label="Methods"
-          value={cash.byMethod.length}
-          hint={cash.byMethod[0] ? `Top: ${cash.byMethod[0].method}` : "—"}
+          label="Cash from customers"
+          value={formatReportMoney(cash.cashFromCustomers)}
+          hint={`${cash.count} payments`}
         />
         <StatCard
-          label="Avg payment"
-          value={formatReportMoney(cash.count ? cash.total / cash.count : 0)}
+          label="Credit sales (period)"
+          value={formatReportMoney(cash.salesOnAccount)}
+          hint="Invoice totals incl. tax"
+        />
+        <StatCard
+          label="Ending open AR"
+          value={formatReportMoney(cash.arEnd)}
+          hint={`Begin ${formatReportMoney(cash.arBegin)}`}
         />
       </div>
+
       <section>
-        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Operating activities</h3>
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Cash flows from operating activities</h3>
         <ReportTable headers={["Activity", "Amount"]}>
           {cash.byMethod.map((m) => (
             <tr key={m.method}>
-              <td className="pl-4">Collections — {m.method}</td>
+              <td className="pl-4">Collections from customers — {m.method}</td>
               <MoneyCell n={m.amount} />
             </tr>
           ))}
           <tr className="border-t-2 font-bold">
-            <td>Net cash from operations</td>
-            <MoneyCell n={cash.total} bold />
+            <td>Net cash provided by operating activities</td>
+            <MoneyCell n={cash.cashFromCustomers} bold />
+          </tr>
+        </ReportTable>
+        <p className="mt-2 text-xs opacity-50">
+          Direct method (cash receipts). Investing and financing activities are not modeled in this application.
+        </p>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">A/R rollforward (disclosure)</h3>
+        <ReportTable headers={["Line", "Amount"]}>
+          <tr>
+            <td className="pl-4">Beginning open AR</td>
+            <MoneyCell n={cash.arBegin} />
+          </tr>
+          <tr>
+            <td className="pl-4">+ Recognized billed totals (period)</td>
+            <MoneyCell n={cash.salesOnAccount} />
+          </tr>
+          <tr>
+            <td className="pl-4">− Cash collections</td>
+            <MoneyCell n={-cash.cashFromCustomers} />
+          </tr>
+          <tr className="font-medium">
+            <td className="pl-4">Implied ending AR</td>
+            <MoneyCell n={cash.arBegin + cash.salesOnAccount - cash.cashFromCustomers} />
+          </tr>
+          <tr>
+            <td className="pl-4">Actual ending open AR</td>
+            <MoneyCell n={cash.arEnd} />
+          </tr>
+          <tr className={Math.abs(cash.reconcilingDiff) > 0.5 ? "text-warning" : ""}>
+            <td className="pl-4">Difference (timing / status / partial payments)</td>
+            <MoneyCell n={cash.reconcilingDiff} />
           </tr>
         </ReportTable>
       </section>
+
       {cash.lines.length === 0 ? (
         <EmptyState title="No payments in range" description="Record payments in the Payments module." />
       ) : (
@@ -976,27 +1871,29 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowFromPayments
           ))}
         </ReportTable>
       )}
-      <p className="text-xs opacity-55">
-        Cash basis uses payment date. Financing/investing sections are not modeled in this product version.
-      </p>
     </div>
   );
 }
 
-function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfitability> }) {
+function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfitabilityGaap> }) {
   if (rows.length === 0) {
     return <EmptyState title="No contracts" description="Add service contracts to analyze margins." />;
   }
+  const rev = rows.reduce((s, r) => s + r.revenue, 0);
+  const cogs = rows.reduce((s, r) => s + r.cogs, 0);
+  const profit = rows.reduce((s, r) => s + r.profit, 0);
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Contract revenue" value={formatReportMoney(rows.reduce((s, r) => s + r.revenue, 0))} />
-        <StatCard label="Est. cost" value={formatReportMoney(rows.reduce((s, r) => s + r.cost, 0))} />
-        <StatCard label="Est. profit" value={formatReportMoney(rows.reduce((s, r) => s + r.profit, 0))} />
+        <StatCard label="Recognized revenue" value={formatReportMoney(rev)} />
+        <StatCard label="Matched COGS" value={formatReportMoney(cogs)} />
+        <StatCard label="Gross profit" value={formatReportMoney(profit)} />
       </div>
-      <ReportTable headers={["Contract", "Customer", "Revenue", "Est. cost", "Profit", "Margin", "Status"]}>
+      <ReportTable
+        headers={["Contract", "Customer", "Price (book)", "Recognized", "COGS", "Profit", "Margin", "Status"]}
+      >
         {rows.map((r) => (
-          <tr key={r.id} className={r.profit < 0 ? "bg-error/5" : ""}>
+          <tr key={r.id} className={r.profit < 0 && r.revenue > 0 ? "bg-error/5" : ""}>
             <td>
               <Link href="/contracts" className="link link-hover font-medium">
                 {r.name}
@@ -1011,8 +1908,9 @@ function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfit
                 r.customerName
               )}
             </td>
+            <MoneyCell n={r.contractPrice} />
             <MoneyCell n={r.revenue} />
-            <MoneyCell n={r.cost} />
+            <MoneyCell n={r.cogs} />
             <MoneyCell n={r.profit} />
             <td className="text-right tabular-nums">{formatReportPct(r.margin)}</td>
             <td>
@@ -1021,7 +1919,11 @@ function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfit
           </tr>
         ))}
       </ReportTable>
-      <p className="text-xs opacity-55">Delivery cost estimated at $350 per included visit (labeled estimate).</p>
+      <PolicyNote>
+        Revenue is from recognized invoices linked to the contract. COGS is actual labor and parts cost on those
+        invoices&apos; work orders. Contract price is disclosed as contractual backlog/book value, not automatically
+        recognized revenue.
+      </PolicyNote>
     </div>
   );
 }
@@ -1037,7 +1939,7 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
           label="Completed unbilled"
           value={summary.unbilled}
           danger={summary.unbilled > 0}
-          hint="Go to Unbilled Jobs"
+          hint="Contract assets risk"
         />
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
@@ -1080,7 +1982,7 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
     return (
       <EmptyState
         title="No unbilled completed jobs"
-        description="Great — completed work is invoiced. Check Billing for drafts."
+        description="Completed work is invoiced — no material contract-asset backlog from jobs."
         action={
           <Link href="/billing" className="btn btn-primary btn-sm">
             Open billing
@@ -1089,15 +1991,22 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
       />
     );
   }
+  const billable = rows.reduce((s, j) => s + j.billableEstimate, 0);
+  const cost = rows.reduce((s, j) => s + j.directCost, 0);
   return (
     <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatCard label="Jobs" value={rows.length} danger />
+        <StatCard label="Est. contract asset" value={formatReportMoney(billable)} />
+        <StatCard label="Direct cost to date" value={formatReportMoney(cost)} />
+      </div>
       <div className="alert alert-warning text-sm">
         <span>
-          <strong>{rows.length}</strong> completed job{rows.length === 1 ? "" : "s"} still unbilled — primary revenue
-          leakage watchlist.
+          Completed, unbilled work is a <strong>contract asset</strong> (unbilled receivable) until invoiced — track
+          for revenue leakage.
         </span>
       </div>
-      <ReportTable headers={["Job", "Customer", "Type", "Completed", ""]}>
+      <ReportTable headers={["Job", "Customer", "Type", "Completed", "Est. billable", "Direct cost", ""]}>
         {rows.map((j) => (
           <tr key={j.id}>
             <td>
@@ -1116,6 +2025,8 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
             </td>
             <td>{j.work_order_type}</td>
             <td className="tabular-nums">{j.completion_date ?? "—"}</td>
+            <MoneyCell n={j.billableEstimate} />
+            <MoneyCell n={j.directCost} />
             <td className="text-right print:hidden">
               <Link href={`/billing?wo=${j.id}`} className="btn btn-primary btn-xs">
                 Invoice
@@ -1123,7 +2034,14 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
             </td>
           </tr>
         ))}
+        <tr className="border-t-2 font-bold">
+          <td colSpan={4}>Total</td>
+          <MoneyCell n={billable} bold />
+          <MoneyCell n={cost} bold />
+          <td />
+        </tr>
       </ReportTable>
+      <PolicyNote>{ACCOUNTING_POLICIES.wip}</PolicyNote>
     </div>
   );
 }
@@ -1132,19 +2050,21 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
   if (rows.length === 0) {
     return <EmptyState title="No invoices in range" description="Widen the date range or create invoices." />;
   }
+  const recognized = rows.filter((i) => isRecognizedRevenue(i));
   const total = rows.reduce((s, i) => s + Number(i.invoice_total), 0);
   const paid = rows.reduce((s, i) => s + Number(i.amount_paid), 0);
   const bal = rows.reduce((s, i) => s + Number(i.remaining_balance), 0);
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <StatCard label="Invoices" value={rows.length} />
-        <StatCard label="Billed" value={formatReportMoney(total)} />
+        <StatCard label="Recognized" value={recognized.length} />
+        <StatCard label="Billed totals" value={formatReportMoney(total)} />
         <StatCard label="Open balance" value={formatReportMoney(bal)} hint={`Paid ${formatReportMoney(paid)}`} />
       </div>
-      <ReportTable headers={["Invoice", "Date", "Customer", "Total", "Paid", "Balance", "Status"]}>
+      <ReportTable headers={["Invoice", "Date", "Customer", "Rec.", "Total", "Paid", "Balance", "Status"]}>
         {rows.map((i) => (
-          <tr key={i.id}>
+          <tr key={i.id} className={!isRecognizedRevenue(i) ? "opacity-60" : ""}>
             <td>
               <Link href={`/billing/${i.id}`} className="link link-primary font-medium">
                 {i.invoice_number}
@@ -1152,6 +2072,7 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
             </td>
             <td className="tabular-nums">{i.invoice_date}</td>
             <td>{i.customers?.name ?? "—"}</td>
+            <td className="text-center text-xs">{isRecognizedRevenue(i) ? "Yes" : "No"}</td>
             <MoneyCell n={Number(i.invoice_total)} />
             <MoneyCell n={Number(i.amount_paid)} />
             <MoneyCell n={Number(i.remaining_balance)} />
@@ -1161,13 +2082,51 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
           </tr>
         ))}
         <tr className="border-t-2 font-bold">
-          <td colSpan={3}>Total</td>
+          <td colSpan={4}>Total</td>
           <MoneyCell n={total} bold />
           <MoneyCell n={paid} bold />
           <MoneyCell n={bal} bold />
           <td />
         </tr>
       </ReportTable>
+      <PolicyNote>
+        Draft / Needs Review / Canceled invoices are not recognized revenue until finalized (see Rec. column).
+      </PolicyNote>
+    </div>
+  );
+}
+
+function PoliciesReport() {
+  const entries: { key: string; title: string; body: string }[] = [
+    { key: "framework", title: "Framework", body: ACCOUNTING_POLICIES.framework },
+    { key: "basis", title: "Basis of accounting", body: ACCOUNTING_POLICIES.basis },
+    { key: "revenue", title: "Revenue recognition", body: ACCOUNTING_POLICIES.revenue },
+    { key: "receivables", title: "Accounts receivable", body: ACCOUNTING_POLICIES.receivables },
+    { key: "allowance", title: "Allowance for credit losses", body: ACCOUNTING_POLICIES.allowance },
+    { key: "cogs", title: "Cost of services", body: ACCOUNTING_POLICIES.cogs },
+    { key: "inventory", title: "Inventory", body: ACCOUNTING_POLICIES.inventory },
+    { key: "cash", title: "Cash", body: ACCOUNTING_POLICIES.cash },
+    { key: "tax", title: "Sales tax payable", body: ACCOUNTING_POLICIES.taxLiability },
+    { key: "wip", title: "Contract assets", body: ACCOUNTING_POLICIES.wip },
+    { key: "limitations", title: "Limitations", body: ACCOUNTING_POLICIES.limitations },
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="alert alert-info text-sm">
+        <Scale className="h-4 w-4 shrink-0" />
+        <span>
+          These policies describe how this application measures report lines from operational subledgers. They are
+          educational GAAP orientation for Ridley&apos;s service business — not a substitute for a full audited GL.
+        </span>
+      </div>
+      <dl className="space-y-4">
+        {entries.map((e) => (
+          <div key={e.key} className="border-b border-base-200 pb-3 last:border-0">
+            <dt className="text-sm font-bold">{e.title}</dt>
+            <dd className="mt-1 text-sm leading-relaxed opacity-80">{e.body}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }
