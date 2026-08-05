@@ -307,7 +307,15 @@ export default function BillingPage() {
                             setWoPreview(null);
                           }}
                         >
-                          <td className="font-medium">{inv.invoice_number}</td>
+                          <td>
+                            <Link
+                              href={`/billing/${inv.id}`}
+                              className="link link-hover font-medium"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {inv.invoice_number}
+                            </Link>
+                          </td>
                           <td>
                             {inv.customer_id ? (
                               <Link
@@ -389,7 +397,11 @@ function InvoiceListPreview({ inv, today }: { inv: InvoiceRow; today: Date }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xs uppercase tracking-wide opacity-60">Invoice preview</p>
-          <h3 className="text-xl font-bold">{inv.invoice_number}</h3>
+          <h3 className="text-xl font-bold">
+            <Link href={`/billing/${inv.id}`} className="link link-hover">
+              {inv.invoice_number}
+            </Link>
+          </h3>
           <p className="text-sm opacity-70">
             {inv.customer_id ? (
               <Link href={`/customers/${inv.customer_id}`} className="link link-hover font-medium">
@@ -537,8 +549,20 @@ function WorkOrderInvoicePreview({
     <div className="space-y-4">
       <div>
         <p className="text-xs uppercase tracking-wide opacity-60">New invoice preview</p>
-        <h3 className="text-xl font-bold">{wo.work_order_number}</h3>
-        <p className="text-sm opacity-70">{wo.customers?.name ?? "Customer"}</p>
+        <h3 className="text-xl font-bold">
+          <Link href={`/work-orders/${wo.id}`} className="link link-hover">
+            {wo.work_order_number}
+          </Link>
+        </h3>
+        <p className="text-sm opacity-70">
+          {wo.customer_id ? (
+            <Link href={`/customers/${wo.customer_id}`} className="link link-hover font-medium">
+              {wo.customers?.name ?? "Customer"}
+            </Link>
+          ) : (
+            wo.customers?.name ?? "Customer"
+          )}
+        </p>
         <p className="mt-1 text-xs opacity-60">Tax rate {(taxRate * 100).toFixed(2)}% · from company settings</p>
         <Link href={`/work-orders/${wo.id}`} className="link link-primary text-xs">
           Open job detail

@@ -667,7 +667,14 @@ export default function JobDetailPage() {
             <p className="text-xs uppercase tracking-wide opacity-60">Job</p>
             <h1 className="text-2xl font-bold sm:text-3xl">{wo.work_order_number}</h1>
             <p className="mt-1 text-sm opacity-70">
-              {wo.customers?.name ?? "Customer"} · {wo.work_order_type}
+              {wo.customer_id ? (
+                <Link href={`/customers/${wo.customer_id}`} className="link link-hover font-medium">
+                  {wo.customers?.name ?? "Customer"}
+                </Link>
+              ) : (
+                wo.customers?.name ?? "Customer"
+              )}{" "}
+              · {wo.work_order_type}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
@@ -691,7 +698,15 @@ export default function JobDetailPage() {
             </div>
             <div className="rounded-box bg-base-200/60 p-3">
               <p className="opacity-60">Equipment</p>
-              <p className="font-medium">{wo.equipment?.name ?? "—"}</p>
+              <p className="font-medium">
+                {wo.equipment?.name ? (
+                  <Link href="/equipment" className="link link-hover">
+                    {wo.equipment.name}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </p>
             </div>
           </div>
         </div>
@@ -748,8 +763,20 @@ export default function JobDetailPage() {
                       <Link href={`/customers/${wo.customer_id}`} className="link link-primary font-medium">
                         {wo.customers?.name ?? "—"}
                       </Link>
-                      {wo.customers?.phone ? <p className="opacity-70">{wo.customers.phone}</p> : null}
-                      {wo.customers?.email ? <p className="opacity-70">{wo.customers.email}</p> : null}
+                      {wo.customers?.phone ? (
+                        <p className="opacity-70">
+                          <a href={`tel:${wo.customers.phone}`} className="link link-hover">
+                            {wo.customers.phone}
+                          </a>
+                        </p>
+                      ) : null}
+                      {wo.customers?.email ? (
+                        <p className="opacity-70">
+                          <a href={`mailto:${wo.customers.email}`} className="link link-hover">
+                            {wo.customers.email}
+                          </a>
+                        </p>
+                      ) : null}
                     </div>
                     <div>
                       <p className="opacity-60">Service address</p>
@@ -759,7 +786,15 @@ export default function JobDetailPage() {
                     </div>
                     <div>
                       <p className="opacity-60">Equipment</p>
-                      <p className="font-medium">{wo.equipment?.name ?? "Not linked"}</p>
+                      <p className="font-medium">
+                        {wo.equipment?.name ? (
+                          <Link href="/equipment" className="link link-hover">
+                            {wo.equipment.name}
+                          </Link>
+                        ) : (
+                          "Not linked"
+                        )}
+                      </p>
                       {wo.equipment?.location ? <p className="opacity-70">{wo.equipment.location}</p> : null}
                     </div>
                   </div>
@@ -1126,6 +1161,9 @@ export default function JobDetailPage() {
                 <h2 className="card-title text-base gap-2">
                   <Package className="h-4 w-4" /> Parts & materials
                 </h2>
+                <Link href="/parts" className="link link-primary text-sm">
+                  Open parts inventory
+                </Link>
                 {canEditLines ? (
                   <form onSubmit={addPart} className="mb-4 grid gap-3 sm:grid-cols-2">
                     <FormRow label="Part">
@@ -1180,7 +1218,9 @@ export default function JobDetailPage() {
                           return (
                             <tr key={p.id}>
                               <td>
-                                {p.parts?.name ?? p.part_id}
+                                <Link href={`/parts?part=${p.part_id}`} className="link link-hover font-medium">
+                                  {p.parts?.name ?? p.part_id}
+                                </Link>
                                 {locked ? <span className="badge badge-ghost badge-xs ml-1">Invoiced</span> : null}
                               </td>
                               <td>

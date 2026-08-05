@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -139,7 +140,11 @@ export default function CustomerPortalPage() {
                 <tbody>
                   {workOrders.map((wo) => (
                     <tr key={wo.id}>
-                      <td>{wo.work_order_number}</td>
+                      <td>
+                        <Link href={`/work-orders/${wo.id}`} className="link link-primary">
+                          {wo.work_order_number}
+                        </Link>
+                      </td>
                       <td>{wo.work_order_type}</td>
                       <td><StatusBadge label={wo.status} tone={statusTone(wo.status)} /></td>
                       <td>{wo.scheduled_date ?? "Pending"}</td>

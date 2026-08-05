@@ -398,10 +398,28 @@ export default function JobsPage() {
                           <td className="font-medium">
                             <span className="inline-flex items-center gap-1">
                               {isJobUrgent(job) ? <AlertTriangle className="h-3.5 w-3.5 text-error" /> : null}
-                              {job.work_order_number}
+                              <Link
+                                href={`/work-orders/${job.id}`}
+                                className="link link-hover"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {job.work_order_number}
+                              </Link>
                             </span>
                           </td>
-                          <td>{job.customers?.name ?? "—"}</td>
+                          <td>
+                            {job.customer_id ? (
+                              <Link
+                                href={`/customers/${job.customer_id}`}
+                                className="link link-hover"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {job.customers?.name ?? "—"}
+                              </Link>
+                            ) : (
+                              job.customers?.name ?? "—"
+                            )}
+                          </td>
                           <td className="max-w-[8rem] truncate">{job.work_order_type}</td>
                           <td className="max-w-[7rem] truncate text-xs">
                             {job.assigned_technician_id ? techMap[job.assigned_technician_id] ?? "—" : (
@@ -467,8 +485,20 @@ function JobPreview({ job, techName }: { job: JobRow; techName: string }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xs uppercase tracking-wide opacity-60">Job preview</p>
-          <h3 className="text-xl font-bold">{job.work_order_number}</h3>
-          <p className="text-sm opacity-70">{job.customers?.name ?? "Customer"}</p>
+          <h3 className="text-xl font-bold">
+            <Link href={`/work-orders/${job.id}`} className="link link-hover">
+              {job.work_order_number}
+            </Link>
+          </h3>
+          <p className="text-sm opacity-70">
+            {job.customer_id ? (
+              <Link href={`/customers/${job.customer_id}`} className="link link-hover font-medium">
+                {job.customers?.name ?? "Customer"}
+              </Link>
+            ) : (
+              job.customers?.name ?? "Customer"
+            )}
+          </p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <StatusBadge label={job.status} tone={statusTone(job.status)} />
@@ -513,7 +543,15 @@ function JobPreview({ job, techName }: { job: JobRow; techName: string }) {
         </div>
         <div className="col-span-2 rounded-box bg-base-200/60 p-3">
           <p className="opacity-60">Equipment</p>
-          <p className="font-medium">{job.equipment?.name ?? "—"}</p>
+          <p className="font-medium">
+            {job.equipment_id && job.equipment?.name ? (
+              <Link href="/equipment" className="link link-hover">
+                {job.equipment.name}
+              </Link>
+            ) : (
+              job.equipment?.name ?? "—"
+            )}
+          </p>
         </div>
       </div>
 
