@@ -4,6 +4,10 @@ export type NavItem = {
   href: string;
   label: string;
   roles: UserRole[];
+  /** Indented sub-item in the sidebar (e.g. under Home). */
+  indent?: boolean;
+  /** Nested sidebar links shown in a dropdown under this item. */
+  children?: NavItem[];
 };
 
 export const NAV_ITEMS: NavItem[] = [
@@ -64,8 +68,35 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/customer",
-    label: "My Portal",
+    label: "Home",
     roles: ["customer"],
+    children: [
+      {
+        href: "/customer/request-contract",
+        label: "Request Contract",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/open-request",
+        label: "Active Service",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/order-history",
+        label: "Service History",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/contracts",
+        label: "My Contracts",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/equipment",
+        label: "My Equipment",
+        roles: ["customer"],
+      },
+    ],
   },
   {
     href: "/users",
@@ -95,7 +126,11 @@ export function homeForRole(role: UserRole): string {
 }
 
 export function canAccess(role: UserRole, href: string): boolean {
-  const item = NAV_ITEMS.find((n) => n.href === href);
-  if (!item) return false;
-  return item.roles.includes(role);
+  for (const item of NAV_ITEMS) {
+    if (item.href === href && item.roles.includes(role)) return true;
+    if (item.children?.some((child) => child.href === href && child.roles.includes(role))) {
+      return true;
+    }
+  }
+  return false;
 }

@@ -296,6 +296,7 @@ export default function JobsPage() {
                   onChange={(e) => setForm({ ...form, work_order_type: e.target.value })}
                 >
                   <option>Preventive Maintenance</option>
+                  <option>Repair</option>
                   <option>Emergency Repair</option>
                   <option>Inspection</option>
                   <option>Warranty Repair</option>
