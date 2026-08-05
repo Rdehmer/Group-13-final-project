@@ -1,27 +1,22 @@
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
 import { formatMoney } from "@/lib/calculations";
-import { formatServiceDate } from "@/lib/invoices";
-import type { ServiceHistoryInvoice, ServiceHistoryWorkOrder } from "@/lib/invoices";
-
-export type InvoicePdfCustomer = {
-  name: string;
-  email?: string | null;
-  phone?: string | null;
-  city?: string | null;
-  state?: string | null;
-};
+import { formatServiceDate, type InvoicePdfCustomer, type ServiceHistoryInvoice, type ServiceHistoryWorkOrder } from "@/lib/invoices";
 
 function customerAddress(customer: InvoicePdfCustomer): string {
   const parts = [customer.city, customer.state].filter(Boolean);
   return parts.length ? parts.join(", ") : "";
 }
 
-export function downloadInvoicePdf(
+/** Client-only: loads jspdf on demand so Next does not SSR the node build. */
+export async function downloadInvoicePdf(
   invoice: ServiceHistoryInvoice,
   workOrder: ServiceHistoryWorkOrder,
   customer: InvoicePdfCustomer,
-): void {
+): Promise<void> {
+  const [{ jsPDF }, autoTableModule] = await Promise.all([
+    import("jspdf"),
+    import("jspdf-autotable"),
+  ]);
+  const autoTable = autoTableModule.default;
   const doc = new jsPDF();
   const margin = 14;
   let y = 20;
@@ -106,7 +101,7 @@ export function downloadInvoicePdf(
     margin: { left: margin, right: margin },
   });
 
-  const finalY = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 40;
+  const finalY = (doc as InstanceType<typeof jsPDF> & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 40;
 
   doc.setFont("helvetica", "bold");
   doc.text(`Total: ${formatMoney(invoice.invoice_total)}`, margin, finalY + 10);

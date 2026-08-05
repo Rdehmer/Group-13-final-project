@@ -1,4 +1,3 @@
-import { formatMoney } from "@/lib/calculations";
 import type { Equipment, Invoice, WorkOrder } from "@/lib/types";
 
 export type ServiceHistoryInvoice = Pick<
@@ -27,6 +26,14 @@ export type ServiceHistoryWorkOrder = WorkOrder & {
 };
 
 export type ServiceHistoryFilterTab = "all" | "completed" | "invoiced" | "open_balance";
+
+export type InvoicePdfCustomer = {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  city?: string | null;
+  state?: string | null;
+};
 
 const DOWNLOADABLE_STATUSES = new Set([
   "Sent",
@@ -81,28 +88,9 @@ export function serviceHistoryFilterTab(
 }
 
 export function computeServiceHistoryStats(workOrders: ServiceHistoryWorkOrder[]) {
-  const year = new Date().getFullYear();
-  let openBalance = 0;
-  let paidYtd = 0;
-  const seenInvoiceIds = new Set<string>();
-
-  for (const wo of workOrders) {
-    const inv = pickDownloadableInvoice(wo.invoices ?? undefined);
-    if (inv && !seenInvoiceIds.has(inv.id)) {
-      seenInvoiceIds.add(inv.id);
-      openBalance += Number(inv.remaining_balance ?? 0);
-      const invDate = inv.invoice_date ? new Date(`${inv.invoice_date}T00:00:00`) : null;
-      if (invDate && !Number.isNaN(invDate.getTime()) && invDate.getFullYear() === year) {
-        paidYtd += Number(inv.amount_paid ?? 0);
-      }
-    }
-  }
-
   return {
     totalVisits: workOrders.length,
     completed: workOrders.filter((w) => isWorkOrderCompleted(w.status)).length,
-    openBalance,
-    paidYtd,
   };
 }
 
@@ -118,9 +106,7 @@ export function invoicePaymentMessage(
         year: "numeric",
       })
     : null;
-  return due
-    ? `Balance due ${formatMoney(balance)} — due ${due}`
-    : `Balance due ${formatMoney(balance)}`;
+  return due ? `Invoice unpaid — due ${due}` : "Invoice unpaid";
 }
 
 export function formatServiceDate(date: string | null | undefined): string {

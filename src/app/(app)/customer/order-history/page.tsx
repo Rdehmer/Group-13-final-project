@@ -5,8 +5,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatCard } from "@/components/ui";
-import { formatMoney } from "@/lib/calculations";
-import type { InvoicePdfCustomer } from "@/lib/invoicePdf";
+import type { InvoicePdfCustomer } from "@/lib/invoices";
 import {
   computeServiceHistoryStats,
   serviceHistoryFilterTab,
@@ -18,7 +17,7 @@ import { ServiceHistoryRow } from "./ServiceHistoryRow";
 
 const FILTER_TABS: { id: ServiceHistoryFilterTab; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "open_balance", label: "Open Balance" },
+  { id: "open_balance", label: "Unpaid Invoices" },
   { id: "completed", label: "Completed" },
   { id: "invoiced", label: "Invoiced" },
 ];
@@ -106,23 +105,13 @@ export default function CustomerOrderHistoryPage() {
     <div>
       <PageHeader
         title="Service History"
-        description="Review past visits, download invoices, and see payment status in one place."
+        description="Review past visits and download invoices when available."
       />
 
       {workOrders.length > 0 ? (
-        <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mb-6 grid gap-4 sm:grid-cols-2">
           <StatCard label="Total visits" value={stats.totalVisits} hint="All service records" />
           <StatCard label="Completed" value={stats.completed} hint="Finished visits" />
-          <StatCard
-            label="Open Balance"
-            value={formatMoney(stats.openBalance)}
-            hint="Outstanding on invoices"
-          />
-          <StatCard
-            label="Paid YTD"
-            value={formatMoney(stats.paidYtd)}
-            hint={`Payments in ${new Date().getFullYear()}`}
-          />
         </div>
       ) : null}
 
