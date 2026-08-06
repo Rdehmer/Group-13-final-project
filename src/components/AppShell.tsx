@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Mail, Menu, Search } from "lucide-react";
+import { LogOut, Mail, Menu, Search, Settings } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
@@ -14,15 +14,20 @@ import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
 import { EquipmentIQMark } from "@/components/brand/EquipmentIQLogo";
 import { countUnreadInboxThreads, CUSTOMER_INBOX_UNREAD_EVENT } from "@/lib/customer-inbox";
 import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
+import { countUnreadVendorInboxThreads, VENDOR_INBOX_UNREAD_EVENT } from "@/lib/vendor-inbox";
 
 const CUSTOMER_HOME = "/customer";
 const CUSTOMER_INBOX = "/customer/inbox";
+const VENDOR_INBOX = "/vendor/inbox";
 const MANAGER_INBOX = "/inbox";
 const UNREAD_POLL_MS = 30_000;
 const SIDEBAR_COLLAPSED_KEY = "esm-sidebar-collapsed";
 
 function sidebarInboxBadge(href: string, unreadInbox: number): number {
-  if ((href === MANAGER_INBOX || href === CUSTOMER_INBOX) && unreadInbox > 0) {
+  if (
+    (href === MANAGER_INBOX || href === CUSTOMER_INBOX || href === VENDOR_INBOX) &&
+    unreadInbox > 0
+  ) {
     return unreadInbox;
   }
   return 0;
@@ -369,12 +374,36 @@ function CustomerInboxHeaderControl({
 
   return (
     <InboxHeaderControl
-      href="/customer/inbox"
+      href={CUSTOMER_INBOX}
       unreadCount={unreadCount}
       isGateActive={isGateActive}
       blockNavigation={blockNavigation}
     />
   );
+}
+
+function VendorInboxHeaderControl({ vendorId }: { vendorId: string }) {
+  const pathname = usePathname();
+  const supabase = createClient();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const refreshUnread = useCallback(async () => {
+    const count = await countUnreadVendorInboxThreads(supabase, vendorId);
+    setUnreadCount(count);
+  }, [vendorId, supabase]);
+
+  useEffect(() => {
+    void refreshUnread();
+    const onUnreadChanged = () => void refreshUnread();
+    window.addEventListener(VENDOR_INBOX_UNREAD_EVENT, onUnreadChanged);
+    const id = window.setInterval(() => void refreshUnread(), UNREAD_POLL_MS);
+    return () => {
+      window.removeEventListener(VENDOR_INBOX_UNREAD_EVENT, onUnreadChanged);
+      window.clearInterval(id);
+    };
+  }, [refreshUnread, pathname]);
+
+  return <InboxHeaderControl href={VENDOR_INBOX} unreadCount={unreadCount} />;
 }
 
 function toggleSidebarMenu(onToggleDesktop: () => void) {
@@ -441,6 +470,12 @@ function AppTopBar({
 
       <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
         {showInbox ? inboxControl : null}
+
+        {config.showSettings ? (
+          <Link href="/settings" className="eq-top-icon" aria-label="Settings" title="Settings">
+            <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+          </Link>
+        ) : null}
 
         <div className="eq-user-menu">
           <span className="eq-avatar" aria-hidden>
@@ -571,10 +606,13 @@ export function AppShell({
 
   const topbarConfig = topbarConfigForRole(profile.role);
   const isCustomer = profile.role === "customer";
+  const isVendor = profile.role === "vendor";
   const showStaffInbox = usesStaffInbox(profile.role);
   const showCustomerInbox = isCustomer && Boolean(profile.customer_id);
+  const showVendorInbox = isVendor && Boolean(profile.vendor_id);
   const pollStaffInbox = showStaffInbox;
   const pollCustomerInbox = showCustomerInbox;
+  const pollVendorInbox = showVendorInbox;
 
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
 
@@ -591,11 +629,16 @@ export function AppShell({
         setUnreadInbox(count);
         return;
       }
+      if (pollVendorInbox && profile.vendor_id) {
+        const count = await countUnreadVendorInboxThreads(supabase, profile.vendor_id);
+        setUnreadInbox(count);
+        return;
+      }
       setUnreadInbox(0);
     } catch {
       /* keep last known count */
     }
-  }, [pollCustomerInbox, pollStaffInbox, profile.customer_id]);
+  }, [pollCustomerInbox, pollStaffInbox, pollVendorInbox, profile.customer_id, profile.vendor_id]);
 
   useEffect(() => {
     setMounted(true);
@@ -615,17 +658,21 @@ export function AppShell({
   }, [sidebarCollapsed]);
 
   useEffect(() => {
-    if (!pollStaffInbox && !pollCustomerInbox) return;
+    if (!pollStaffInbox && !pollCustomerInbox && !pollVendorInbox) return;
     void refreshUnread();
     const onUnreadChanged = () => void refreshUnread();
-    const unreadEvent = pollStaffInbox ? MANAGER_INBOX_UNREAD_EVENT : CUSTOMER_INBOX_UNREAD_EVENT;
+    const unreadEvent = pollStaffInbox
+      ? MANAGER_INBOX_UNREAD_EVENT
+      : pollCustomerInbox
+        ? CUSTOMER_INBOX_UNREAD_EVENT
+        : VENDOR_INBOX_UNREAD_EVENT;
     window.addEventListener(unreadEvent, onUnreadChanged);
     const id = window.setInterval(() => void refreshUnread(), UNREAD_POLL_MS);
     return () => {
       window.removeEventListener(unreadEvent, onUnreadChanged);
       window.clearInterval(id);
     };
-  }, [pollCustomerInbox, pollStaffInbox, refreshUnread, pathname]);
+  }, [pollCustomerInbox, pollStaffInbox, pollVendorInbox, refreshUnread, pathname]);
 
   useEffect(() => {
     const canVendors = ["administrator", "service_manager", "billing"].includes(profile.role);
@@ -683,8 +730,10 @@ export function AppShell({
         isGateActive={gateActive}
         blockNavigation={blockNavigation}
       />
+    ) : showVendorInbox && topbarConfig.showInbox ? (
+      <VendorInboxHeaderControl vendorId={profile.vendor_id!} />
     ) : showStaffInbox && topbarConfig.showInbox ? (
-      <InboxHeaderControl href="/inbox" unreadCount={unreadInbox} />
+      <InboxHeaderControl href={MANAGER_INBOX} unreadCount={unreadInbox} />
     ) : null;
 
   const desktopSidebarHidden = sidebarCollapsed;

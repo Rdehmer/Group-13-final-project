@@ -1,15 +1,19 @@
 "use client";
 
 import { Send } from "lucide-react";
-import {
-  formatMessageWhen,
-  type InboxMessage,
-} from "@/app/(app)/customer/inbox/inbox-types";
+import { formatMessageWhen } from "@/app/(app)/customer/inbox/inbox-types";
 
-type ViewerRole = "customer" | "staff";
+type ConversationMessage = {
+  id: string;
+  sender_role: "customer" | "staff" | "vendor";
+  body: string;
+  created_at: string;
+};
+
+type ViewerRole = "customer" | "staff" | "vendor";
 
 type Props = {
-  messages: InboxMessage[];
+  messages: ConversationMessage[];
   reply: string;
   busy: boolean;
   /** Who is reading — flips “me” vs other alignment in chat mode. */
@@ -19,6 +23,7 @@ type Props = {
   showDraftHint?: boolean;
   replyPlaceholder?: string;
   customerLabel?: string;
+  vendorLabel?: string;
   staffLabel?: string;
   onReplyChange: (value: string) => void;
   onSend: () => void;
@@ -36,6 +41,7 @@ export function ConversationPanel({
   showDraftHint = false,
   replyPlaceholder,
   customerLabel = "Customer",
+  vendorLabel = "Vendor",
   staffLabel = "Ridley Equipment Services",
   onReplyChange,
   onSend,
@@ -48,7 +54,11 @@ export function ConversationPanel({
   const replyRows = Math.max(showDraftHint ? 10 : 3, reply.split("\n").length + 1);
   const placeholder =
     replyPlaceholder ??
-    (viewerRole === "staff" ? "Write a reply to the customer…" : "Write a reply to Ridley…");
+    (viewerRole === "staff"
+      ? "Write a reply…"
+      : viewerRole === "vendor"
+        ? "Write a reply to Ridley…"
+        : "Write a reply to Ridley…");
 
   if (layout === "email") {
     return (
@@ -59,7 +69,11 @@ export function ConversationPanel({
           ) : (
             messages.map((msg) => {
               const fromStaff = msg.sender_role === "staff";
-              const fromLabel = fromStaff ? staffLabel : customerLabel;
+              const fromLabel = fromStaff
+                ? staffLabel
+                : msg.sender_role === "vendor"
+                  ? vendorLabel
+                  : customerLabel;
               return (
                 <article
                   key={msg.id}
@@ -142,7 +156,11 @@ export function ConversationPanel({
                 >
                   {!isMine ? (
                     <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide opacity-60">
-                      {msg.sender_role === "staff" ? staffLabel : customerLabel}
+                      {msg.sender_role === "staff"
+                        ? staffLabel
+                        : msg.sender_role === "vendor"
+                          ? vendorLabel
+                          : customerLabel}
                     </p>
                   ) : null}
                   <p className="whitespace-pre-wrap">{msg.body}</p>

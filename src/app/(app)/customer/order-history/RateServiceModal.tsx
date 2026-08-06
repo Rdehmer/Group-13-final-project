@@ -26,6 +26,7 @@ type Props = {
   onClose: () => void;
   onSubmitted: (rating: WorkOrderServiceRating) => void;
   onAlreadyRated?: () => void;
+  onDismissLater?: () => void;
 };
 
 function fieldKeyForDimension(field: (typeof RATING_DIMENSIONS)[number]["field"]): keyof ServiceRatingFormState {
@@ -50,6 +51,7 @@ export function RateServiceModal({
   onClose,
   onSubmitted,
   onAlreadyRated,
+  onDismissLater,
 }: Props) {
   const [form, setForm] = useState<ServiceRatingFormState>(EMPTY_RATING_FORM);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +85,11 @@ export function RateServiceModal({
     if (busy) return;
     if (required && !submitted) return;
     onClose();
+  }
+
+  function handleDismissLater() {
+    if (busy) return;
+    onDismissLater?.();
   }
 
   function updateField(key: keyof ServiceRatingFormState, value: ServiceRatingFormState[typeof key]) {
@@ -193,9 +200,15 @@ export function RateServiceModal({
 
               <p className="text-sm opacity-70">
                 {required ? (
-                  <>Please submit your rating to continue using the portal. Only <strong>Overall Experience</strong> is required.</>
+                  <>
+                    Please submit your rating to continue using the portal. Only{" "}
+                    <strong>Overall Experience</strong> is required. You can rate this visit later
+                    from Service History.
+                  </>
                 ) : (
-                  <>Tap the stars that apply. Only <strong>Overall Experience</strong> is required.</>
+                  <>
+                    Tap the stars that apply. Only <strong>Overall Experience</strong> is required.
+                  </>
                 )}
               </p>
 
@@ -236,6 +249,16 @@ export function RateServiceModal({
             </div>
 
             <div className="flex flex-wrap justify-end gap-2 border-t border-base-200 px-6 py-4">
+              {required && onDismissLater ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost mr-auto"
+                  onClick={handleDismissLater}
+                  disabled={busy}
+                >
+                  Continue to dashboard
+                </button>
+              ) : null}
               {!required ? (
                 <button type="button" className="btn btn-ghost" onClick={handleClose} disabled={busy}>
                   Not Now
