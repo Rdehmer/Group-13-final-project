@@ -20,11 +20,12 @@ import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
 import {
   contractMatchesPlanFilters,
   listActivePacks,
-  loadCatalog,
   packGoldMidPrice,
   parsePlanSnapshotFromNotes,
+  type IndustryPack,
   type ServiceLevelId,
 } from "@/lib/contract-plans";
+import { loadCompanyCatalog } from "@/lib/company-catalog";
 import {
   currentBillingPeriodKey,
   formatStandingDetail,
@@ -124,9 +125,7 @@ export default function ContractsPage() {
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [planIndustry, setPlanIndustry] = useState<"all" | "unlabeled" | string>("all");
   const [planTier, setPlanTier] = useState<"all" | ServiceLevelId>("all");
-  const [planPacks, setPlanPacks] = useState(() =>
-    typeof window !== "undefined" ? listActivePacks(loadCatalog()) : [],
-  );
+  const [planPacks, setPlanPacks] = useState<IndustryPack[]>([]);
   const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [genBusy, setGenBusy] = useState(false);
@@ -137,8 +136,11 @@ export default function ContractsPage() {
   const isAdmin = profile?.role === "administrator";
 
   useEffect(() => {
-    setPlanPacks(listActivePacks(loadCatalog()));
-  }, []);
+    void (async () => {
+      const { catalog } = await loadCompanyCatalog(supabase);
+      setPlanPacks(listActivePacks(catalog));
+    })();
+  }, [supabase]);
 
   useEffect(() => {
     setFilters((prev) => ({ ...prev, status: statusFromUrl, type: typeFromUrl }));
@@ -655,7 +657,7 @@ export default function ContractsPage() {
                   <option value="unlabeled">Unlabeled (no plan tag)</option>
                   {planPacks.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} — Gold Mid from {formatMoney(Math.round(packGoldMidPrice(p) / 12))}/mo
+                      {p.name} — from {formatMoney(Math.round(packGoldMidPrice(p) / 12))}/mo
                     </option>
                   ))}
                 </select>
@@ -668,9 +670,17 @@ export default function ContractsPage() {
                   onChange={(e) => setPlanTier(e.target.value as "all" | ServiceLevelId)}
                 >
                   <option value="all">All levels</option>
-                  <option value="gold">Gold</option>
-                  <option value="silver">Silver</option>
-                  <option value="bronze">Bronze</option>
+                  {[
+                    ...new Map(
+                      planPacks
+                        .flatMap((p) => p.levels)
+                        .map((l) => [l.id, l.name] as const),
+                    ).entries(),
+                  ].map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
                 </select>
               </label>
               {planIndustry !== "all" || planTier !== "all" ? (
