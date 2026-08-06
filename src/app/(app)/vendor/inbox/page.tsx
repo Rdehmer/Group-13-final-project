@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Vendor portal inbox — messages with Ridley staff about work, supplies, and billing.
+ * Vendor portal inbox — messages with EquipmentIQ staff about work, supplies, and billing.
  */
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
@@ -247,7 +247,7 @@ function VendorInboxPageInner() {
     return (
       <EmptyState
         title="No vendor account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -256,7 +256,7 @@ function VendorInboxPageInner() {
     <div>
       <PageHeader
         title="Inbox"
-        description="Messages with Ridley Equipment Services about work assignments, supply orders, and billing."
+        description="Messages with EquipmentIQ about work assignments, supply orders, and billing."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -333,7 +333,7 @@ function VendorInboxPageInner() {
                   busy={busy}
                   viewerRole="vendor"
                   vendorLabel="You"
-                  staffLabel="Ridley Equipment Services"
+                  staffLabel="EquipmentIQ"
                   onReplyChange={setReply}
                   onSend={() => void handleSendReply()}
                 />

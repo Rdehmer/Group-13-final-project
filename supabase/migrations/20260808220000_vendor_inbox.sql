@@ -1,4 +1,4 @@
--- Vendor inbox: threads and messages between vendors and Ridley staff.
+-- Vendor inbox: threads and messages between vendors and EquipmentIQ staff.
 
 create table if not exists public.vendor_inbox_threads (
   id uuid primary key default gen_random_uuid(),
@@ -196,22 +196,22 @@ create policy vendor_inbox_messages_staff_insert
 grant select, insert, update on public.vendor_inbox_threads to authenticated;
 grant select, insert on public.vendor_inbox_messages to authenticated;
 
--- Demo seed: welcome thread for vendor1@ridley-demo.test
+-- Demo seed: welcome thread for vendor1@equipmentiq-demo.test
 insert into public.vendor_inbox_threads (vendor_id, subject, category, status, last_message_at)
 select
   p.vendor_id,
-  'Welcome to the Ridley vendor portal',
+  'Welcome to the EquipmentIQ vendor portal',
   'general',
   'open',
   now()
 from public.profiles p
-where p.email = 'vendor1@ridley-demo.test'
+where p.email = 'vendor1@equipmentiq-demo.test'
   and p.vendor_id is not null
   and not exists (
     select 1
     from public.vendor_inbox_threads existing
     where existing.vendor_id = p.vendor_id
-      and existing.subject = 'Welcome to the Ridley vendor portal'
+      and existing.subject = 'Welcome to the EquipmentIQ vendor portal'
   );
 
 insert into public.vendor_inbox_messages (thread_id, sender_role, sender_profile_id, body)
@@ -219,11 +219,11 @@ select
   t.id,
   'staff',
   null,
-  'Hi — welcome to the Ridley vendor portal inbox. Use this thread for questions about work assignments, supply orders, or billing. Our team will reply here.'
+  'Hi — welcome to the EquipmentIQ vendor portal inbox. Use this thread for questions about work assignments, supply orders, or billing. Our team will reply here.'
 from public.vendor_inbox_threads t
 join public.profiles p on p.vendor_id = t.vendor_id
-where p.email = 'vendor1@ridley-demo.test'
-  and t.subject = 'Welcome to the Ridley vendor portal'
+where p.email = 'vendor1@equipmentiq-demo.test'
+  and t.subject = 'Welcome to the EquipmentIQ vendor portal'
   and not exists (
     select 1
     from public.vendor_inbox_messages m

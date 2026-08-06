@@ -126,7 +126,7 @@ export function VendorNewMessageModal({
                 New message
               </h3>
               <p className="mt-1 text-sm leading-relaxed opacity-70">
-                Send a message to Ridley Equipment Services about work, supplies, or billing.
+                Send a message to EquipmentIQ about work, supplies, or billing.
               </p>
             </div>
           </div>

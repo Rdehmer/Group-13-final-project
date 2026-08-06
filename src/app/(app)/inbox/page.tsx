@@ -498,7 +498,7 @@ export default function ManagerInboxPage() {
                   busy={busy}
                   viewerRole="staff"
                   vendorLabel={vendorName}
-                  staffLabel="Ridley Equipment Services"
+                  staffLabel="EquipmentIQ"
                   onReplyChange={setReply}
                   onSend={() => void handleSendVendorReply()}
                 />
