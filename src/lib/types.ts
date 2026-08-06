@@ -123,6 +123,10 @@ export type WorkOrder = {
   arrival_at: string | null;
   started_at: string | null;
   paused_at: string | null;
+  /** Field dispatch board progress (En Route, Arrived, Working, …). */
+  dispatch_status?: string | null;
+  dispatch_note?: string | null;
+  dispatch_updated_at?: string | null;
   completion_date: string | null;
   approved_by: string | null;
   approved_at: string | null;
