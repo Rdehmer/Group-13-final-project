@@ -63,6 +63,12 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["administrator", "service_manager", "technician", "billing"],
   },
   {
+    href: "/emergency-purchases",
+    /** Manager inbox for technician “I bought a part” emergency buys. */
+    label: "Reimbursements",
+    roles: ["service_manager"],
+  },
+  {
     href: "/billing",
     label: "Billing",
     roles: ["administrator", "billing"],

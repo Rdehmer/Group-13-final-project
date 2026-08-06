@@ -24,6 +24,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   time_off: "Time Off Requests",
   dispatch: "Dispatch Board",
   parts: "Parts / Inventory",
+  emergency_purchases: "Reimbursements",
   billing: "Billing / Invoices",
   payments: "Payments",
   batches: "Accounting Batches",
@@ -51,6 +52,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       "time_off",
       "dispatch",
       "parts",
+      "emergency_purchases",
     ],
   },
   {
@@ -84,6 +86,7 @@ const HREF_PERMISSION: { prefix: string; key: PermissionKey }[] = [
   { prefix: "/time-off", key: "time_off" },
   { prefix: "/dispatch", key: "dispatch" },
   { prefix: "/parts", key: "parts" },
+  { prefix: "/emergency-purchases", key: "emergency_purchases" },
   { prefix: "/billing", key: "billing" },
   { prefix: "/payments", key: "payments" },
   { prefix: "/batches", key: "batches" },
@@ -104,6 +107,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "time_off",
     "dispatch",
     "parts",
+    "emergency_purchases",
     "reports",
     "invoice_cash",
   ],
@@ -187,6 +191,8 @@ function navAllowed(item: NavItem, profile: Profile): boolean {
   if (profile.role === "customer") {
     return item.roles.includes("customer");
   }
+  // Honor NAV_ITEMS.roles so manager-only tabs stay off Admin / other staff.
+  if (!item.roles.includes(profile.role)) return false;
   return profileCanAccessHref(profile, item.href);
 }
 
@@ -198,12 +204,12 @@ export function filterNavForProfile(profile: Profile): NavItem[] {
     }
     if (item.children?.length) {
       const kids = item.children.filter((c) => navAllowed(c, profile));
-      if (kids.length || profileCanAccessHref(profile, item.href)) {
+      if (kids.length || navAllowed(item, profile)) {
         return true;
       }
       return false;
     }
-    return profileCanAccessHref(profile, item.href);
+    return navAllowed(item, profile);
   }).map((item) => {
     if (!item.children?.length) return item;
     return {
@@ -211,7 +217,7 @@ export function filterNavForProfile(profile: Profile): NavItem[] {
       children: item.children.filter((c) =>
         profile.role === "customer"
           ? c.roles.includes("customer")
-          : profileCanAccessHref(profile, c.href),
+          : navAllowed(c, profile),
       ),
     };
   });
