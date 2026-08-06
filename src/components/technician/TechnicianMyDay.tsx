@@ -449,9 +449,9 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
           <Package className="h-4 w-4" />
           Parts
         </Link>
-        <Link href="/scheduling" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
+        <Link href="/timesheets" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarDays className="h-4 w-4" />
-          Hours
+          Timesheet
         </Link>
         <Link href="/time-off" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarOff className="h-4 w-4" />
