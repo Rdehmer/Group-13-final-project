@@ -68,11 +68,8 @@ import {
   parseTimesheetDeepLink,
 } from "@/lib/timesheets";
 import {
-  dayClocksFromTimeEntries,
   loadDayClocksForRange,
   loadDayClocksForTechnicians,
-  mergeDayClocksWithDerived,
-  persistMissingDayClocks,
   sumTodayAndWeekDayClockHours,
   syncLocalDayClocksToRemote,
 } from "@/lib/day-clock";
@@ -284,29 +281,22 @@ export default function TimesheetsPage() {
         setActive(null);
       }
 
-      // My Day shift clocks → Today / Week hours (all techs when filter is All)
+      // My Day shift clocks only (Clock in / Clock out buttons) → Today / Week hours
       try {
         await syncLocalDayClocksToRemote(supabase);
 
-        let weekRows: TechnicianDayClock[] = [];
         if (!manager) {
-          weekRows = await loadDayClocksForRange(supabase, meP.id, week.start, week.end);
+          setDayClocksWeek(
+            await loadDayClocksForRange(supabase, meP.id, week.start, week.end),
+          );
         } else if (filterTech !== "all") {
-          weekRows = await loadDayClocksForRange(supabase, filterTech, week.start, week.end);
+          setDayClocksWeek(
+            await loadDayClocksForRange(supabase, filterTech, week.start, week.end),
+          );
         } else {
-          weekRows = await loadDayClocksForTechnicians(supabase, "all", week.start, week.end);
-        }
-
-        // Fill empty days from timesheet punches so cards aren't stuck at 0 after table create
-        const weekEntries = filtered.filter(
-          (e) => e.entry_date >= week.start && e.entry_date <= week.end,
-        );
-        const derived = dayClocksFromTimeEntries(weekEntries);
-        const merged = mergeDayClocksWithDerived(weekRows, derived);
-        setDayClocksWeek(merged);
-
-        if (manager) {
-          void persistMissingDayClocks(supabase, merged).catch(() => undefined);
+          setDayClocksWeek(
+            await loadDayClocksForTechnicians(supabase, "all", week.start, week.end),
+          );
         }
       } catch {
         setDayClocksWeek([]);
@@ -609,9 +599,9 @@ export default function TimesheetsPage() {
           value={formatHours(todayShiftHours)}
           hint={
             isManager && filterTech === "all"
-              ? "All technicians · My Day clock out − clock in today"
+              ? "All technicians · My Day Clock in / out only"
               : dayClocksWeek.filter((r) => r.work_date === todayIso()).length === 0
-                ? "My Day clock in / out (synced)"
+                ? "My Day Clock in / out only"
                 : dayClocksWeek.some((r) => r.work_date === todayIso() && !r.clock_out_at)
                   ? "My Day shift (live)"
                   : "My Day clock out − clock in"
@@ -624,8 +614,8 @@ export default function TimesheetsPage() {
           value={formatHours(weekShiftHours)}
           hint={
             isManager && filterTech === "all"
-              ? "Sum of all technicians’ My Day hours this week"
-              : "Sum of My Day clock in → out for each day this week"
+              ? "Sum of all technicians’ My Day Clock in → out this week"
+              : "Sum of My Day Clock in → out for each day this week"
           }
           danger={!(isManager && filterTech === "all") && weekShiftHours > 40}
           scrollTarget="timesheet-entries"

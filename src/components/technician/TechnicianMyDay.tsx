@@ -17,7 +17,6 @@ import {
   MapPin,
   Package,
   Phone,
-  Radio,
   RefreshCw,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
@@ -613,12 +612,12 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Link href="/parts" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <Package className="h-4 w-4" />
           Parts
         </Link>
-        <Link href="/technician" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
+        <Link href="/scheduling" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarDays className="h-4 w-4" />
           Hours
         </Link>
@@ -632,10 +631,6 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         <Link href="/time-off" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarOff className="h-4 w-4" />
           Time off
-        </Link>
-        <Link href="/dispatch" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
-          <Radio className="h-4 w-4" />
-          Dispatch
         </Link>
       </div>
 
