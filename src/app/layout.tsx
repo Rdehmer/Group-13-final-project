@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
-import { Source_Sans_3 } from "next/font/google";
+import { Plus_Jakarta_Sans, Sora } from "next/font/google";
 import { ThemeLock } from "@/components/ThemeLock";
 import "./globals.css";
 
-const sourceSans = Source_Sans_3({
-  variable: "--font-source-sans",
+const plusJakarta = Plus_Jakarta_Sans({
+  variable: "--font-plus-jakarta",
+  subsets: ["latin"],
+});
+
+const sora = Sora({
+  variable: "--font-sora",
   subsets: ["latin"],
 });
 
@@ -17,8 +22,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${sourceSans.variable} h-full antialiased`}
-      data-theme="corporate"
+      className={`${plusJakarta.variable} ${sora.variable} h-full antialiased`}
+      data-theme="ridley"
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col bg-base-200">

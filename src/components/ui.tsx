@@ -5,7 +5,7 @@ const TONE: Record<string, string> = {
   warning: "badge-warning",
   error: "badge-error",
   info: "badge-info",
-  neutral: "badge-ghost",
+  neutral: "badge-ghost border border-base-300",
   critical: "badge-error",
   /** In Progress — amber yellow, distinct from Daisy warning */
   progress: "border-amber-400/80 bg-amber-300 text-amber-950",
@@ -24,7 +24,7 @@ export function StatusBadge({
 }) {
   return (
     <span
-      className={`badge badge-sm h-auto max-w-full whitespace-normal break-words py-1 text-center leading-tight ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}
+      className={`badge badge-sm h-auto max-w-full whitespace-normal break-words py-1 text-center font-medium leading-tight ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}
     >
       {label}
     </span>
@@ -63,9 +63,9 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="rounded-box border border-dashed border-base-300 bg-base-200/40 p-10 text-center">
-      <h3 className="text-lg font-semibold">{title}</h3>
-      <p className="mt-2 text-sm opacity-70">{description}</p>
+    <div className="rounded-2xl border border-dashed border-base-300 bg-base-100/80 p-10 text-center">
+      <h3 className="font-display text-lg font-semibold">{title}</h3>
+      <p className="mt-2 text-sm leading-relaxed text-base-content/60">{description}</p>
       {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );
@@ -87,19 +87,27 @@ export function StatCard({
   active?: boolean;
 }) {
   const className = [
-    "stat rounded-box bg-base-100 shadow text-left w-full",
-    danger ? "border border-error/40" : "",
+    "stat rounded-2xl border border-base-300/70 bg-base-100 text-left w-full shadow-none",
+    danger ? "border-error/45 bg-error/5" : "",
     active ? "ring-2 ring-primary border-primary" : "",
-    onClick ? "cursor-pointer hover:bg-base-200/60 transition-colors" : "",
+    onClick ? "cursor-pointer transition-colors hover:bg-base-200/50" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   const body = (
     <>
-      <div className="stat-title">{label}</div>
-      <div className={`stat-value text-2xl ${danger ? "text-error" : ""}`}>{value}</div>
-      {hint ? <div className="stat-desc">{hint}</div> : null}
+      <div className="stat-title text-xs font-medium uppercase tracking-wide text-base-content/55">
+        {label}
+      </div>
+      <div
+        className={`stat-value font-display text-2xl font-semibold tracking-tight ${
+          danger ? "text-error" : "text-base-content"
+        }`}
+      >
+        {value}
+      </div>
+      {hint ? <div className="stat-desc text-base-content/55">{hint}</div> : null}
     </>
   );
 

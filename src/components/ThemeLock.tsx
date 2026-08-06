@@ -2,10 +2,10 @@
 
 import { useEffect } from "react";
 
-/** Locks the corporate theme and clears leftover theme-picker preferences. */
+/** Locks the Ridley workshop theme and clears leftover theme-picker preferences. */
 export function ThemeLock() {
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", "corporate");
+    document.documentElement.setAttribute("data-theme", "ridley");
     try {
       localStorage.removeItem("esm-theme");
     } catch {

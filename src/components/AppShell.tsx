@@ -109,7 +109,7 @@ function NavDetailsGroup({
           {item.label}
         </span>
       ) : (
-        <Link href={item.href} className={sectionOpen ? "font-medium" : ""}>
+        <Link href={item.href} className={sectionOpen ? "border-l-2 border-primary/40 font-semibold text-primary" : "border-l-2 border-transparent opacity-80"}>
           {item.label}
         </Link>
       )}
@@ -156,10 +156,10 @@ export function AppShell({
   }
 
   return (
-    <div className="drawer lg:drawer-open min-h-screen">
+    <div className="drawer lg:drawer-open min-h-screen bg-base-200">
       <input id="app-drawer" type="checkbox" className="drawer-toggle" />
       <div className="drawer-content flex min-h-screen flex-col">
-        <header className="navbar sticky top-0 z-30 border-b border-base-300 bg-base-100 px-4 shadow-sm">
+        <header className="navbar sticky top-0 z-30 border-b border-base-300/80 bg-base-100/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-base-100/85">
           <div className="flex-none lg:hidden">
             <label htmlFor="app-drawer" className="btn btn-ghost btn-square" aria-label="Open menu">
               <Menu className="h-5 w-5" />
@@ -167,14 +167,18 @@ export function AppShell({
           </div>
           <div className="flex-1">
             <div>
-              <p className="text-xs uppercase tracking-wide opacity-60">Equipment Service Manager</p>
-              <p className="font-semibold leading-tight">Ridley Equipment Services</p>
+              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-primary/80">
+                Equipment Service Manager
+              </p>
+              <p className="font-display text-base font-semibold leading-tight text-base-content">
+                Ridley Equipment Services
+              </p>
             </div>
           </div>
           <div className="hidden items-center gap-3 md:flex">
             <div className="text-right text-sm">
               <p className="font-medium">{profile.full_name || profile.email}</p>
-              <p className="opacity-60">{ROLE_LABELS[profile.role]}</p>
+              <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
             </div>
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={logout}>
               <LogOut className="h-4 w-4" /> Logout
@@ -182,10 +186,10 @@ export function AppShell({
           </div>
         </header>
 
-        <div className="flex items-center justify-between gap-2 border-b border-base-300 bg-base-100 px-4 py-2 md:hidden">
+        <div className="flex items-center justify-between gap-2 border-b border-base-300/80 bg-base-100 px-4 py-2.5 md:hidden">
           <div className="text-sm">
             <span className="font-medium">{profile.full_name || profile.email}</span>
-            <span className="opacity-60"> · {ROLE_LABELS[profile.role]}</span>
+            <span className="opacity-55"> · {ROLE_LABELS[profile.role]}</span>
           </div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={logout} aria-label="Logout">
             <LogOut className="h-4 w-4" />
@@ -198,15 +202,20 @@ export function AppShell({
           </div>
         ) : null}
 
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="app-main flex-1 p-5 md:p-8">{children}</main>
       </div>
 
       <aside className="drawer-side z-40">
         <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
-        <nav className="menu min-h-full w-72 bg-base-100 p-4 text-base-content">
-          <div className="mb-6 flex items-center gap-2 px-2">
-            <Wrench className="h-6 w-6 shrink-0 text-primary" />
-            <span className="shrink-0 font-bold">ESM</span>
+        <nav className="menu min-h-full w-72 gap-0.5 border-r border-base-300/70 bg-base-100 p-4 text-base-content">
+          <div className="mb-5 flex items-center gap-3 rounded-2xl bg-primary/10 px-3 py-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-content shadow-sm">
+              <Wrench className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="font-display text-sm font-semibold leading-tight">ESM</p>
+              <p className="truncate text-[11px] opacity-55">Field service</p>
+            </div>
             <DemoPersonaSwitcher currentEmail={profile.email} />
           </div>
           {navItems.map((item) => {
@@ -232,7 +241,11 @@ export function AppShell({
                 <GatedNavLink
                   item={item}
                   pathname={pathname}
-                  className={active ? "active font-medium" : ""}
+                  className={
+                    active
+                      ? "active border-l-2 border-primary bg-primary/10 font-semibold text-primary"
+                      : "border-l-2 border-transparent opacity-80 hover:bg-base-200/80 hover:opacity-100"
+                  }
                   isGateActive={gateActive}
                   blockNavigation={blockNavigation}
                 />
