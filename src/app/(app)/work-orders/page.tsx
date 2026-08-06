@@ -81,7 +81,8 @@ export default function WorkOrdersPage() {
     direction: "asc" | "desc";
   }>({ column: "number", direction: "asc" });
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
   const filter = searchParams.get("filter");
   const typeFilter = searchParams.get("type");
   const statusFilter = searchParams.get("status");

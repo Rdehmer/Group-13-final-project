@@ -231,8 +231,10 @@ export default function TechnicianSchedulePage() {
   const [dayViewHeight, setDayViewHeight] = useState(DEFAULT_PREFS.dayViewHeight);
   const dayResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
 
-  const isServiceManager = profile?.role === "service_manager";
-  const isManager = profile?.role === "administrator" || isServiceManager;
+  // Admin matches service manager schedule UX (status sync, hover edits, density).
+  const isServiceManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
+  const isManager = isServiceManager;
   // Managers schedule at comfortable height so timeline bubbles stay readable.
   const baseRowHeight = densityRowHeight(isManager ? "comfortable" : density);
 

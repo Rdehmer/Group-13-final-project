@@ -21,6 +21,7 @@ import {
 import { ManagerDashboardStudio } from "@/components/ManagerDashboardStudio";
 import { formatMoney } from "@/lib/calculations";
 import { relatedName } from "@/lib/relations";
+import { fetchManagerUnreadInboxCount } from "@/lib/manager-inbox";
 
 function safeNumber(value: unknown): number {
   const n = Number(value);
@@ -240,8 +241,23 @@ export default async function DashboardPage() {
     }
   }).length;
 
+  let unreadInboxCount = 0;
+  if (isManager) {
+    try {
+      unreadInboxCount = await fetchManagerUnreadInboxCount(supabase);
+    } catch {
+      unreadInboxCount = 0;
+    }
+  }
+
   const attentionTiles = isManager
     ? [
+        {
+          label: "Unread inbox messages",
+          value: unreadInboxCount,
+          href: "/inbox",
+          danger: unreadInboxCount > 0,
+        },
         {
           label: "Pending contract approvals",
           value: pendingApprovals,

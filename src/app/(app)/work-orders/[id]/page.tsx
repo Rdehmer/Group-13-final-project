@@ -24,6 +24,7 @@ import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { formatMoney } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
+import { workOrderLaborHours } from "@/lib/timesheets";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
@@ -105,6 +106,7 @@ export default function JobDetailPage() {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchase[]>([]);
   const [serviceRating, setServiceRating] = useState<WorkOrderServiceRating | null>(null);
+  const [timeEntryHours, setTimeEntryHours] = useState({ hours: 0, laborCost: 0, billableAmount: 0 });
 
   async function load() {
     const [{ data }, { data: { user } }, { data: settings }, { data: purchases }] = await Promise.all([
@@ -169,6 +171,12 @@ export default function JobDetailPage() {
     setInventory((stock as Part[]) ?? []);
     setServiceRating((rating as WorkOrderServiceRating | null) ?? null);
 
+    try {
+      setTimeEntryHours(await workOrderLaborHours(supabase, id));
+    } catch {
+      setTimeEntryHours({ hours: 0, laborCost: 0, billableAmount: 0 });
+    }
+
     if (w?.customer_id) {
       const { data: eqList } = await supabase
         .from("equipment")
@@ -202,8 +210,10 @@ export default function JobDetailPage() {
     load();
   }, [id]);
 
-  const isServiceManager = profile?.role === "service_manager";
-  const isManager = profile?.role === "administrator" || isServiceManager;
+  // Admin matches service manager WO detail UX (status↔schedule sync, hover edits).
+  const isServiceManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
+  const isManager = isServiceManager;
   const isBillingRole = profile?.role === "billing";
   const isBilling = isBillingRole || profile?.role === "administrator";
   const isTech =
@@ -1207,6 +1217,25 @@ export default function JobDetailPage() {
                 <h2 className="card-title text-base gap-2">
                   <Clock className="h-4 w-4" /> Labor
                 </h2>
+                <div className="mb-3 rounded-lg border border-base-300 bg-base-200/40 px-3 py-2 text-sm">
+                  <p>
+                    Field timesheet total:{" "}
+                    <span className="font-semibold">{timeEntryHours.hours.toFixed(2)} h</span>
+                    {profile?.role !== "customer" ? (
+                      <>
+                        {" "}
+                        · int. cost {formatMoney(timeEntryHours.laborCost)} · billable{" "}
+                        {formatMoney(timeEntryHours.billableAmount)}
+                      </>
+                    ) : null}
+                  </p>
+                  <p className="text-xs opacity-60">
+                    From approved/complete <code>time_entries</code> (also mirrored for invoice prep).{" "}
+                    <Link href="/timesheets" className="link link-primary">
+                      Open timesheets
+                    </Link>
+                  </p>
+                </div>
                 {canEditLines ? (
                   <form onSubmit={addLabor} className="mb-4 grid gap-3 sm:grid-cols-2">
                     <FormRow label="Regular hrs">

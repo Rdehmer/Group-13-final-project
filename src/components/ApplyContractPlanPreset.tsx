@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { FormRow } from "@/components/PageHeader";
-import { formatMoney } from "@/lib/calculations";
+import { ContractPricingSummary } from "@/components/ContractPricingSummary";
 import {
   CUSTOM_PACK_ID,
   applyPlanToContractForm,
@@ -18,6 +18,8 @@ import {
   type ManagerContractFormFields,
   type ServiceLevelId,
 } from "@/lib/contract-plans";
+import { DEFAULT_SERVICE_FEE_OPTION, formatMonthlyPremium, type ServiceFeeOption } from "@/lib/contract-pricing";
+import { premiumForFeeOption } from "@/lib/contract-pricing";
 
 type Props<T extends ManagerContractFormFields> = {
   form: T;
@@ -56,6 +58,7 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
   const [assetValue, setAssetValue] = useState(
     String(suggestedAssetValue > 0 ? suggestedAssetValue : 100_000),
   );
+  const [serviceFeeOption, setServiceFeeOption] = useState<ServiceFeeOption>(DEFAULT_SERVICE_FEE_OPTION);
   const [hint, setHint] = useState<string | null>(null);
 
   useEffect(() => {
@@ -91,10 +94,12 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
     const next = applyPlanToContractForm(form, resolved, {
       updateName,
       customerName,
+      serviceFeeOption,
     });
     onApply(next);
+    const monthly = premiumForFeeOption(resolved.thresholds, serviceFeeOption);
     setHint(
-      `Applied ${resolved.pack.name} · ${resolved.level.name} · ${resolved.band.label} (${formatMoney(resolved.thresholds.annual_price)}/yr).`,
+      `Applied ${resolved.pack.name} · ${resolved.level.name} · ${resolved.band.label} (${formatMonthlyPremium(monthly)} · $${serviceFeeOption}/visit).`,
     );
   }
 
@@ -157,15 +162,13 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
       </div>
 
       {preview ? (
-        <p className="text-xs opacity-70">
-          Resolves to <span className="font-medium">{preview.band.label}</span> band (
-          {formatBandRange(preview.band)}) ·{" "}
-          <span className="font-medium tabular-nums">
-            {formatMoney(preview.thresholds.annual_price)}
-          </span>
-          /yr · {preview.thresholds.included_service_visits} visits ·{" "}
-          {preview.thresholds.included_labor_hours} labor hrs
-        </p>
+        <ContractPricingSummary
+          variant="prospect"
+          resolved={preview}
+          serviceFeeOption={serviceFeeOption}
+          onServiceFeeOptionChange={setServiceFeeOption}
+          compact
+        />
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
@@ -179,7 +182,7 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
             onClick={() => setAssetValue(String(suggestedAssetValue))}
             disabled={packId === CUSTOM_PACK_ID}
           >
-            Use equipment total ({formatMoney(suggestedAssetValue)})
+            Use equipment total
           </button>
         ) : null}
       </div>

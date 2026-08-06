@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -10,6 +10,7 @@ import { EmptyState, StatusBadge } from "@/components/ui";
 import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
 import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
+import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import type { Part, Profile, TechPartOrderRequest, WorkOrder } from "@/lib/types";
 
@@ -114,6 +115,7 @@ export default function PartsPage() {
   const [parts, setParts] = useState<Part[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
   const [managerPos, setManagerPos] = useState<PurchaseOrderRow[]>([]);
+  const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchaseReviewRow[]>([]);
   const [jobs, setJobs] = useState<JobOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showPurchaseOrder, setShowPurchaseOrder] = useState(false);
@@ -148,10 +150,11 @@ export default function PartsPage() {
   });
   const [form, setForm] = useState<PartForm>(EMPTY_FORM);
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
 
   async function loadTechnicianData(technicianId: string) {
-    const [{ data: requests }, { data: assignedJobs }] = await Promise.all([
+    const [{ data: requests }, { data: assignedJobs }, purchasesResult] = await Promise.all([
       supabase
         .from("purchase_orders")
         .select("*, parts(part_number, name)")
@@ -164,10 +167,32 @@ export default function PartsPage() {
         .eq("assigned_technician_id", technicianId)
         .neq("status", "Canceled")
         .order("scheduled_date", { ascending: false }),
+      supabase
+        .from("emergency_purchases")
+        .select(
+          `
+          *,
+          parts:parts!emergency_purchases_part_id_fkey(id, part_number, name),
+          work_orders:work_orders!emergency_purchases_job_id_fkey(id, work_order_number, problem_description)
+        `,
+        )
+        .eq("technician_id", technicianId)
+        .order("purchased_at", { ascending: false }),
     ]);
 
     setPurchaseOrders((requests as PurchaseOrderRow[]) ?? []);
     setJobs((assignedJobs as JobOption[]) ?? []);
+
+    if (purchasesResult.error) {
+      const { data: flat } = await supabase
+        .from("emergency_purchases")
+        .select("*")
+        .eq("technician_id", technicianId)
+        .order("purchased_at", { ascending: false });
+      setEmergencyPurchases((flat as EmergencyPurchaseReviewRow[]) ?? []);
+    } else {
+      setEmergencyPurchases((purchasesResult.data as EmergencyPurchaseReviewRow[]) ?? []);
+    }
   }
 
   async function loadManagerPos() {
@@ -216,7 +241,10 @@ export default function PartsPage() {
     setParts((data as Part[]) ?? []);
     if (loadedProfile?.role === "technician") {
       await loadTechnicianData(loadedProfile.id);
-    } else if (loadedProfile?.role === "service_manager") {
+    } else if (
+      loadedProfile?.role === "administrator" ||
+      loadedProfile?.role === "service_manager"
+    ) {
       await loadManagerPos();
     }
     setLoading(false);
@@ -395,10 +423,10 @@ export default function PartsPage() {
       >
         <option value="">All</option>
         <option value="__sort_asc">
-          Sort Aâ€“Z{sortingThis && sort.direction === "asc" ? " âœ“" : ""}
+          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
         </option>
         <option value="__sort_desc">
-          Sort Zâ€“A{sortingThis && sort.direction === "desc" ? " âœ“" : ""}
+          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
         </option>
         {options.map((opt) => (
           <option key={opt} value={opt}>
@@ -622,7 +650,7 @@ export default function PartsPage() {
       action: "bulk_reorder_level",
       recordType: "part",
       recordId: ids[0],
-      newValue: `${ids.length} parts â†’ reorder ${value}`,
+      newValue: `${ids.length} parts → reorder ${value}`,
     });
     setBulkSelected(new Set());
     setBulkReorderValue("");
@@ -744,10 +772,10 @@ export default function PartsPage() {
       action: "purchase_order_fulfilled",
       recordType: "purchase_order",
       recordId: row.id,
-      newValue: `${row.parts?.part_number ?? partId} Ã— ${qty}`,
+      newValue: `${row.parts?.part_number ?? partId} × ${qty}`,
     });
     await loadManagerPos();
-    setSuccess("Purchase order fulfilled â€” warehouse stock reduced.");
+    setSuccess("Purchase order fulfilled — warehouse stock reduced.");
     setPoBusyId(null);
   }
 
@@ -784,7 +812,7 @@ export default function PartsPage() {
   ];
 
   if (loading) {
-    return <div className="p-8 text-center opacity-60">Loading inventoryâ€¦</div>;
+    return <div className="p-8 text-center opacity-60">Loading inventory…</div>;
   }
 
   if (!profile) {
@@ -799,6 +827,7 @@ export default function PartsPage() {
         profile={profile}
         parts={parts}
         purchaseOrders={purchaseOrders}
+        emergencyPurchases={emergencyPurchases}
         jobs={jobs}
         success={success}
         error={error}
@@ -862,7 +891,7 @@ export default function PartsPage() {
           aria-pressed={lowStockOnly}
         >
           <span>
-            {lowStockCount} part(s) at or below reorder level â€” click to{" "}
+            {lowStockCount} part(s) at or below reorder level — click to{" "}
             {lowStockOnly ? "clear" : "filter"}
           </span>
         </button>
@@ -887,14 +916,14 @@ export default function PartsPage() {
                 >
                   <div>
                     <p className="font-semibold">
-                      {row.parts?.part_number ?? "Part"} â€” {row.parts?.name ?? "Catalog item"}
+                      {row.parts?.part_number ?? "Part"} — {row.parts?.name ?? "Catalog item"}
                     </p>
                     <p className="text-sm opacity-70">
-                      Qty {row.quantity_requested} Â· {techLabel(row.technician)}
-                      {row.note ? ` Â· ${row.note}` : ""}
+                      Qty {row.quantity_requested} · {techLabel(row.technician)}
+                      {row.note ? ` · ${row.note}` : ""}
                     </p>
                     <p className="text-xs opacity-60">
-                      Warehouse on hand: {row.parts?.quantity_on_hand ?? "â€”"}
+                      Warehouse on hand: {row.parts?.quantity_on_hand ?? "—"}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -918,7 +947,7 @@ export default function PartsPage() {
                       disabled={poBusyId === row.id}
                       onClick={() => void fulfillPo(row)}
                     >
-                      {poBusyId === row.id ? "Workingâ€¦" : "Fulfill"}
+                      {poBusyId === row.id ? "Working…" : "Fulfill"}
                     </button>
                     {row.parts?.id ? (
                       <Link href={`/parts/${row.parts.id}`} className="btn btn-ghost btn-xs">
@@ -1029,7 +1058,7 @@ export default function PartsPage() {
               className="input input-bordered input-sm w-full"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Part #, name, category, supplierâ€¦"
+              placeholder="Part #, name, category, supplier…"
               aria-label="Search parts"
             />
           </label>
@@ -1141,7 +1170,7 @@ export default function PartsPage() {
                               {header.label}
                               {sort.key === header.key ? (
                                 <span aria-hidden="true">
-                                  {sort.direction === "asc" ? "â–²" : "â–¼"}
+                                  {sort.direction === "asc" ? "▲" : "▼"}
                                 </span>
                               ) : null}
                             </button>
@@ -1300,8 +1329,8 @@ export default function PartsPage() {
                           </td>
                           {isManager ? (
                             <>
-                              <td className="align-top">{p.category ?? "â€”"}</td>
-                              <td className="align-top">{p.supplier ?? "â€”"}</td>
+                              <td className="align-top">{p.category ?? "—"}</td>
+                              <td className="align-top">{p.supplier ?? "—"}</td>
                             </>
                           ) : null}
                           <td className="align-top">

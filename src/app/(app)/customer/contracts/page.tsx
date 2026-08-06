@@ -14,8 +14,12 @@ import {
   type ContractFilterTab,
   type CustomerContract,
 } from "@/lib/contracts";
-import type { Profile } from "@/lib/types";
+import type { Invoice, Profile } from "@/lib/types";
 import { ContractCard } from "./ContractCard";
+import {
+  getContractPaymentStanding,
+  summarizeContractStandings,
+} from "@/lib/contract-billing";
 
 const FILTER_TABS: { id: ContractFilterTab; label: string }[] = [
   { id: "all", label: "All" },
@@ -30,6 +34,7 @@ function CustomerContractsPageInner() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
+  const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const highlightId = searchParams.get("highlight");
   const initialFilter = searchParams.get("filter");
@@ -64,7 +69,15 @@ function CustomerContractsPageInner() {
         `)
         .eq("customer_id", p.customer_id)
         .order("created_at", { ascending: false });
-      setContracts(parseCustomerContracts(sc ?? []));
+      const parsed = parseCustomerContracts(sc ?? []);
+      setContracts(parsed);
+      const { data: inv } = await supabase
+        .from("invoices")
+        .select("*")
+        .eq("customer_id", p.customer_id)
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0);
+      setStandingInvoices((inv as Invoice[]) ?? []);
       setLoading(false);
     })();
   }, [supabase]);
@@ -101,6 +114,17 @@ function CustomerContractsPageInner() {
   const filteredContracts = useMemo(
     () => contracts.filter((c) => contractFilterTab(c, filter)),
     [contracts, filter],
+  );
+  const standingById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof getContractPaymentStanding>>();
+    for (const c of contracts) {
+      map.set(c.id, getContractPaymentStanding(c, standingInvoices));
+    }
+    return map;
+  }, [contracts, standingInvoices]);
+  const feeSummary = useMemo(
+    () => summarizeContractStandings([...standingById.values()]),
+    [standingById],
   );
 
   useEffect(() => {
@@ -161,7 +185,7 @@ function CustomerContractsPageInner() {
       {contracts.length === 0 ? (
         <EmptyState
           title="No contracts yet"
-          description="Submit a contract request to start a new agreement. Choose Gold, Silver, or Bronze coverage on the request form."
+          description="Submit a contract request to start a new agreement. Choose your industry and Gold, Silver, or Bronze coverage on the request form."
           action={
             <Link href="/customer/request-contract" className="btn btn-primary btn-sm">
               Request Contract
@@ -170,7 +194,7 @@ function CustomerContractsPageInner() {
         />
       ) : (
         <>
-          <div className="mb-6 grid gap-4 sm:grid-cols-3">
+          <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Active agreements"
               value={activeContracts.length}
@@ -187,6 +211,24 @@ function CustomerContractsPageInner() {
               value={expiringSoonCount}
               hint="Within 60 days"
               danger={expiringSoonCount > 0}
+            />
+            <StatCard
+              label="Monthly fees"
+              value={
+                feeSummary.pastDue + feeSummary.paymentDue > 0
+                  ? `${feeSummary.pastDue + feeSummary.paymentDue} due`
+                  : `${feeSummary.upToDate} up to date`
+              }
+              hint={
+                feeSummary.pastDue > 0
+                  ? `${feeSummary.pastDue} past due`
+                  : feeSummary.paymentDue > 0
+                    ? `${feeSummary.paymentDue} payment due`
+                    : feeSummary.pendingSetup > 0
+                      ? `${feeSummary.pendingSetup} pending setup`
+                      : "You're current on monthly fees"
+              }
+              danger={feeSummary.pastDue + feeSummary.paymentDue > 0}
             />
           </div>
 
@@ -221,6 +263,7 @@ function CustomerContractsPageInner() {
                 <ContractCard
                   key={contract.id}
                   contract={contract}
+                  standing={standingById.get(contract.id)}
                   highlighted={contract.id === highlightId}
                   highlightRef={contract.id === highlightId ? highlightRef : undefined}
                 />
