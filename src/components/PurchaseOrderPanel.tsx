@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   FileText,
   Paperclip,
@@ -46,6 +47,7 @@ const emptyLine = (): LineDraft => ({
 /**
  * Create / view purchase orders with part lines and receipt attachments.
  * Used by technicians (jobs) and billing (invoices).
+ * POs that are billed link through to the invoice in Billing (ServiceTitan-style job → AP/AR trail).
  */
 export function PurchaseOrderPanel({
   invoiceId,
@@ -71,6 +73,10 @@ export function PurchaseOrderPanel({
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [receiptUrls, setReceiptUrls] = useState<Record<string, string>>({});
+  /** invoice_id → display number for deep links into Billing. */
+  const [invoiceLabels, setInvoiceLabels] = useState<Record<string, string>>({});
+  /** Fallback invoice when PO rows are not linked yet (common on tech job view). */
+  const [fallbackInvoiceId, setFallbackInvoiceId] = useState<string | null>(null);
   const [form, setForm] = useState({
     po_number: nextPoNumber(),
     vendor_name: "",
@@ -87,6 +93,8 @@ export function PurchaseOrderPanel({
   const refresh = useCallback(async () => {
     if (!invoiceId && !workOrderId) {
       setOrders([]);
+      setInvoiceLabels({});
+      setFallbackInvoiceId(null);
       return;
     }
     const { data, error: loadError } = await loadPurchaseOrders(supabase, {
@@ -96,7 +104,41 @@ export function PurchaseOrderPanel({
     setSchemaError(loadError);
     setOrders(data);
 
-    // Resolve receipt preview URLs
+    const labels: Record<string, string> = {};
+    const invIdSet = new Set<string>();
+    if (invoiceId) invIdSet.add(invoiceId);
+    for (const po of data) {
+      if (po.invoice_id) invIdSet.add(po.invoice_id);
+    }
+
+    if (workOrderId) {
+      const { data: woInvs } = await supabase
+        .from("invoices")
+        .select("id, invoice_number")
+        .eq("work_order_id", workOrderId)
+        .not("status", "eq", "Canceled")
+        .order("created_at", { ascending: false });
+      const list = (woInvs as { id: string; invoice_number: string }[] | null) ?? [];
+      for (const inv of list) {
+        invIdSet.add(inv.id);
+        labels[inv.id] = inv.invoice_number;
+      }
+      setFallbackInvoiceId(list[0]?.id ?? invoiceId ?? null);
+    } else {
+      setFallbackInvoiceId(invoiceId ?? null);
+    }
+
+    if (invIdSet.size) {
+      const { data: invs } = await supabase
+        .from("invoices")
+        .select("id, invoice_number")
+        .in("id", [...invIdSet]);
+      for (const inv of (invs as { id: string; invoice_number: string }[] | null) ?? []) {
+        labels[inv.id] = inv.invoice_number;
+      }
+    }
+    setInvoiceLabels(labels);
+
     const urls: Record<string, string> = {};
     for (const po of data) {
       for (const att of po.purchase_order_attachments ?? []) {
@@ -106,6 +148,10 @@ export function PurchaseOrderPanel({
     }
     setReceiptUrls(urls);
   }, [invoiceId, workOrderId, supabase]);
+
+  function billingInvoiceIdFor(po: PurchaseOrderWithDetails): string | null {
+    return po.invoice_id || invoiceId || fallbackInvoiceId || null;
+  }
 
   useEffect(() => {
     refresh();
@@ -151,7 +197,7 @@ export function PurchaseOrderPanel({
       .from("purchase_orders")
       .insert({
         po_number: form.po_number.trim(),
-        invoice_id: invoiceId || null,
+        invoice_id: invoiceId || fallbackInvoiceId || null,
         work_order_id: workOrderId || null,
         vendor_name: form.vendor_name.trim() || null,
         notes: form.notes.trim() || null,
@@ -503,11 +549,39 @@ export function PurchaseOrderPanel({
             const poLines = po.purchase_order_lines ?? [];
             const attachments = po.purchase_order_attachments ?? [];
             const partsCost = poLines.reduce((s, l) => s + lineTotal(l), 0);
+            const billingInvId = billingInvoiceIdFor(po);
+            const invLabel = billingInvId
+              ? invoiceLabels[billingInvId] ?? "Invoice"
+              : null;
             return (
               <li key={po.id} className="rounded-box border border-base-300 bg-base-100 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <p className="font-mono text-base font-bold">{po.po_number}</p>
+                    {billingInvId ? (
+                      <Link
+                        href={`/billing/${billingInvId}`}
+                        className="font-mono text-base font-bold link link-primary"
+                        title={`Open ${invLabel} in Billing`}
+                      >
+                        {po.po_number}
+                      </Link>
+                    ) : (
+                      <p className="font-mono text-base font-bold">{po.po_number}</p>
+                    )}
+                    {billingInvId ? (
+                      <p className="mt-0.5 text-xs">
+                        <Link
+                          href={`/billing/${billingInvId}`}
+                          className="link link-hover inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="h-3 w-3" aria-hidden />
+                          {invLabel}
+                          {po.invoice_id ? "" : " (job invoice)"}
+                        </Link>
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 text-xs opacity-50">Not linked to a billing invoice yet</p>
+                    )}
                     {po.vendor_name ? <p className="text-sm opacity-70">{po.vendor_name}</p> : null}
                     {po.notes ? <p className="mt-1 text-sm opacity-80">{po.notes}</p> : null}
                     <p className="mt-1 text-xs opacity-50">
