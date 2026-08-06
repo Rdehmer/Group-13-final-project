@@ -107,7 +107,7 @@ function isActiveContract(status: string | null | undefined): boolean {
   return s === "active" || s === "renewed";
 }
 
-const TIER_RANK: Record<ContractTierId, number> = { gold: 3, silver: 2, bronze: 1 };
+const TIER_RANK: Record<string, number> = { gold: 3, silver: 2, bronze: 1 };
 
 /**
  * Resolve Service Type from membership contracts.
@@ -129,7 +129,7 @@ export function resolveServiceType(
     for (const c of active) {
       const tier = inferContractTier(c.name ?? "");
       if (!tier) continue;
-      if (!bestTier || TIER_RANK[tier] > TIER_RANK[bestTier]) bestTier = tier;
+      if (!bestTier || (TIER_RANK[tier] ?? 0) > (TIER_RANK[bestTier] ?? 0)) bestTier = tier;
     }
     if (bestTier) {
       const label = bestTier.charAt(0).toUpperCase() + bestTier.slice(1);

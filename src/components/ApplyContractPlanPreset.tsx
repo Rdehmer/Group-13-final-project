@@ -2,43 +2,42 @@
 
 /**
  * Shared Industry → Tier → Asset value → Apply preset controls for manager contract forms.
+ * Levels come from the company catalog (dynamic).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { FormRow } from "@/components/PageHeader";
 import { ContractPricingSummary } from "@/components/ContractPricingSummary";
+import { loadCompanyCatalog } from "@/lib/company-catalog";
+import { createClient } from "@/lib/supabase/client";
 import {
   CUSTOM_PACK_ID,
   applyPlanToContractForm,
   formatBandRange,
   listActivePacks,
-  loadCatalog,
   resolvePlan,
+  type IndustryPack,
   type ManagerContractFormFields,
   type ServiceLevelId,
 } from "@/lib/contract-plans";
-import { DEFAULT_SERVICE_FEE_OPTION, formatMonthlyPremium, type ServiceFeeOption } from "@/lib/contract-pricing";
-import { premiumForFeeOption } from "@/lib/contract-pricing";
+import {
+  DEFAULT_SERVICE_FEE_OPTION,
+  formatMonthlyPremium,
+  type ServiceFeeOption,
+  premiumForFeeOption,
+} from "@/lib/contract-pricing";
 
 type Props<T extends ManagerContractFormFields> = {
   form: T;
   onApply: (next: T) => void;
-  /** Suggested covered asset value (e.g. sum of equipment replacement_cost). */
   suggestedAssetValue?: number;
   customerName?: string;
   updateName?: boolean;
   compact?: boolean;
-  /** Pre-select industry from pending request notes. */
   initialPackId?: string | null;
   initialTierId?: ServiceLevelId | null;
 };
-
-const TIERS: { id: ServiceLevelId; label: string }[] = [
-  { id: "gold", label: "Gold" },
-  { id: "silver", label: "Silver" },
-  { id: "bronze", label: "Bronze" },
-];
 
 export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
   form,
@@ -50,9 +49,8 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
   initialPackId = null,
   initialTierId = null,
 }: Props<T>) {
-  const [packs, setPacks] = useState(() =>
-    typeof window !== "undefined" ? listActivePacks(loadCatalog()) : [],
-  );
+  const supabase = useMemo(() => createClient(), []);
+  const [packs, setPacks] = useState<IndustryPack[]>([]);
   const [packId, setPackId] = useState<string>(CUSTOM_PACK_ID);
   const [tierId, setTierId] = useState<ServiceLevelId>("gold");
   const [assetValue, setAssetValue] = useState(
@@ -62,21 +60,33 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
   const [hint, setHint] = useState<string | null>(null);
 
   useEffect(() => {
-    const loaded = listActivePacks(loadCatalog());
-    setPacks(loaded);
-    setPackId((prev) => {
-      if (initialPackId && loaded.some((p) => p.id === initialPackId)) return initialPackId;
-      if (prev !== CUSTOM_PACK_ID && loaded.some((p) => p.id === prev)) return prev;
-      return loaded[0]?.id ?? CUSTOM_PACK_ID;
-    });
-    if (initialTierId) setTierId(initialTierId);
-  }, [initialPackId, initialTierId]);
+    void (async () => {
+      const { catalog } = await loadCompanyCatalog(supabase);
+      const loaded = listActivePacks(catalog);
+      setPacks(loaded);
+      setPackId((prev) => {
+        if (initialPackId && loaded.some((p) => p.id === initialPackId)) return initialPackId;
+        if (prev !== CUSTOM_PACK_ID && loaded.some((p) => p.id === prev)) return prev;
+        return loaded[0]?.id ?? CUSTOM_PACK_ID;
+      });
+      if (initialTierId) setTierId(initialTierId);
+    })();
+  }, [supabase, initialPackId, initialTierId]);
 
   useEffect(() => {
     if (suggestedAssetValue > 0) {
       setAssetValue(String(suggestedAssetValue));
     }
   }, [suggestedAssetValue]);
+
+  const activePack = packs.find((p) => p.id === packId) ?? null;
+  const levels = activePack?.levels ?? [];
+
+  useEffect(() => {
+    if (levels.length && !levels.some((l) => l.id === tierId)) {
+      setTierId(levels.find((l) => l.recommended)?.id ?? levels[0].id);
+    }
+  }, [levels, tierId]);
 
   const assetNum = Number(assetValue) || 0;
   const preview = packId === CUSTOM_PACK_ID ? null : resolvePlan(packId, tierId, assetNum);
@@ -99,51 +109,46 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
     onApply(next);
     const monthly = premiumForFeeOption(resolved.thresholds, serviceFeeOption);
     setHint(
-      `Applied ${resolved.pack.name} · ${resolved.level.name} · ${resolved.band.label} (${formatMonthlyPremium(monthly)} · $${serviceFeeOption}/visit).`,
+      `Applied ${resolved.pack.name} · ${resolved.level.name} · ${resolved.band.label} (${formatBandRange(resolved.band)}) · ${formatMonthlyPremium(monthly)}/mo.`,
     );
   }
 
   return (
-    <div
-      className={`rounded-box border border-primary/30 bg-primary/5 ${compact ? "p-3" : "p-4"} space-y-3`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-semibold">Apply industry plan preset</p>
-          <p className="text-xs opacity-70">
-            Price and thresholds scale by covered asset value.{" "}
-            <Link href="/settings/contract-plans" className="link">
-              Edit plans
-            </Link>
-          </p>
+    <div className={`space-y-3 ${compact ? "" : "rounded-box border border-base-300 bg-base-100 p-4"}`}>
+      {!compact ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-semibold">Apply industry plan preset</h3>
+          <Link href="/settings/contract-plans" className="link link-primary text-xs">
+            Edit company plans
+          </Link>
         </div>
-      </div>
+      ) : null}
 
-      <div className={`grid gap-2 ${compact ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <FormRow label="Industry">
           <select
             className="select select-bordered select-sm w-full"
             value={packId}
             onChange={(e) => setPackId(e.target.value)}
           >
-            <option value={CUSTOM_PACK_ID}>Custom (manual)</option>
             {packs.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
             ))}
+            <option value={CUSTOM_PACK_ID}>Custom (manual)</option>
           </select>
         </FormRow>
-        <FormRow label="Level">
+        <FormRow label="Protection level">
           <select
             className="select select-bordered select-sm w-full"
             value={tierId}
-            onChange={(e) => setTierId(e.target.value as ServiceLevelId)}
-            disabled={packId === CUSTOM_PACK_ID}
+            onChange={(e) => setTierId(e.target.value)}
+            disabled={packId === CUSTOM_PACK_ID || levels.length === 0}
           >
-            {TIERS.map((t) => (
+            {levels.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.label}
+                {t.name}
               </option>
             ))}
           </select>
@@ -152,12 +157,22 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
           <input
             type="number"
             min={0}
-            step={1000}
             className="input input-bordered input-sm w-full"
             value={assetValue}
             onChange={(e) => setAssetValue(e.target.value)}
             disabled={packId === CUSTOM_PACK_ID}
           />
+        </FormRow>
+        <FormRow label="Service fee / visit">
+          <select
+            className="select select-bordered select-sm w-full"
+            value={serviceFeeOption}
+            onChange={(e) => setServiceFeeOption(Number(e.target.value) as ServiceFeeOption)}
+            disabled={packId === CUSTOM_PACK_ID}
+          >
+            <option value={125}>$125</option>
+            <option value={100}>$100</option>
+          </select>
         </FormRow>
       </div>
 
@@ -167,7 +182,6 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
           resolved={preview}
           serviceFeeOption={serviceFeeOption}
           onServiceFeeOptionChange={setServiceFeeOption}
-          compact
         />
       ) : null}
 
@@ -175,19 +189,8 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
         <button type="button" className="btn btn-primary btn-sm" onClick={apply}>
           Apply preset
         </button>
-        {suggestedAssetValue > 0 ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setAssetValue(String(suggestedAssetValue))}
-            disabled={packId === CUSTOM_PACK_ID}
-          >
-            Use equipment total
-          </button>
-        ) : null}
+        {hint ? <p className="text-xs opacity-70">{hint}</p> : null}
       </div>
-
-      {hint ? <p className="text-xs text-primary">{hint}</p> : null}
     </div>
   );
 }

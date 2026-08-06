@@ -54,7 +54,7 @@ export const EMERGENCY_SLA_OPTIONS = [
   "Standard (best effort)",
 ] as const;
 
-export type ContractTierId = "gold" | "silver" | "bronze";
+export type ContractTierId = string;
 
 export type ContractRequestFormState = {
   contract_type: string;
@@ -368,7 +368,7 @@ export type CustomerContract = ServiceContract & {
 
 export type ContractFilterTab = "all" | "active" | "pending" | "expired";
 
-const TIER_BADGE_CLASS: Record<ContractTierId, string> = {
+const TIER_BADGE_CLASS: Record<string, string> = {
   gold: "badge-warning",
   silver: "badge-ghost",
   bronze: "badge-neutral",
@@ -376,14 +376,20 @@ const TIER_BADGE_CLASS: Record<ContractTierId, string> = {
 
 export function inferContractTier(name: string): ContractTierId | null {
   const lower = name.toLowerCase();
-  if (lower.includes("gold")) return "gold";
-  if (lower.includes("silver")) return "silver";
-  if (lower.includes("bronze")) return "bronze";
+  if (lower.includes("gold") || lower.includes("premier") || lower.includes("premium")) {
+    return "gold";
+  }
+  if (lower.includes("silver") || lower.includes("standard") || lower.includes("plus")) {
+    return "silver";
+  }
+  if (lower.includes("bronze") || lower.includes("basic") || lower.includes("essential")) {
+    return "bronze";
+  }
   return null;
 }
 
 export function tierBadgeClass(tierId: ContractTierId): string {
-  return TIER_BADGE_CLASS[tierId];
+  return TIER_BADGE_CLASS[tierId] ?? "badge-primary";
 }
 
 export function contractStatusMessage(status: string): string {

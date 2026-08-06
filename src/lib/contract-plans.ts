@@ -1,18 +1,21 @@
 /**
- * Industry × Gold/Silver/Bronze × asset-value-band contract plan catalog.
- * Stored in localStorage (ridley_contract_plans_v2); no Supabase table required.
+ * Industry × protection-level × asset-value-band contract plan catalog.
+ * Seed defaults live in buildSeedCatalog(); per-company copies persist in
+ * Supabase (company_contract_plan_catalogs) with a localStorage cache.
  */
 
 import {
   formatCapSummaryLine,
   getIndustryCapProfile,
   resolveCoverageCaps,
+  coerceServiceTierId,
 } from "@/lib/contract-cap-profiles";
 
 export const CONTRACT_PLANS_STORAGE_KEY = "ridley_contract_plans_v2";
 const CONTRACT_PLANS_STORAGE_KEY_V1 = "ridley_contract_plans_v1";
 
-export type ServiceLevelId = "gold" | "silver" | "bronze";
+/** Dynamic plan level id (seed defaults: gold | silver | bronze). */
+export type ServiceLevelId = string;
 
 /** Minimal tier shape for customer request UI (mirrors contracts.ts ContractTier). */
 export type CatalogDrivenTier = {
@@ -157,18 +160,21 @@ function bandScaleForEnrich(bandId: "low" | "mid" | "high"): number {
 function enrichPlanThresholds(
   t: PlanThresholds,
   tier: ServiceLevelId,
-  bandId: "low" | "mid" | "high",
+  bandId: string,
   packId: string,
 ): PlanThresholds {
-  const scale = bandScaleForEnrich(bandId);
-  const caps = resolveCoverageCaps(tier, bandId, packId);
+  const tierKey = coerceServiceTierId(tier);
+  const scale = bandScaleForEnrich(
+    bandId === "low" || bandId === "high" ? bandId : "mid",
+  );
+  const caps = resolveCoverageCaps(tierKey, bandId, packId);
   const monthly125 = t.monthly_premium_at_125_fee ?? Math.round(Number(t.annual_price) / 12);
   const tradeoff = Math.round(Number(t.extras.premium_tradeoff_per_month) || 25 * scale);
   const monthly100 = t.monthly_premium_at_100_fee ?? monthly125 + tradeoff;
   const { deductible: _d, service_fee_per_visit: _s, ...restExtras } = t.extras;
 
   let parts = t.included_replacement_parts;
-  if (tier === "bronze" && parts <= 0 && bandId === "mid") {
+  if (tierKey === "bronze" && parts <= 0 && (bandId === "mid" || !bandId)) {
     parts = Math.round(caps.partsMid * scale);
   }
 
@@ -307,14 +313,20 @@ function normalizeCatalog(catalog: ContractPlanCatalog): ContractPlanCatalog {
     ...catalog,
     packs: catalog.packs.map((pack) => ({
       ...pack,
-      levels: pack.levels.map((level) => ({
+      levels: (pack.levels ?? []).map((level) => ({
         ...level,
-        bands: level.bands.map((band) => ({
+        id: String(level.id),
+        name: level.name || String(level.id),
+        tagline: level.tagline ?? "",
+        coverages: Array.isArray(level.coverages) ? level.coverages : [],
+        bands: (level.bands ?? []).map((band) => ({
           ...band,
+          id: String(band.id),
+          label: band.label || String(band.id),
           thresholds: enrichPlanThresholds(
             band.thresholds,
             level.id,
-            band.id as "low" | "mid" | "high",
+            band.id,
             pack.id,
           ),
         })),
@@ -1425,20 +1437,20 @@ export function loadCatalog(): ContractPlanCatalog {
     const { raw, fromV1 } = readStoredCatalogRaw();
     if (!raw) {
       const seed = buildSeedCatalog();
-      saveCatalog(seed);
+      saveCatalogLocal(seed);
       return seed;
     }
     const parsed = JSON.parse(raw) as ContractPlanCatalog;
     if (!parsed?.packs?.length) {
       const seed = buildSeedCatalog();
-      saveCatalog(seed);
+      saveCatalogLocal(seed);
       return seed;
     }
     const { catalog, changed } = mergeMissingPacksFromSeed(parsed);
     const normalized = normalizeCatalog(catalog);
     if (changed || fromV1 || (parsed.version ?? 0) < CATALOG_VERSION) {
       const next = { ...normalized, version: CATALOG_VERSION };
-      saveCatalog(next);
+      saveCatalogLocal(next);
       return next;
     }
     return normalized;
@@ -1447,19 +1459,36 @@ export function loadCatalog(): ContractPlanCatalog {
   }
 }
 
-export function saveCatalog(catalog: ContractPlanCatalog): void {
+/** Prefer company DB catalog; this only writes the local cache. */
+export function saveCatalogLocal(catalog: ContractPlanCatalog): void {
   if (!canUseStorage()) return;
   const next = {
     ...catalog,
-    updated_at: new Date().toISOString(),
-    version: CATALOG_VERSION,
+    updated_at: catalog.updated_at || new Date().toISOString(),
+    version: catalog.version || CATALOG_VERSION,
   };
   localStorage.setItem(CONTRACT_PLANS_STORAGE_KEY, JSON.stringify(next));
 }
 
+/** @deprecated Prefer saveCompanyCatalog — keeps localStorage cache in sync. */
+export function saveCatalog(catalog: ContractPlanCatalog): void {
+  saveCatalogLocal(catalog);
+}
+
+export function normalizeCatalogFromUnknown(raw: unknown): ContractPlanCatalog {
+  if (!raw || typeof raw !== "object") return buildSeedCatalog();
+  const parsed = raw as ContractPlanCatalog;
+  if (!parsed.packs?.length) return buildSeedCatalog();
+  return normalizeCatalog({
+    ...parsed,
+    version: parsed.version ?? CATALOG_VERSION,
+    updated_at: parsed.updated_at ?? new Date().toISOString(),
+  });
+}
+
 export function resetCatalogToSeed(): ContractPlanCatalog {
   const seed = buildSeedCatalog();
-  saveCatalog(seed);
+  saveCatalogLocal(seed);
   return seed;
 }
 
@@ -1673,9 +1702,10 @@ export function listCatalogDrivenTiers(
   packId: string = DEFAULT_CUSTOMER_PACK_ID,
   catalog?: ContractPlanCatalog,
 ): CatalogDrivenTier[] {
-  return (["gold", "silver", "bronze"] as ServiceLevelId[]).map((id) =>
-    getCatalogDrivenTier(id, packId, catalog),
-  );
+  const cat = catalog ?? loadCatalog();
+  const pack = getPack(packId || DEFAULT_CUSTOMER_PACK_ID, cat);
+  if (!pack?.levels?.length) return [];
+  return pack.levels.map((level) => getCatalogDrivenTier(level.id, pack.id, cat));
 }
 
 export function matchContractPlan(notes: string | null | undefined): PlanSnapshot | null {
@@ -1715,10 +1745,13 @@ export function contractMatchesPlanFilters(
   return true;
 }
 
-/** Mid-band Gold price for browse panel quick reference. */
+/** Mid-band recommended (or first) level price for browse panel quick reference. */
 export function packGoldMidPrice(pack: IndustryPack): number {
-  const gold = pack.levels.find((l) => l.id === "gold");
-  const mid = gold?.bands.find((b) => b.id === "mid") ?? gold?.bands[0];
+  const level =
+    pack.levels.find((l) => l.recommended) ??
+    pack.levels.find((l) => l.id === "gold") ??
+    pack.levels[0];
+  const mid = level?.bands.find((b) => b.id === "mid") ?? level?.bands[0];
   return mid?.thresholds.annual_price ?? 0;
 }
 
@@ -1843,4 +1876,183 @@ export function formatBandRange(band: AssetValueBand): string {
   const min = `$${band.min_asset_value.toLocaleString("en-US")}`;
   if (band.max_asset_value == null) return `${min}+`;
   return `${min} – $${(band.max_asset_value - 1).toLocaleString("en-US")}`;
+}
+
+function slugifyId(name: string, fallback: string): string {
+  const base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 40);
+  return base || fallback;
+}
+
+function blankThresholds(): PlanThresholds {
+  return {
+    annual_price: 1200,
+    monthly_premium_at_125_fee: 100,
+    monthly_premium_at_100_fee: 125,
+    contract_type: "Preventive Maintenance",
+    included_service_visits: 2,
+    service_frequency: "Semi-Annual",
+    included_labor_hours: 4,
+    included_replacement_parts: 0,
+    emergency_response_commitment: "Standard (best effort)",
+    billing_method: "Monthly Recurring Charge",
+    payment_terms: "Net 30",
+    renewal_option: "Manual renewal",
+    approval_requirements: "Manager approval for extras",
+    extras: {
+      aggregate_coverage_cap: 4000,
+      per_equipment_cap: 1000,
+      premium_tradeoff_per_month: 25,
+      default_service_fee_option: 125,
+    },
+  };
+}
+
+/** Add a protection level to a pack (dynamic tiers). */
+export function addLevelToPack(
+  catalog: ContractPlanCatalog,
+  packId: string,
+  input: { name: string; tagline?: string; copyFromLevelId?: string },
+): ContractPlanCatalog {
+  const pack = getPack(packId, catalog);
+  if (!pack) return catalog;
+  let id = slugifyId(input.name, `level_${Date.now().toString(36)}`);
+  let n = 2;
+  while (pack.levels.some((l) => l.id === id)) {
+    id = `${slugifyId(input.name, "level")}_${n++}`;
+  }
+  const source =
+    (input.copyFromLevelId
+      ? pack.levels.find((l) => l.id === input.copyFromLevelId)
+      : null) ??
+    pack.levels[0] ??
+    null;
+  const level: ServiceLevelPlan = source
+    ? {
+        ...structuredClone(source),
+        id,
+        name: input.name.trim() || "New plan",
+        tagline: input.tagline ?? source.tagline,
+        recommended: false,
+      }
+    : {
+        id,
+        name: input.name.trim() || "New plan",
+        tagline: input.tagline ?? "Custom protection plan",
+        coverages: ["Edit coverages for this plan"],
+        recommended: false,
+        bands: [
+          {
+            id: "standard",
+            label: "Standard",
+            min_asset_value: 0,
+            max_asset_value: null,
+            thresholds: blankThresholds(),
+          },
+        ],
+      };
+  return upsertPack(catalog, { ...pack, levels: [...pack.levels, level] });
+}
+
+export function removeLevelFromPack(
+  catalog: ContractPlanCatalog,
+  packId: string,
+  levelId: string,
+): ContractPlanCatalog {
+  const pack = getPack(packId, catalog);
+  if (!pack || pack.levels.length <= 1) return catalog;
+  return upsertPack(catalog, {
+    ...pack,
+    levels: pack.levels.filter((l) => l.id !== levelId),
+  });
+}
+
+export function updateLevelMeta(
+  catalog: ContractPlanCatalog,
+  packId: string,
+  levelId: string,
+  patch: Partial<Pick<ServiceLevelPlan, "name" | "tagline" | "coverages" | "recommended">>,
+): ContractPlanCatalog {
+  const pack = getPack(packId, catalog);
+  if (!pack) return catalog;
+  return upsertPack(catalog, {
+    ...pack,
+    levels: pack.levels.map((l) => (l.id === levelId ? { ...l, ...patch } : l)),
+  });
+}
+
+export function addBandToLevel(
+  catalog: ContractPlanCatalog,
+  packId: string,
+  levelId: string,
+  input: { label: string; copyFromBandId?: string },
+): ContractPlanCatalog {
+  const pack = getPack(packId, catalog);
+  if (!pack) return catalog;
+  const levels = pack.levels.map((level) => {
+    if (level.id !== levelId) return level;
+    let id = slugifyId(input.label, `band_${Date.now().toString(36)}`);
+    let n = 2;
+    while (level.bands.some((b) => b.id === id)) {
+      id = `${slugifyId(input.label, "band")}_${n++}`;
+    }
+    const source =
+      (input.copyFromBandId
+        ? level.bands.find((b) => b.id === input.copyFromBandId)
+        : null) ??
+      level.bands[level.bands.length - 1] ??
+      null;
+    const lastMax = source?.max_asset_value ?? source?.min_asset_value ?? 100_000;
+    const band: AssetValueBand = source
+      ? {
+          ...structuredClone(source),
+          id,
+          label: input.label.trim() || "New band",
+          min_asset_value: typeof lastMax === "number" ? lastMax : source.min_asset_value,
+          max_asset_value: null,
+        }
+      : {
+          id,
+          label: input.label.trim() || "New band",
+          min_asset_value: 0,
+          max_asset_value: null,
+          thresholds: blankThresholds(),
+        };
+    return { ...level, bands: [...level.bands, band] };
+  });
+  return upsertPack(catalog, { ...pack, levels });
+}
+
+export function removeBandFromLevel(
+  catalog: ContractPlanCatalog,
+  packId: string,
+  levelId: string,
+  bandId: string,
+): ContractPlanCatalog {
+  const pack = getPack(packId, catalog);
+  if (!pack) return catalog;
+  const levels = pack.levels.map((level) => {
+    if (level.id !== levelId) return level;
+    if (level.bands.length <= 1) return level;
+    return { ...level, bands: level.bands.filter((b) => b.id !== bandId) };
+  });
+  return upsertPack(catalog, { ...pack, levels });
+}
+
+export function reorderLevels(
+  catalog: ContractPlanCatalog,
+  packId: string,
+  orderedIds: string[],
+): ContractPlanCatalog {
+  const pack = getPack(packId, catalog);
+  if (!pack) return catalog;
+  const map = new Map(pack.levels.map((l) => [l.id, l]));
+  const levels = orderedIds.map((id) => map.get(id)).filter(Boolean) as ServiceLevelPlan[];
+  for (const l of pack.levels) {
+    if (!orderedIds.includes(l.id)) levels.push(l);
+  }
+  return upsertPack(catalog, { ...pack, levels });
 }
