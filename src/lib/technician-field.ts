@@ -319,7 +319,9 @@ export function isOutOfScope(
 export function hoursBetween(startIso: string, endIso: string): number {
   const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
   if (!Number.isFinite(ms) || ms <= 0) return 0.25;
-  return Math.round((ms / 3_600_000) * 100) / 100;
+  // Short field visits round to 0.00 at 2 decimals — bill a 15-minute minimum.
+  const rounded = Math.round((ms / 3_600_000) * 100) / 100;
+  return Math.max(0.25, rounded);
 }
 
 /**
@@ -355,6 +357,15 @@ export function laborClockRange(
   const work_date = format(start, "yyyy-MM-dd");
   const start_time = format(start, "HH:mm:ss");
   let end_time = format(end, "HH:mm:ss");
+
+  // Keep end_time consistent with billed hours when the live clock was shorter
+  // than the 15-minute minimum (avoids 5s spans storing 0.00 hr after rounding).
+  if (hours >= 0.25) {
+    const minEnd = new Date(start.getTime() + Math.round(hours * 3_600_000));
+    if (minEnd.getTime() > end.getTime() && format(minEnd, "yyyy-MM-dd") === work_date) {
+      end_time = format(minEnd, "HH:mm:ss");
+    }
+  }
 
   const sameLocalDay = format(end, "yyyy-MM-dd") === work_date;
   if (!sameLocalDay || end_time <= start_time) {

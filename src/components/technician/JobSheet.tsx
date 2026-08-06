@@ -239,6 +239,11 @@ export function JobSheet({
       return;
     }
 
+    // Clear scope gate as soon as WO update succeeds so Complete sticky is not
+    // stuck hidden if the optional timesheet clock-in fails afterward.
+    setScopePending(null);
+    setScopeAck(false);
+
     if (action === "working") {
       try {
         const entry = await clockIn(supabase, {
@@ -250,7 +255,11 @@ export function JobSheet({
         setActiveClock(entry);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Clock-in failed.";
-        if (!isTimesheetMissingTable(msg)) {
+        // Fallback clock mode keys off WO.started_at — we just set it, so "already
+        // clocked in on this same WO" is expected and not a hard failure.
+        const sameJobClock =
+          msg.includes(job.work_order_number) || msg.includes(job.id);
+        if (!sameJobClock && !isTimesheetMissingTable(msg)) {
           // WO still started; surface clock error so tech can resolve double-active
           setError(humanizeFieldError(msg));
           setBusy(false);
@@ -268,8 +277,6 @@ export function JobSheet({
       newValue: String(updates.dispatch_status),
     });
 
-    setScopePending(null);
-    setScopeAck(false);
     setMessage(
       action === "arrived"
         ? "Arrived stamped."
@@ -452,16 +459,23 @@ export function JobSheet({
     setBusy(false);
   }
 
-  async function finalizeWorkingLabor(): Promise<string | null> {
-    if (!job.started_at) return null;
-    const clock = laborClockRange(job.started_at);
+  async function finalizeWorkingLabor(startedAtOverride?: string | null): Promise<string | null> {
+    const startedAt =
+      startedAtOverride ||
+      job.started_at ||
+      // Complete CTA can enable from dispatch_status=Working even if started_at was cleared
+      (job.dispatch_status === "Working" || job.dispatch_status === "Arrived"
+        ? job.arrival_at || new Date(Date.now() - 15 * 60_000).toISOString()
+        : null);
+    if (!startedAt) return "No Working start time on this job — tap In Progress before Complete.";
+    const clock = laborClockRange(startedAt);
     const split = splitRegularOt(clock.hours);
     const { error: insertError } = await supabase.from("technician_labor").insert(
       laborPayload(profile, job, {
         work_date: clock.work_date,
         start_time: clock.start_time,
         end_time: clock.end_time,
-        regular_hours: split.regular_hours,
+        regular_hours: Math.max(0.25, split.regular_hours),
         overtime_hours: split.overtime_hours,
         notes: "Working",
       }),
@@ -482,14 +496,33 @@ export function JobSheet({
   async function runComplete() {
     setBusy(true);
     setError(null);
+    const startedAtSnapshot = job.started_at || job.arrival_at || null;
     try {
-      // Prefer modern time_entries clock-out
       const open = await getActiveClock(supabase, profile.id);
       if (open && open.work_order_id === job.id) {
-        await clockOut(supabase, { profile, entryId: open.id });
-        setActiveClock(null);
-      } else if (job.started_at) {
-        const laborErr = await finalizeWorkingLabor();
+        try {
+          await clockOut(supabase, { profile, entryId: open.id });
+          setActiveClock(null);
+        } catch (clockErr) {
+          const clockMsg = clockErr instanceof Error ? clockErr.message : String(clockErr);
+          if (
+            startedAtSnapshot ||
+            job.dispatch_status === "Working" ||
+            /zero-duration|not allowed|missing|No active clock/i.test(clockMsg)
+          ) {
+            const laborErr = await finalizeWorkingLabor(startedAtSnapshot);
+            if (laborErr) {
+              setError(`Could not close Working timesheet: ${laborErr}`);
+              setBusy(false);
+              return;
+            }
+            setActiveClock(null);
+          } else {
+            throw clockErr;
+          }
+        }
+      } else if (startedAtSnapshot || job.dispatch_status === "Working") {
+        const laborErr = await finalizeWorkingLabor(startedAtSnapshot);
         if (laborErr) {
           setError(`Could not close Working timesheet: ${laborErr}`);
           setBusy(false);
@@ -500,10 +533,29 @@ export function JobSheet({
         setBusy(false);
         return;
       }
+
+      // Guarantee a technician_labor row for billing (clockOut mirror can skip 0.00h).
+      const { count } = await supabase
+        .from("technician_labor")
+        .select("id", { count: "exact", head: true })
+        .eq("work_order_id", job.id);
+      if (!count) {
+        const laborErr = await finalizeWorkingLabor(
+          startedAtSnapshot || new Date(Date.now() - 15 * 60_000).toISOString(),
+        );
+        if (laborErr) {
+          setError(`Could not close Working timesheet: ${laborErr}`);
+          setBusy(false);
+          return;
+        }
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Clock-out failed.";
-      if (isTimesheetMissingTable(msg) && job.started_at) {
-        const laborErr = await finalizeWorkingLabor();
+      if (
+        (isTimesheetMissingTable(msg) || /zero-duration|not allowed|No active clock/i.test(msg)) &&
+        (startedAtSnapshot || job.dispatch_status === "Working")
+      ) {
+        const laborErr = await finalizeWorkingLabor(startedAtSnapshot);
         if (laborErr) {
           setError(laborErr);
           setBusy(false);

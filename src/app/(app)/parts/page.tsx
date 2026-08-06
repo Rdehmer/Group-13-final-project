@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Download, Minus, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
@@ -113,6 +114,9 @@ function downloadCsv(filename: string, content: string) {
  */
 export default function PartsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const deepLinkFilter = searchParams.get("filter");
+  const deepLinkPart = searchParams.get("part");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [parts, setParts] = useState<Part[]>([]);
   const [suppliers, setSuppliers] = useState<Pick<Vendor, "id" | "name">[]>([]);
@@ -132,7 +136,8 @@ export default function PartsPage() {
   const [poBusyId, setPoBusyId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
-  const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [lowStockOnly, setLowStockOnly] = useState(deepLinkFilter === "low-stock");
+  const [highlightPartId, setHighlightPartId] = useState<string | null>(deepLinkPart);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkReorderValue, setBulkReorderValue] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
@@ -149,7 +154,7 @@ export default function PartsPage() {
     cost: "",
     price: "",
     margin: "",
-    status: "",
+    status: deepLinkFilter === "low-stock" ? "Low Stock" : "",
   });
   const [form, setForm] = useState<PartForm>(EMPTY_FORM);
 
@@ -283,6 +288,14 @@ export default function PartsPage() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (deepLinkFilter === "low-stock") {
+      setLowStockOnly(true);
+      setFilters((prev) => ({ ...prev, status: "Low Stock" }));
+    }
+    setHighlightPartId(deepLinkPart);
+  }, [deepLinkFilter, deepLinkPart]);
+
   const lowStockCount = useMemo(
     () => parts.filter((p) => p.is_active && isLowStock(p)).length,
     [parts],
@@ -376,6 +389,15 @@ export default function PartsPage() {
       return sort.direction === "asc" ? cmp : -cmp;
     });
   }, [parts, filters, sort, search, showInactive, lowStockOnly]);
+
+  useEffect(() => {
+    if (!highlightPartId || loading) return;
+    const el = document.getElementById(`part-row-${highlightPartId}`);
+    if (!el) return;
+    window.setTimeout(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+  }, [highlightPartId, loading, filteredParts]);
 
   const hasActiveFilters =
     Object.values(filters).some((v) => v.trim() !== "") || lowStockOnly || search.trim() !== "";
@@ -1271,7 +1293,10 @@ export default function PartsPage() {
                       return (
                         <tr
                           key={p.id}
-                          className={`${low ? "bg-warning/10" : ""} ${!p.is_active ? "opacity-60" : ""}`}
+                          id={`part-row-${p.id}`}
+                          className={`${low ? "bg-warning/10" : ""} ${!p.is_active ? "opacity-60" : ""} ${
+                            highlightPartId === p.id ? "ring-2 ring-primary ring-inset" : ""
+                          }`}
                         >
                           {isManager ? (
                             <td className="align-top">

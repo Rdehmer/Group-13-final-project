@@ -26,7 +26,7 @@ type InvoiceRow = Invoice & {
 
 type PaymentRow = Payment & {
   customers?: { id: string; name: string } | null;
-  invoices?: { invoice_number: string } | null;
+  invoices?: { id: string; invoice_number: string } | null;
 };
 
 type WorkOrderRow = WorkOrder & { customers?: { id: string; name: string } | null };
@@ -41,6 +41,7 @@ type RecognitionRow = {
   completionDate: string;
   billingStatus: string;
   recognizedAmount: number;
+  invoiceId: string | null;
   invoiceNumber: string | null;
   source: "Invoice" | "Estimate on completion";
 };
@@ -262,7 +263,7 @@ export function InvoiceCashReport() {
           .order("invoice_date", { ascending: false }),
         supabase
           .from("payments")
-          .select("*, customers(id, name), invoices(invoice_number)")
+          .select("*, customers(id, name), invoices(id, invoice_number)")
           .order("payment_date", { ascending: false }),
         supabase
           .from("work_orders")
@@ -311,6 +312,7 @@ export function InvoiceCashReport() {
         completionDate: wo.completion_date ?? "—",
         billingStatus: wo.billing_status,
         recognizedAmount,
+        invoiceId: invoice?.id ?? null,
         invoiceNumber: invoice?.invoice_number ?? null,
         source: invoice ? ("Invoice" as const) : ("Estimate on completion" as const),
       };
@@ -926,11 +928,8 @@ export function InvoiceCashReport() {
                       </td>
                       <td>{r.source}</td>
                       <td>
-                        {r.invoiceNumber ? (
-                          <Link
-                            href={`/billing?invoice=${encodeURIComponent(r.invoiceNumber)}`}
-                            className="link link-primary"
-                          >
+                        {r.invoiceId && r.invoiceNumber ? (
+                          <Link href={`/billing/${r.invoiceId}`} className="link link-primary">
                             {r.invoiceNumber}
                           </Link>
                         ) : (
@@ -1036,7 +1035,7 @@ export function InvoiceCashReport() {
                     <tr key={inv.id}>
                       <td>
                         <Link
-                          href={`/billing?invoice=${encodeURIComponent(inv.invoice_number)}`}
+                          href={`/billing/${inv.id}`}
                           className="link link-primary font-medium"
                         >
                           {inv.invoice_number}
@@ -1167,12 +1166,12 @@ export function InvoiceCashReport() {
                       <td>{p.payment_date}</td>
                       <td>{p.payment_method}</td>
                       <td>
-                        {p.invoices?.invoice_number ? (
+                        {p.invoice_id ? (
                           <Link
-                            href={`/billing?invoice=${encodeURIComponent(p.invoices.invoice_number)}`}
+                            href={`/billing/${p.invoice_id}`}
                             className="link link-primary"
                           >
-                            {p.invoices.invoice_number}
+                            {p.invoices?.invoice_number ?? "Invoice"}
                           </Link>
                         ) : (
                           "—"
@@ -1285,7 +1284,7 @@ export function InvoiceCashReport() {
                     <tr key={inv.id} className={inv.aging === "d90" ? "bg-error/10" : ""}>
                       <td>
                         <Link
-                          href={`/billing?invoice=${encodeURIComponent(inv.invoice_number)}`}
+                          href={`/billing/${inv.id}`}
                           className="link link-primary font-medium"
                         >
                           {inv.invoice_number}
