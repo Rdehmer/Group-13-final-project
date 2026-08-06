@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ClipboardList, CreditCard, Star, Wrench } from "lucide-react";
+import { ClipboardList, CreditCard, FilePlus2, Star, Wrench } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/ui";
@@ -49,10 +49,47 @@ function GatedDashboardLink({
   );
 }
 
+function HomePrimaryAction({
+  href,
+  title,
+  description,
+  icon,
+  isGateActive,
+  blockNavigation,
+}: {
+  href: string;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  isGateActive: boolean;
+  blockNavigation: (event: MouseEvent<HTMLElement>) => void;
+}) {
+  return (
+    <GatedDashboardLink
+      href={href}
+      isGateActive={isGateActive}
+      blockNavigation={blockNavigation}
+      className="flex min-h-[7.5rem] flex-col justify-between gap-4 rounded-2xl border border-primary/25 bg-primary px-5 py-5 text-primary-content shadow-md transition hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <span className="rounded-xl bg-primary-content/15 p-2.5">{icon}</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-content/75">
+          Start here
+        </span>
+      </div>
+      <div>
+        <p className="font-display text-xl font-semibold leading-tight">{title}</p>
+        <p className="mt-1 text-sm text-primary-content/80">{description}</p>
+      </div>
+    </GatedDashboardLink>
+  );
+}
+
 function HomeSectionCard({
   title,
   description,
   icon,
+  primaryAction,
   links,
   isGateActive,
   blockNavigation,
@@ -61,6 +98,7 @@ function HomeSectionCard({
   title: string;
   description: string;
   icon: ReactNode;
+  primaryAction?: { href: string; label: string };
   links: { href: string; label: string; hint?: string }[];
   isGateActive: boolean;
   blockNavigation: (event: MouseEvent<HTMLElement>) => void;
@@ -76,7 +114,17 @@ function HomeSectionCard({
             <p className="text-sm opacity-70">{description}</p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label={`${title} links`}>
+        {primaryAction ? (
+          <GatedDashboardLink
+            href={primaryAction.href}
+            isGateActive={isGateActive}
+            blockNavigation={blockNavigation}
+            className="btn btn-primary w-full sm:w-auto"
+          >
+            {primaryAction.label}
+          </GatedDashboardLink>
+        ) : null}
+        <div className="flex flex-wrap gap-2" role="list" aria-label={`${title} links`}>
           {links.map((link) => (
             <GatedDashboardLink
               key={`${link.href}-${link.label}`}
@@ -187,7 +235,7 @@ function CustomerDashboardPageInner() {
     <div>
       <PageHeader
         title="Home"
-        description={`Welcome, ${profile.full_name ?? profile.email}. Pick a section below to get started.`}
+        description={`Welcome, ${profile.full_name ?? profile.email}. Request a contract or service below.`}
       />
 
       {isGateActive && activeWorkOrder && shouldPromptForRating(activeWorkOrder) ? (
@@ -205,6 +253,30 @@ function CustomerDashboardPageInner() {
         </div>
       ) : null}
 
+      <section className="mb-6" aria-labelledby="home-primary-actions">
+        <h2 id="home-primary-actions" className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] opacity-60">
+          What do you need?
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <HomePrimaryAction
+            href="/customer/request-contract"
+            title="Request a contract"
+            description="Choose coverage for your equipment and send a request to Ridley."
+            icon={<FilePlus2 className="h-5 w-5" aria-hidden />}
+            isGateActive={isGateActive}
+            blockNavigation={blockNavigation}
+          />
+          <HomePrimaryAction
+            href="/customer/request-service"
+            title="Request service"
+            description="Book a repair, maintenance visit, or other work order."
+            icon={<Wrench className="h-5 w-5" aria-hidden />}
+            isGateActive={isGateActive}
+            blockNavigation={blockNavigation}
+          />
+        </div>
+      </section>
+
       <div className="space-y-4">
         <HomeSectionCard
           title="Contracts"
@@ -212,8 +284,8 @@ function CustomerDashboardPageInner() {
           icon={<ClipboardList className="h-5 w-5" aria-hidden />}
           isGateActive={isGateActive}
           blockNavigation={blockNavigation}
+          primaryAction={{ href: "/customer/request-contract", label: "Request a contract" }}
           links={[
-            { href: "/customer/request-contract", label: "Request" },
             {
               href: "/customer/contracts",
               label: "My Contracts",
@@ -233,16 +305,16 @@ function CustomerDashboardPageInner() {
           icon={<Wrench className="h-5 w-5" aria-hidden />}
           isGateActive={isGateActive}
           blockNavigation={blockNavigation}
+          primaryAction={{ href: "/customer/request-service", label: "Request service" }}
           links={[
-            { href: "/customer/request-service", label: "Request" },
             {
               href: "/customer/open-request",
-              label: "Active",
+              label: "Active requests",
               hint: String(openRequests),
             },
             {
               href: "/customer/order-history",
-              label: "History",
+              label: "Service history",
               hint: String(workOrders.length),
             },
           ]}
