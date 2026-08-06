@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Camera, Check, PenLine, RotateCcw, Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { humanizeFieldError } from "@/lib/technician-field";
@@ -109,6 +110,19 @@ export function ProofOfCompletion({
   const [processingPhoto, setProcessingPhoto] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, []);
 
   const requiresPhoto = requirement === "photo" || requirement === "both";
   const requiresSignature = requirement === "signature" || requirement === "both";
@@ -128,26 +142,38 @@ export function ProofOfCompletion({
   }, [photo]);
 
   useEffect(() => {
-    if (activeTab !== "signature" || signatureData || signMethod !== "signature") return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!mounted || activeTab !== "signature" || signatureData || signMethod !== "signature") return;
 
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.max(canvas.clientWidth, 320);
-    const height = 260;
-    canvas.width = width * ratio;
-    canvas.height = height * ratio;
+    let cancelled = false;
+    const frame = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.scale(ratio, ratio);
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, width, height);
-    context.strokeStyle = "#111827";
-    context.lineWidth = 3;
-    context.lineCap = "round";
-    context.lineJoin = "round";
-  }, [activeTab, signatureData, signMethod]);
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(canvas.clientWidth || canvas.offsetWidth || 320, 280);
+      const height = 260;
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.scale(ratio, ratio);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.strokeStyle = "#111827";
+      context.lineWidth = 3;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      hasInkRef.current = false;
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [mounted, activeTab, signatureData, signMethod]);
 
   function canvasPoint(event: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -383,9 +409,21 @@ export function ProofOfCompletion({
     }
   }
 
-  return (
-    <dialog className="modal modal-open" aria-labelledby="proof-of-completion-title">
-      <div className="modal-box max-w-3xl border-2 border-base-content/20 p-4 sm:p-6">
+  const panel = (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-3 sm:p-6"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !submitting) onCancel();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="proof-of-completion-title"
+        className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border-2 border-base-content/20 bg-base-100 p-4 text-base-content opacity-100 shadow-2xl sm:p-6"
+        onClick={(event) => event.stopPropagation()}
+      >
         <h2 id="proof-of-completion-title" className="text-2xl font-bold">
           Customer sign-off
         </h2>
@@ -551,6 +589,7 @@ export function ProofOfCompletion({
                     <canvas
                       ref={canvasRef}
                       className="h-[260px] w-full touch-none rounded-box border-2 border-base-content/50 bg-white"
+                      style={{ backgroundColor: "#ffffff", touchAction: "none" }}
                       onPointerDown={startSignature}
                       onPointerMove={drawSignature}
                       onPointerUp={stopSignature}
@@ -578,7 +617,7 @@ export function ProofOfCompletion({
           </div>
         ) : null}
 
-        <div className="modal-action grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button type="button" className="btn min-h-14 text-base" onClick={onCancel} disabled={submitting}>
             Cancel
           </button>
@@ -592,6 +631,9 @@ export function ProofOfCompletion({
           </button>
         </div>
       </div>
-    </dialog>
+    </div>
   );
+
+  if (!mounted) return null;
+  return createPortal(panel, document.body);
 }

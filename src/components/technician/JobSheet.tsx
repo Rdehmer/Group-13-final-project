@@ -26,7 +26,6 @@ import {
   formatElapsedLabel,
   formatLaborClock,
   formatTimesheetNotes,
-  hoursBetween,
   hoursFromTimeRange,
   humanizeFieldError,
   isOpenJob,
@@ -34,6 +33,7 @@ import {
   jobAddress,
   jobPhone,
   jobTimeLabel,
+  laborClockRange,
   mapsDirectionsUrl,
   nextChecklistStep,
   nextStepLabel,
@@ -383,20 +383,29 @@ export function JobSheet({
 
   async function finalizeWorkingLabor(): Promise<string | null> {
     if (!job.started_at) return null;
-    const now = new Date().toISOString();
-    const hours = hoursBetween(job.started_at, now);
-    const split = splitRegularOt(hours);
+    const clock = laborClockRange(job.started_at);
+    const split = splitRegularOt(clock.hours);
     const { error: insertError } = await supabase.from("technician_labor").insert(
       laborPayload(profile, job, {
-        work_date: todayIso(),
-        start_time: toLocalTime(job.started_at),
-        end_time: toLocalTime(now),
+        work_date: clock.work_date,
+        start_time: clock.start_time,
+        end_time: clock.end_time,
         regular_hours: split.regular_hours,
         overtime_hours: split.overtime_hours,
         notes: "Working",
       }),
     );
-    return insertError ? humanizeFieldError(insertError.message) : null;
+    if (insertError) return humanizeFieldError(insertError.message);
+
+    // Clear open Working stamp so a second Complete does not re-insert the same window.
+    const { error: clearError } = await supabase
+      .from("work_orders")
+      .update({
+        started_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    return clearError ? humanizeFieldError(clearError.message) : null;
   }
 
   async function runComplete() {
