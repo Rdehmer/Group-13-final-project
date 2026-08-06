@@ -16,7 +16,7 @@ export type NavItem = {
 };
 
 export const NAV_ITEMS: NavItem[] = [
-  // ── Staff: Overview ──────────────────────────────────────────────
+  // ── Staff: Overview ────────────────────────────────────────────────
   {
     section: true,
     href: "#nav-overview",
@@ -36,7 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  // ── Staff: Customers & portfolio ─────────────────────────────────
+  // ── Staff: Customers & portfolio ───────────────────────────────────
   {
     section: true,
     href: "#nav-customers",
@@ -60,7 +60,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  // ── Staff: Field ops ─────────────────────────────────────────────
+  // ── Staff: Field ops ───────────────────────────────────────────────
   {
     section: true,
     href: "#nav-field",
@@ -95,7 +95,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  // ── Staff: Inventory ─────────────────────────────────────────────
+  // ── Staff: Inventory ───────────────────────────────────────────────
   {
     section: true,
     href: "#nav-inventory",
@@ -108,6 +108,23 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["administrator", "service_manager", "technician", "billing"],
       },
       {
+        href: "/vendors",
+        label: "Vendors",
+        roles: ["administrator", "service_manager", "billing"],
+        children: [
+          {
+            href: "/vendors",
+            label: "Suppliers",
+            roles: ["administrator", "service_manager", "billing"],
+          },
+          {
+            href: "/service-vendors",
+            label: "Service vendors",
+            roles: ["administrator", "service_manager", "billing"],
+          },
+        ],
+      },
+      {
         href: "/emergency-purchases",
         /** Manager inbox for technician “I bought a part” emergency buys. */
         label: "Reimbursements",
@@ -115,7 +132,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  // ── Staff: Finance ───────────────────────────────────────────────
+  // ── Staff: Finance ─────────────────────────────────────────────────
   {
     section: true,
     href: "#nav-finance",
@@ -154,7 +171,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  // ── Staff: Administration ────────────────────────────────────────
+  // ── Staff: Administration ──────────────────────────────────────────
   {
     section: true,
     href: "#nav-admin",
@@ -190,56 +207,72 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  // ── Customer portal (unchanged) ──────────────────────────────────
+  // ── Customer portal ────────────────────────────────────────────────
   {
     href: "/customer",
     label: "Home",
     roles: ["customer"],
     children: [
       {
-        href: "/customer/request-contract",
-        label: "Request Contract",
-        roles: ["customer"],
-      },
-      {
         href: "/customer/contracts",
-        label: "My Contracts",
+        label: "Contracts",
         roles: ["customer"],
-      },
-      {
-        href: "/customer/equipment",
-        label: "My Equipment",
-        roles: ["customer"],
+        children: [
+          {
+            href: "/customer/request-contract",
+            label: "Request Contract",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/contracts",
+            label: "My Contracts",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/equipment",
+            label: "My Equipment",
+            roles: ["customer"],
+          },
+        ],
       },
       {
         href: "/customer/request-service",
-        label: "Request Service",
+        label: "Service",
         roles: ["customer"],
-      },
-      {
-        href: "/customer/open-request",
-        label: "Active Service",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/inbox",
-        label: "Inbox",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/order-history",
-        label: "Service History",
-        roles: ["customer"],
+        children: [
+          {
+            href: "/customer/request-service",
+            label: "Request Service",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/open-request",
+            label: "Active Service",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/order-history",
+            label: "Service History",
+            roles: ["customer"],
+          },
+        ],
       },
       {
         href: "/customer/pay",
-        label: "Payments",
+        label: "Billing & Account",
         roles: ["customer"],
-      },
-      {
-        href: "/customer/account",
-        label: "Account Information",
-        roles: ["customer"],
+        children: [
+          {
+            href: "/customer/pay",
+            label: "Payments",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/account",
+            label: "Account Information",
+            roles: ["customer"],
+          },
+        ],
       },
     ],
   },
@@ -261,7 +294,14 @@ export function homeForRole(role: UserRole): string {
 }
 
 function itemMatchesHref(item: NavItem, href: string, role: UserRole): boolean {
-  if (!item.section && item.href === href && item.roles.includes(role)) return true;
+  const path = href.split("?")[0] || href;
+  if (
+    !item.section &&
+    item.roles.includes(role) &&
+    (path === item.href || path.startsWith(`${item.href}/`))
+  ) {
+    return true;
+  }
   if (item.children?.some((child) => itemMatchesHref(child, href, role))) return true;
   return false;
 }

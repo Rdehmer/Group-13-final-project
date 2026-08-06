@@ -17,6 +17,8 @@ export type InboxThread = {
   /** When a manager last opened the thread (unread badge). */
   staff_last_read_at?: string | null;
   created_at: string;
+  customer_last_read_at?: string | null;
+  last_sender_role?: "customer" | "staff" | null;
   work_orders?:
     | ({ work_order_number: string; work_order_type: string } & WorkOrderDraftFields)
     | null;

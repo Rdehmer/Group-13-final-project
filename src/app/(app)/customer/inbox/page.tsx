@@ -30,6 +30,7 @@ import {
 } from "./inbox-types";
 import { NewMessageModal } from "./NewMessageModal";
 import { ThreadList } from "./ThreadList";
+import { markInboxThreadRead } from "@/lib/customer-inbox";
 
 const THREAD_SELECT = `
   *,
@@ -200,11 +201,18 @@ function CustomerInboxPageInner() {
       try {
         const rows = await loadMessages(selectedId);
         setMessages(rows);
+        await markInboxThreadRead(supabase, selectedId);
+        const now = new Date().toISOString();
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.id === selectedId ? { ...t, customer_last_read_at: now } : t,
+          ),
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load messages.");
       }
     })();
-  }, [selectedId, loadMessages]);
+  }, [selectedId, loadMessages, supabase]);
 
   function resetNewForm() {
     setNewSubject("");

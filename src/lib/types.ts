@@ -17,6 +17,8 @@ export type PermissionKey =
   | "timesheets"
   | "dispatch"
   | "parts"
+  | "vendors"
+  | "service_vendors"
   | "emergency_purchases"
   | "inbox"
   | "billing"
@@ -145,6 +147,8 @@ export type WorkOrder = {
   work_order_type: string;
   priority: "Low" | "Normal" | "High" | "Critical";
   assigned_technician_id: string | null;
+  /** External service provider assigned to this job (Ecotrak-style). */
+  service_vendor_id?: string | null;
   scheduled_date: string | null;
   scheduled_start_time: string | null;
   /** Optional end time when the column exists; duration falls back to estimated_labor_hours. */
@@ -217,7 +221,10 @@ export type Part = {
   unit_cost: number;
   standard_customer_price: number;
   warranty_eligible: boolean;
+  /** Denormalized supplier name (synced from vendors.name when vendor_id is set). */
   supplier: string | null;
+  /** Optional link to parts AP supplier (public.vendors). */
+  vendor_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -344,6 +351,107 @@ export type Invoice = {
   assigned_to: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type VendorBillStatus = "Open" | "Partial" | "Paid" | "Void";
+export type VendorPaymentMethod = "Check" | "ACH" | "Cash" | "Card" | "Other";
+export type VendorApprovalStatus = "Pending" | "Approved" | "Rejected";
+
+export type Vendor = {
+  id: string;
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  payment_terms: string;
+  notes: string | null;
+  is_active: boolean;
+  approval_status: VendorApprovalStatus;
+  requested_by: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VendorBill = {
+  id: string;
+  vendor_id: string;
+  bill_number: string;
+  bill_date: string;
+  due_date: string;
+  amount: number;
+  amount_paid: number;
+  status: VendorBillStatus;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VendorBillPayment = {
+  id: string;
+  bill_id: string;
+  payment_date: string;
+  amount: number;
+  method: VendorPaymentMethod;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+/** Ecotrak-style service provider (company we buy services from). */
+export type ServiceVendor = {
+  id: string;
+  name: string;
+  primary_trade: string;
+  trades: string[];
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  service_area: string | null;
+  notes: string | null;
+  is_active: boolean;
+  approval_status: VendorApprovalStatus;
+  requested_by: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceVendorBill = {
+  id: string;
+  service_vendor_id: string;
+  work_order_id: string | null;
+  bill_number: string;
+  bill_date: string;
+  due_date: string;
+  amount: number;
+  amount_paid: number;
+  status: VendorBillStatus;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceVendorRating = {
+  id: string;
+  service_vendor_id: string;
+  work_order_id: string | null;
+  rating: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
 };
 
 export type PurchaseOrder = {
@@ -558,11 +666,22 @@ export type TimeBillableStatus = "billable" | "nonbillable" | "contract_included
 
 export type TimeApprovalStatus =
   | "active"
+  | "missing_clock_out"
+  | "pending_correction"
   | "complete"
   | "pending_approval"
+  | "submitted"
   | "approved"
   | "rejected"
   | "locked";
+
+export type TimeBillingControlStatus =
+  | "not_ready"
+  | "ready_to_bill"
+  | "included_on_draft"
+  | "billed"
+  | "nonbillable"
+  | "disputed";
 
 /** Canonical timesheet row stored in Supabase `time_entries`. */
 export type TimeEntry = {
@@ -589,9 +708,43 @@ export type TimeEntry = {
   manual_entry_reason: string | null;
   is_manual: boolean;
   approval_status: TimeApprovalStatus;
+  submitted_at?: string | null;
+  submitted_by?: string | null;
   approved_by: string | null;
   approved_at: string | null;
+  rejected_at?: string | null;
+  rejected_by?: string | null;
   rejection_reason: string | null;
+  reopened_at?: string | null;
+  reopened_by?: string | null;
+  reopen_reason?: string | null;
+  correction_reason?: string | null;
+  edit_reason?: string | null;
+  original_clock_in_at?: string | null;
+  original_clock_out_at?: string | null;
+  original_regular_hours?: number | null;
+  original_overtime_hours?: number | null;
+  original_activity_type?: string | null;
+  original_notes?: string | null;
+  original_values?: Record<string, unknown> | null;
+  revised_values?: Record<string, unknown> | null;
+  requires_manager_assignment_override?: boolean;
+  unassigned_work_order?: boolean;
+  exception_flags?: string[] | null;
+  exception_severity?: "critical" | "warning" | "review" | "resolved" | null;
+  duration_flag_12h?: boolean;
+  duration_flag_16h?: boolean;
+  is_duplicate_suspect?: boolean;
+  billing_status?: TimeBillingControlStatus;
+  invoice_id?: string | null;
+  billed_at?: string | null;
+  billed_by?: string | null;
+  is_void?: boolean;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+  weekly_timesheet_id?: string | null;
+  cert_week_start?: string | null;
   created_by: string | null;
   updated_by: string | null;
   locked_at: string | null;
@@ -607,6 +760,7 @@ export type TimeEntry = {
     work_order_number: string | null;
     work_order_type?: string | null;
     problem_description?: string | null;
+    status?: string | null;
     customers?: {
       id: string;
       name: string;
@@ -619,7 +773,45 @@ export type TimeEntry = {
   customers?: { id: string; name: string } | null;
 };
 
-/** Weekly preferred availability window (0=Sun … 6=Sat). */
+export type WeeklyTimesheet = {
+  id: string;
+  technician_id: string;
+  week_start: string;
+  week_end: string;
+  status: "open" | "submitted" | "manager_approved" | "locked" | "returned";
+  certification_text: string | null;
+  certified_at: string | null;
+  certified_name: string | null;
+  submitted_at: string | null;
+  submitted_by: string | null;
+  manager_id: string | null;
+  manager_approved_at: string | null;
+  locked_at: string | null;
+  locked_by: string | null;
+  return_reason: string | null;
+  returned_at: string | null;
+  returned_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TimeEntryAudit = {
+  id: string;
+  time_entry_id: string | null;
+  action: string;
+  actor_id: string | null;
+  actor_role?: string | null;
+  work_order_id?: string | null;
+  detail?: string | null;
+  reason?: string | null;
+  original_values?: Record<string, unknown> | null;
+  revised_values?: Record<string, unknown> | null;
+  status_before?: string | null;
+  status_after?: string | null;
+  created_at: string;
+};
+
+/** Weekly preferred availability window (0=Sun … 6=Sat). Multiple rows per day = split shifts. */
 export type TechnicianAvailability = {
   id: string;
   technician_id: string;

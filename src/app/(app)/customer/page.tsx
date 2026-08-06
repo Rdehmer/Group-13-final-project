@@ -3,10 +3,10 @@
 import { Suspense, useCallback, useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Star, UserCircle, Wrench } from "lucide-react";
+import { ClipboardList, CreditCard, FilePlus2, Star, Wrench } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
-import { EmptyState, StatCard } from "@/components/ui";
+import { EmptyState } from "@/components/ui";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { shouldPromptForRating } from "@/lib/service-ratings";
 import { parseCustomerContracts } from "@/lib/contracts";
@@ -46,6 +46,101 @@ function GatedDashboardLink({
     <Link href={href} className={className}>
       {children}
     </Link>
+  );
+}
+
+function HomePrimaryAction({
+  href,
+  title,
+  description,
+  icon,
+  isGateActive,
+  blockNavigation,
+}: {
+  href: string;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  isGateActive: boolean;
+  blockNavigation: (event: MouseEvent<HTMLElement>) => void;
+}) {
+  return (
+    <GatedDashboardLink
+      href={href}
+      isGateActive={isGateActive}
+      blockNavigation={blockNavigation}
+      className="flex min-h-[7.5rem] flex-col justify-between gap-4 rounded-2xl border border-primary/25 bg-primary px-5 py-5 text-primary-content shadow-md transition hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <span className="rounded-xl bg-primary-content/15 p-2.5">{icon}</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-content/75">
+          Start here
+        </span>
+      </div>
+      <div>
+        <p className="font-display text-xl font-semibold leading-tight">{title}</p>
+        <p className="mt-1 text-sm text-primary-content/80">{description}</p>
+      </div>
+    </GatedDashboardLink>
+  );
+}
+
+function HomeSectionCard({
+  title,
+  description,
+  icon,
+  primaryAction,
+  links,
+  isGateActive,
+  blockNavigation,
+  footer,
+}: {
+  title: string;
+  description: string;
+  icon: ReactNode;
+  primaryAction?: { href: string; label: string };
+  links: { href: string; label: string; hint?: string }[];
+  isGateActive: boolean;
+  blockNavigation: (event: MouseEvent<HTMLElement>) => void;
+  footer?: ReactNode;
+}) {
+  return (
+    <div className="card bg-base-100 shadow">
+      <div className="card-body gap-4">
+        <div className="flex items-start gap-3">
+          <div className="rounded-box bg-primary/10 p-2.5 text-primary">{icon}</div>
+          <div>
+            <h2 className="card-title text-base">{title}</h2>
+            <p className="text-sm opacity-70">{description}</p>
+          </div>
+        </div>
+        {primaryAction ? (
+          <GatedDashboardLink
+            href={primaryAction.href}
+            isGateActive={isGateActive}
+            blockNavigation={blockNavigation}
+            className="btn btn-primary w-full sm:w-auto"
+          >
+            {primaryAction.label}
+          </GatedDashboardLink>
+        ) : null}
+        <div className="flex flex-wrap gap-2" role="list" aria-label={`${title} links`}>
+          {links.map((link) => (
+            <GatedDashboardLink
+              key={`${link.href}-${link.label}`}
+              href={link.href}
+              isGateActive={isGateActive}
+              blockNavigation={blockNavigation}
+              className="btn btn-sm btn-outline"
+            >
+              {link.label}
+              {link.hint ? <span className="opacity-60"> · {link.hint}</span> : null}
+            </GatedDashboardLink>
+          ))}
+        </div>
+        {footer}
+      </div>
+    </div>
   );
 }
 
@@ -136,14 +231,11 @@ function CustomerDashboardPageInner() {
     (w) => !["Completed", "Closed", "Canceled"].includes(w.status),
   ).length;
 
-  const linkClassName =
-    "block rounded-box transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary";
-
   return (
     <div>
       <PageHeader
         title="Home"
-        description={`Welcome, ${profile.full_name ?? profile.email}. Your account overview and quick links.`}
+        description={`Welcome, ${profile.full_name ?? profile.email}. Request a contract or service below.`}
       />
 
       {isGateActive && activeWorkOrder && shouldPromptForRating(activeWorkOrder) ? (
@@ -161,108 +253,93 @@ function CustomerDashboardPageInner() {
         </div>
       ) : null}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <GatedDashboardLink
-          href="/customer/contracts"
-          isGateActive={isGateActive}
-          blockNavigation={blockNavigation}
-          className={linkClassName}
-        >
-          <StatCard
-            label="My Contracts"
-            value={contractCount}
-            hint={`${activeContractCount} active · View →`}
+      <section className="mb-6" aria-labelledby="home-primary-actions">
+        <h2 id="home-primary-actions" className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] opacity-60">
+          What do you need?
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <HomePrimaryAction
+            href="/customer/request-contract"
+            title="Request a contract"
+            description="Choose coverage for your equipment and send a request to Ridley."
+            icon={<FilePlus2 className="h-5 w-5" aria-hidden />}
+            isGateActive={isGateActive}
+            blockNavigation={blockNavigation}
           />
-        </GatedDashboardLink>
-        <GatedDashboardLink
-          href="/customer/equipment"
-          isGateActive={isGateActive}
-          blockNavigation={blockNavigation}
-          className={linkClassName}
-        >
-          <StatCard label="My Equipment" value={equipmentCount} hint="View & register →" />
-        </GatedDashboardLink>
-        <GatedDashboardLink
-          href="/customer/open-request"
-          isGateActive={isGateActive}
-          blockNavigation={blockNavigation}
-          className={linkClassName}
-        >
-          <StatCard label="Active Service" value={openRequests} hint="View status & stage →" />
-        </GatedDashboardLink>
-        <GatedDashboardLink
-          href="/customer/order-history"
-          isGateActive={isGateActive}
-          blockNavigation={blockNavigation}
-          className={linkClassName}
-        >
-          <StatCard label="Service History" value={workOrders.length} hint="View history →" />
-        </GatedDashboardLink>
-      </div>
-
-      <div className="mb-6 grid gap-4 lg:grid-cols-2">
-        <div className="card bg-base-100 shadow">
-          <div className="card-body gap-3">
-            <div className="flex items-start gap-3">
-              <div className="rounded-box bg-primary/10 p-2.5 text-primary">
-                <Wrench className="h-5 w-5" aria-hidden />
-              </div>
-              <div>
-                <h2 className="card-title text-base">Request Service</h2>
-                <p className="text-sm opacity-70">
-                  Schedule a repair, follow-up, routine check, or emergency visit.
-                </p>
-              </div>
-            </div>
-            {isGateActive ? (
-              <span
-                role="link"
-                aria-disabled="true"
-                className="btn btn-primary btn-sm w-fit pointer-events-none cursor-not-allowed opacity-50"
-                onClick={blockNavigation}
-              >
-                Start a service request
-              </span>
-            ) : (
-              <Link href="/customer/request-service" className="btn btn-primary btn-sm w-fit">
-                Start a service request
-              </Link>
-            )}
-          </div>
+          <HomePrimaryAction
+            href="/customer/request-service"
+            title="Request service"
+            description="Book a repair, maintenance visit, or other work order."
+            icon={<Wrench className="h-5 w-5" aria-hidden />}
+            isGateActive={isGateActive}
+            blockNavigation={blockNavigation}
+          />
         </div>
+      </section>
 
-        <div className="card bg-base-100 shadow">
-          <div className="card-body gap-3">
-            <div className="flex items-start gap-3">
-              <div className="rounded-box bg-primary/10 p-2.5 text-primary">
-                <UserCircle className="h-5 w-5" aria-hidden />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h2 className="card-title text-base">Account information</h2>
-                <p className="text-sm font-medium">{customerName ?? "Your business"}</p>
-                <p className="mt-1 text-sm opacity-70 line-clamp-2">
-                  {hasCustomerAddress(customerAddress)
-                    ? formatCustomerAddress(customerAddress)
-                    : "No service location on file yet."}
-                </p>
-              </div>
-            </div>
-            {isGateActive ? (
-              <span
-                role="link"
-                aria-disabled="true"
-                className="btn btn-outline btn-sm w-fit pointer-events-none cursor-not-allowed opacity-50"
-                onClick={blockNavigation}
-              >
-                View account information
-              </span>
-            ) : (
-              <Link href="/customer/account" className="btn btn-outline btn-sm w-fit">
-                View account information →
-              </Link>
-            )}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <HomeSectionCard
+          title="Contracts"
+          description="Agreements, equipment, and coverage"
+          icon={<ClipboardList className="h-5 w-5" aria-hidden />}
+          isGateActive={isGateActive}
+          blockNavigation={blockNavigation}
+          primaryAction={{ href: "/customer/request-contract", label: "Request a contract" }}
+          links={[
+            {
+              href: "/customer/contracts",
+              label: "My Contracts",
+              hint: `${activeContractCount} active`,
+            },
+            {
+              href: "/customer/equipment",
+              label: "Equipment",
+              hint: String(equipmentCount),
+            },
+          ]}
+        />
+
+        <HomeSectionCard
+          title="Service"
+          description="Book work and track jobs"
+          icon={<Wrench className="h-5 w-5" aria-hidden />}
+          isGateActive={isGateActive}
+          blockNavigation={blockNavigation}
+          primaryAction={{ href: "/customer/request-service", label: "Request service" }}
+          links={[
+            {
+              href: "/customer/open-request",
+              label: "Active requests",
+              hint: String(openRequests),
+            },
+            {
+              href: "/customer/order-history",
+              label: "Service history",
+              hint: String(workOrders.length),
+            },
+          ]}
+        />
+
+        <HomeSectionCard
+          title="Billing & Account"
+          description="Pay invoices and manage your profile"
+          icon={<CreditCard className="h-5 w-5" aria-hidden />}
+          isGateActive={isGateActive}
+          blockNavigation={blockNavigation}
+          links={[
+            { href: "/customer/pay", label: "Payments" },
+            { href: "/customer/account", label: "Account" },
+          ]}
+          footer={
+            <p className="text-sm opacity-70">
+              <span className="font-medium opacity-100">{customerName ?? "Your business"}</span>
+              {" · "}
+              {hasCustomerAddress(customerAddress)
+                ? formatCustomerAddress(customerAddress)
+                : "No service location on file yet."}
+            </p>
+          }
+        />
       </div>
     </div>
   );

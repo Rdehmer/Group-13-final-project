@@ -1,16 +1,14 @@
 import type { ReactNode } from "react";
 
 const TONE: Record<string, string> = {
-  success: "badge-success",
-  warning: "badge-warning",
-  error: "badge-error",
-  info: "badge-info",
-  neutral: "badge-ghost border border-base-300",
-  critical: "badge-error",
-  /** In Progress — amber yellow, distinct from Daisy warning */
-  progress: "border-amber-400/80 bg-amber-300 text-amber-950",
-  /** Waiting on Parts — white / light */
-  white: "border border-base-300 bg-white text-base-content",
+  success: "border-transparent bg-[#e6f7f7] text-[#007a7c]",
+  warning: "border-transparent bg-[#fff4e8] text-[#b34f00]",
+  error: "border-transparent bg-[#fdecea] text-[#b42318]",
+  info: "border-transparent bg-[#e8f4f8] text-[#0b7ea4]",
+  neutral: "border border-[#dce3ea] bg-[#f2f5f8] text-[#374151]",
+  critical: "border-transparent bg-[#fdecea] text-[#b42318]",
+  progress: "border-transparent bg-[#fff4e8] text-[#b34f00]",
+  white: "border border-[#dce3ea] bg-white text-[#1e2a36]",
 };
 
 export function StatusBadge({
@@ -24,7 +22,7 @@ export function StatusBadge({
 }) {
   return (
     <span
-      className={`badge badge-sm h-auto max-w-full whitespace-normal break-words py-1 text-center font-medium leading-tight ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}
+      className={`inline-flex max-w-full items-center rounded-md px-2 py-0.5 text-[11px] font-semibold leading-tight ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}
     >
       {label}
     </span>
@@ -63,10 +61,13 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-base-300 bg-base-100/80 p-10 text-center">
-      <h3 className="font-display text-lg font-semibold">{title}</h3>
-      <p className="mt-2 text-sm leading-relaxed text-base-content/60">{description}</p>
-      {action ? <div className="mt-4">{action}</div> : null}
+    <div className="rounded-xl border border-[#dce3ea] bg-white px-8 py-12 text-center shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)]">
+      <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[#00a3a6]" aria-hidden />
+      <h3 className="text-base font-semibold text-[#1e2a36]">{title}</h3>
+      <p className="mx-auto mt-2 max-w-md text-[13.5px] leading-relaxed text-[#5c6b7a]">
+        {description}
+      </p>
+      {action ? <div className="mt-5">{action}</div> : null}
     </div>
   );
 }
@@ -87,27 +88,25 @@ export function StatCard({
   active?: boolean;
 }) {
   const className = [
-    "stat rounded-2xl border border-base-300/70 bg-base-100 text-left w-full shadow-none",
-    danger ? "border-error/45 bg-error/5" : "",
-    active ? "ring-2 ring-primary border-primary" : "",
-    onClick ? "cursor-pointer transition-colors hover:bg-base-200/50" : "",
+    "stat w-full rounded-xl border border-[#dce3ea] bg-white text-left shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)]",
+    danger ? "border-[#f3c4c0] bg-[#fef3f2]" : "",
+    active ? "ring-2 ring-[#00a3a6]/35 border-[#00a3a6]" : "",
+    onClick ? "cursor-pointer transition-all hover:-translate-y-px hover:shadow-md" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   const body = (
     <>
-      <div className="stat-title text-xs font-medium uppercase tracking-wide text-base-content/55">
-        {label}
-      </div>
+      <div className="stat-title text-[12px] font-semibold text-[#5c6b7a]">{label}</div>
       <div
-        className={`stat-value font-display text-2xl font-semibold tracking-tight ${
-          danger ? "text-error" : "text-base-content"
+        className={`stat-value text-[1.35rem] font-semibold tracking-tight ${
+          danger ? "text-[#d64545]" : "text-[#1e2a36]"
         }`}
       >
         {value}
       </div>
-      {hint ? <div className="stat-desc text-base-content/55">{hint}</div> : null}
+      {hint ? <div className="stat-desc text-[12px] text-[#5c6b7a]">{hint}</div> : null}
     </>
   );
 

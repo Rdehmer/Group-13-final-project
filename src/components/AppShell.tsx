@@ -3,13 +3,26 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Mail, Menu, PanelLeftClose, PanelLeftOpen, Wrench } from "lucide-react";
+import Image from "next/image";
+import {
+  Bell,
+  HelpCircle,
+  LogOut,
+  Mail,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Settings,
+} from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
+import { countUnreadInboxThreads } from "@/lib/customer-inbox";
 import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
 
 const CUSTOMER_HOME = "/customer";
@@ -17,19 +30,25 @@ const UNREAD_POLL_MS = 30_000;
 const MANAGER_SIDEBAR_COLLAPSED_KEY = "esm-manager-sidebar-collapsed";
 
 function isPathActive(pathname: string, href: string) {
+  if (href === "/vendors") {
+    return (
+      pathname === "/vendors" ||
+      (pathname.startsWith("/vendors/") && !pathname.startsWith("/vendors/aging"))
+    );
+  }
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function gatedNavClassName(isBlocked: boolean, active: boolean, className?: string) {
   const parts = [
-    active ? "active font-medium" : "",
-    isBlocked ? "pointer-events-none cursor-not-allowed opacity-50" : "",
+    "eq-nav-item",
+    active ? "eq-nav-item--active" : "",
+    isBlocked ? "pointer-events-none cursor-not-allowed opacity-40" : "",
     className ?? "",
   ];
   return parts.filter(Boolean).join(" ");
 }
 
-/** Role-aware nav labels (same href, clearer names in the field). */
 function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
@@ -48,24 +67,40 @@ function closeMobileDrawer() {
   if (toggle) toggle.checked = false;
 }
 
+function NavBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return <span className="eq-nav-badge">{count > 99 ? "99+" : count}</span>;
+}
+
+function NavLabelWithBadge({ label, count }: { label: string; count?: number }) {
+  return (
+    <span className="flex w-full min-w-0 items-center justify-between gap-2">
+      <span className="truncate">{label}</span>
+      <NavBadge count={count ?? 0} />
+    </span>
+  );
+}
+
 function GatedNavLink({
   item,
   pathname,
   className,
   isGateActive,
   blockNavigation,
+  badgeCount,
 }: {
   item: NavItem;
   pathname: string;
   className?: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  badgeCount?: number;
 }) {
   const router = useRouter();
-  const active = item.href === CUSTOMER_HOME
-    ? pathname === CUSTOMER_HOME
-    : isPathActive(pathname, item.href);
+  const active =
+    item.href === CUSTOMER_HOME ? pathname === CUSTOMER_HOME : isPathActive(pathname, item.href);
   const isBlocked = isGateActive && item.href !== CUSTOMER_HOME;
+  const label = <NavLabelWithBadge label={item.label} count={badgeCount} />;
 
   if (isBlocked) {
     return (
@@ -75,7 +110,7 @@ function GatedNavLink({
         className={gatedNavClassName(true, active, className)}
         onClick={blockNavigation}
       >
-        {item.label}
+        {label}
       </span>
     );
   }
@@ -85,14 +120,59 @@ function GatedNavLink({
       href={item.href}
       className={gatedNavClassName(false, active, className)}
       onClick={(event) => {
-        // DaisyUI drawer overlay can swallow default Link navigation on some viewports.
         event.preventDefault();
         closeMobileDrawer();
         router.push(item.href);
       }}
     >
-      {item.label}
+      {label}
     </Link>
+  );
+}
+
+function NavChildList({
+  items,
+  pathname,
+  isGateActive,
+  blockNavigation,
+  badgeForHref,
+}: {
+  items: NavItem[];
+  pathname: string;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  badgeForHref?: (href: string) => number;
+}) {
+  return (
+    <ul className="eq-nav-children">
+      {items.map((child) => {
+        if (child.children?.length) {
+          return (
+            <li key={`${child.href}-${child.label}`}>
+              <div className="eq-nav-section">{child.label}</div>
+              <NavChildList
+                items={child.children}
+                pathname={pathname}
+                isGateActive={isGateActive}
+                blockNavigation={blockNavigation}
+                badgeForHref={badgeForHref}
+              />
+            </li>
+          );
+        }
+        return (
+          <li key={`${child.href}-${child.label}`}>
+            <GatedNavLink
+              item={child}
+              pathname={pathname}
+              isGateActive={isGateActive}
+              blockNavigation={blockNavigation}
+              badgeCount={badgeForHref?.(child.href)}
+            />
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -101,22 +181,34 @@ function NavDetailsGroup({
   pathname,
   isGateActive,
   blockNavigation,
+  badgeForHref,
 }: {
   item: NavItem;
   pathname: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  badgeForHref: (href: string) => number;
 }) {
-  const childActive = item.children!.some((child) =>
-    child.href === CUSTOMER_HOME
+  const router = useRouter();
+  const childActive = item.children!.some(function walk(child): boolean {
+    if (child.children?.length) return child.children.some(walk);
+    return child.href === CUSTOMER_HOME
       ? pathname === CUSTOMER_HOME
-      : isPathActive(pathname, child.href),
-  );
-  const sectionOpen = childActive || isPathActive(pathname, item.href);
+      : isPathActive(pathname, child.href);
+  });
+  const sectionOpen =
+    childActive ||
+    isPathActive(pathname, item.href) ||
+    pathname.startsWith("/vendors/aging") ||
+    pathname.startsWith("/service-vendors");
   const parentBlocked = isGateActive && item.href !== CUSTOMER_HOME;
+  const parentBadge =
+    item.href === "/vendors"
+      ? badgeForHref("/vendors") + badgeForHref("/service-vendors")
+      : 0;
 
   return (
-    <li>
+    <li className="eq-nav-group">
       {parentBlocked ? (
         <span
           role="link"
@@ -124,25 +216,28 @@ function NavDetailsGroup({
           className={gatedNavClassName(true, sectionOpen)}
           onClick={blockNavigation}
         >
-          {item.label}
+          <NavLabelWithBadge label={item.label} count={parentBadge} />
         </span>
       ) : (
-        <Link href={item.href} className={sectionOpen ? "border-l-2 border-primary/40 font-semibold text-primary" : "border-l-2 border-transparent opacity-80"}>
-          {item.label}
+        <Link
+          href={item.href}
+          className={gatedNavClassName(false, sectionOpen)}
+          onClick={(event) => {
+            event.preventDefault();
+            closeMobileDrawer();
+            router.push(item.href);
+          }}
+        >
+          <NavLabelWithBadge label={item.label} count={parentBadge} />
         </Link>
       )}
-      <ul>
-        {item.children!.map((child) => (
-          <li key={`${child.href}-${child.label}`}>
-            <GatedNavLink
-              item={child}
-              pathname={pathname}
-              isGateActive={isGateActive}
-              blockNavigation={blockNavigation}
-            />
-          </li>
-        ))}
-      </ul>
+      <NavChildList
+        items={item.children!}
+        pathname={pathname}
+        isGateActive={isGateActive}
+        blockNavigation={blockNavigation}
+        badgeForHref={badgeForHref}
+      />
     </li>
   );
 }
@@ -153,102 +248,175 @@ function NavSection({
   isGateActive,
   blockNavigation,
   unreadInbox,
-  allNavItems,
+  badgeForHref,
 }: {
   item: NavItem;
   pathname: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   unreadInbox: number;
-  allNavItems: NavItem[];
+  badgeForHref: (href: string) => number;
 }) {
   return (
-    <>
-      <li className="menu-title mt-2 px-3 pt-2 first:mt-0">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-base-content/45">
-          {item.label}
-        </span>
-      </li>
+    <div className="eq-nav-section-block">
+      <p className="eq-nav-heading">{item.label}</p>
       {(item.children ?? []).map((child) => {
         if (child.children?.length && !child.section) {
           return (
             <NavDetailsGroup
-              key={child.href}
+              key={`${child.href}-${child.label}`}
               item={child}
               pathname={pathname}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
+              badgeForHref={badgeForHref}
             />
           );
         }
-        const flatLeaves = allNavItems.flatMap((n) => collectLeafHrefs(n));
-        const matches = flatLeaves.filter(
-          (href) => pathname === href || pathname.startsWith(`${href}/`),
-        );
-        const best = [...matches].sort((a, b) => b.length - a.length)[0];
-        const active = best === child.href;
-        const showBadge = child.href === "/inbox" && unreadInbox > 0;
+        const active = isPathActive(pathname, child.href);
+        const badgeCount =
+          child.href === "/inbox" && unreadInbox > 0 ? unreadInbox : badgeForHref(child.href);
         return (
-          <li key={child.href}>
+          <div key={`${child.href}-${child.label}`} className="eq-nav-row">
             <GatedNavLink
-              item={{
-                ...child,
-                label: showBadge ? `${child.label} (${unreadInbox})` : child.label,
-              }}
+              item={child}
               pathname={pathname}
-              className={
-                active
-                  ? "active border-l-2 border-primary bg-primary/10 font-semibold text-primary"
-                  : "border-l-2 border-transparent opacity-80 hover:bg-base-200/80 hover:opacity-100"
-              }
+              className={active ? "eq-nav-item--active" : ""}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
+              badgeCount={badgeCount}
             />
-          </li>
+          </div>
         );
       })}
-    </>
+    </div>
   );
 }
 
-function collectLeafHrefs(item: NavItem): string[] {
-  if (item.section) {
-    return (item.children ?? []).flatMap(collectLeafHrefs);
+function InboxHeaderControl({
+  href,
+  unreadCount,
+  isGateActive,
+  blockNavigation,
+}: {
+  href: string;
+  unreadCount: number;
+  isGateActive?: boolean;
+  blockNavigation?: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  const pathname = usePathname();
+  const active = isPathActive(pathname, href);
+  const showBadge = unreadCount > 0;
+  const className = `eq-top-icon ${active ? "eq-top-icon--active" : ""}`;
+
+  if (isGateActive && blockNavigation) {
+    return (
+      <span
+        role="link"
+        aria-disabled="true"
+        aria-label="Inbox"
+        className={`${className} pointer-events-none cursor-not-allowed opacity-40`}
+        onClick={blockNavigation}
+      >
+        <Mail className="h-[18px] w-[18px]" strokeWidth={1.75} />
+      </span>
+    );
   }
-  if (item.children?.length) {
-    return [item.href, ...item.children.flatMap(collectLeafHrefs)];
-  }
-  return item.href.startsWith("#") ? [] : [item.href];
+
+  return (
+    <Link
+      href={href}
+      className={className}
+      aria-label={showBadge ? `Inbox, ${unreadCount} unread` : "Inbox"}
+      title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
+    >
+      <Mail className="h-[18px] w-[18px]" strokeWidth={1.75} />
+      {showBadge ? <span className="eq-top-dot">{unreadCount > 9 ? "9+" : unreadCount}</span> : null}
+    </Link>
+  );
 }
 
-function SidebarNav({
-  profileEmail,
+function CustomerInboxHeaderControl({
+  customerId,
+  isGateActive,
+  blockNavigation,
+}: {
+  customerId: string;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  const pathname = usePathname();
+  const supabase = createClient();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const refreshUnread = useCallback(async () => {
+    const count = await countUnreadInboxThreads(supabase, customerId);
+    setUnreadCount(count);
+  }, [customerId, supabase]);
+
+  useEffect(() => {
+    void refreshUnread();
+    const id = window.setInterval(() => {
+      void refreshUnread();
+    }, UNREAD_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshUnread, pathname]);
+
+  return (
+    <InboxHeaderControl
+      href="/customer/inbox"
+      unreadCount={unreadCount}
+      isGateActive={isGateActive}
+      blockNavigation={blockNavigation}
+    />
+  );
+}
+
+function createHrefForRole(role: Profile["role"]): string {
+  if (role === "customer") return "/customer/request-service";
+  if (role === "technician") return "/technician";
+  if (role === "billing") return "/billing";
+  return "/work-orders";
+}
+
+function SidebarNavBody({
   pathname,
   navItems,
   isGateActive,
   blockNavigation,
   unreadInbox,
+  badgeForHref,
+  profileEmail,
 }: {
-  profileEmail: string;
   pathname: string;
   navItems: NavItem[];
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   unreadInbox: number;
+  badgeForHref: (href: string) => number;
+  profileEmail: string;
 }) {
   return (
     <>
-      <div className="mb-3 flex items-center gap-3 rounded-2xl bg-primary/10 px-3 py-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-content shadow-sm">
-          <Wrench className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="font-display text-sm font-semibold leading-tight">ESM</p>
-          <p className="truncate text-[11px] opacity-55">Field service</p>
+      <div className="eq-sidebar-brand">
+        <div className="eq-brand-mark">
+          <Image
+            src="/equipmentiq-logo.png"
+            alt="EquipmentIQ"
+            width={200}
+            height={48}
+            className="eq-brand-logo"
+            priority
+          />
         </div>
-        <DemoPersonaSwitcher currentEmail={profileEmail} />
+        <p className="eq-brand-tag">Service operations</p>
       </div>
-      <ul className="menu w-full gap-0.5 bg-transparent p-0 text-base-content">
+
+      <div className="px-3 pb-2">
+        <DemoPersonaSwitcher currentEmail={profileEmail} variant="dark" />
+      </div>
+
+      <div className="eq-sidebar-scroll flex-1 overflow-y-auto px-2.5 pb-4 pt-1">
         {navItems.map((item) => {
           if (item.section && item.children?.length) {
             return (
@@ -259,7 +427,7 @@ function SidebarNav({
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 unreadInbox={unreadInbox}
-                allNavItems={navItems}
+                badgeForHref={badgeForHref}
               />
             );
           }
@@ -272,37 +440,40 @@ function SidebarNav({
                 pathname={pathname}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
+                badgeForHref={badgeForHref}
               />
             );
           }
 
-          const flatLeaves = navItems.flatMap((n) => collectLeafHrefs(n));
-          const matches = flatLeaves.filter(
-            (href) => pathname === href || pathname.startsWith(`${href}/`),
+          const matches = navItems.filter(
+            (n) =>
+              !n.section &&
+              !n.children &&
+              (pathname === n.href || pathname.startsWith(`${n.href}/`)),
           );
-          const best = [...matches].sort((a, b) => b.length - a.length)[0];
-          const active = best === item.href;
-          const showBadge = item.href === "/inbox" && unreadInbox > 0;
+          const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
+          const active = best?.href === item.href;
+          const badgeCount =
+            item.href === "/inbox" && unreadInbox > 0 ? unreadInbox : badgeForHref(item.href);
           return (
-            <li key={item.href}>
+            <div key={item.href} className="eq-nav-row">
               <GatedNavLink
-                item={{
-                  ...item,
-                  label: showBadge ? `${item.label} (${unreadInbox})` : item.label,
-                }}
+                item={item}
                 pathname={pathname}
-                className={
-                  active
-                    ? "active border-l-2 border-primary bg-primary/10 font-semibold text-primary"
-                    : "border-l-2 border-transparent opacity-80 hover:bg-base-200/80 hover:opacity-100"
-                }
+                className={active ? "eq-nav-item--active" : ""}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
+                badgeCount={badgeCount}
               />
-            </li>
+            </div>
           );
         })}
-      </ul>
+      </div>
+
+      <div className="eq-sidebar-foot">
+        <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
+        <p className="mt-0.5 text-[10px] text-white/30">Field service · Billing · Operations</p>
+      </div>
     </>
   );
 }
@@ -319,9 +490,10 @@ export function AppShell({
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
   const [unreadInbox, setUnreadInbox] = useState(0);
+  const [pendingByHref, setPendingByHref] = useState<Record<string, number>>({});
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
+  const isCustomer = profile.role === "customer";
   const showManagerInbox = profile.role === "service_manager";
-  /** Desktop sidebar collapse is only for the manager shell. */
   const canCollapseSidebar = profile.role === "service_manager";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -358,10 +530,6 @@ export function AppShell({
     }
   }, [canCollapseSidebar, sidebarCollapsed]);
 
-  function toggleSidebarCollapsed() {
-    setSidebarCollapsed((v) => !v);
-  }
-
   useEffect(() => {
     if (!showManagerInbox) return;
     void refreshUnread();
@@ -374,7 +542,46 @@ export function AppShell({
     };
   }, [showManagerInbox, refreshUnread, pathname]);
 
+  useEffect(() => {
+    const canVendors = ["administrator", "service_manager", "billing"].includes(profile.role);
+    if (!canVendors) {
+      setPendingByHref({});
+      return;
+    }
+    let cancelled = false;
+    async function loadPending() {
+      const supabase = createClient();
+      const [suppliers, services] = await Promise.all([
+        supabase
+          .from("vendors")
+          .select("id", { count: "exact", head: true })
+          .eq("approval_status", "Pending"),
+        supabase
+          .from("service_vendors")
+          .select("id", { count: "exact", head: true })
+          .eq("approval_status", "Pending"),
+      ]);
+      if (cancelled) return;
+      setPendingByHref({
+        "/vendors": suppliers.count ?? 0,
+        "/service-vendors": services.count ?? 0,
+      });
+    }
+    void loadPending();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile.role, pathname]);
+
   const gateActive = mounted && isGateActive;
+
+  function badgeForHref(href: string) {
+    return pendingByHref[href] ?? 0;
+  }
+
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((v) => !v);
+  }
 
   async function logout() {
     const supabase = createClient();
@@ -383,166 +590,306 @@ export function AppShell({
     router.refresh();
   }
 
-  const inboxButton = showManagerInbox ? (
-    <Link
-      href="/inbox"
-      className={`btn btn-ghost btn-sm relative gap-1 ${
-        pathname === "/inbox" || pathname.startsWith("/inbox/") ? "btn-active" : ""
-      }`}
-      aria-label={
-        unreadInbox > 0 ? `Inbox, ${unreadInbox} unread` : "Inbox"
-      }
-      title="Inbox"
-    >
-      <Mail className="h-4 w-4" />
-      <span className="hidden sm:inline">Inbox</span>
-      {unreadInbox > 0 ? (
-        <span className="badge badge-error badge-sm absolute -right-1 -top-1 min-w-5 justify-center px-1">
-          {unreadInbox > 99 ? "99+" : unreadInbox}
-        </span>
-      ) : null}
-    </Link>
+  const customerInboxControl =
+    isCustomer && profile.customer_id ? (
+      <CustomerInboxHeaderControl
+        customerId={profile.customer_id}
+        isGateActive={gateActive}
+        blockNavigation={blockNavigation}
+      />
+    ) : null;
+
+  const managerInboxControl = showManagerInbox ? (
+    <InboxHeaderControl href="/inbox" unreadCount={unreadInbox} />
   ) : null;
 
-  const sidebarProps = {
-    profileEmail: profile.email,
+  const inboxControl = customerInboxControl ?? managerInboxControl;
+  const initials = (profile.full_name || profile.email || "?")
+    .split(/[\s@]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+  const createHref = createHrefForRole(profile.role);
+  const desktopSidebarHidden = canCollapseSidebar && sidebarCollapsed;
+
+  const sidebarBodyProps = {
     pathname,
     navItems,
     isGateActive: gateActive,
     blockNavigation,
     unreadInbox,
+    badgeForHref,
+    profileEmail: profile.email,
   };
 
-  const desktopSidebarHidden = canCollapseSidebar && sidebarCollapsed;
-
   return (
-    <div className="min-h-screen bg-base-200 lg:flex">
-      {/* Desktop sidebar — managers can collapse for max page width */}
-      {!desktopSidebarHidden ? (
-        <aside
-          className="app-sidebar-scroll hidden shrink-0 border-r border-base-300/70 bg-base-100 lg:block"
-          style={{
-            position: "sticky",
-            top: 0,
-            alignSelf: "flex-start",
-            width: "18rem",
-            height: "100dvh",
-            maxHeight: "100dvh",
-            overflowY: "auto",
-            overscrollBehavior: "contain",
-            scrollbarGutter: "stable",
-          }}
-        >
-          <div className="p-4">
-            {canCollapseSidebar ? (
-              <div className="mb-2 flex justify-end">
+    <div
+      className={`eq-shell min-h-screen ${
+        canCollapseSidebar ? "lg:flex" : "drawer lg:drawer-open"
+      }`}
+    >
+      {canCollapseSidebar ? (
+        <>
+          {!desktopSidebarHidden ? (
+            <aside className="eq-sidebar relative z-10 hidden w-[15.75rem] shrink-0 flex-col lg:flex">
+              <div className="flex justify-end px-2 pt-2">
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm gap-1"
+                  className="eq-top-icon"
                   onClick={toggleSidebarCollapsed}
                   aria-label="Collapse sidebar"
                   title="Collapse sidebar"
                 >
-                  <PanelLeftClose className="h-4 w-4" />
-                  <span className="text-xs">Hide menu</span>
+                  <PanelLeftClose className="h-4 w-4" strokeWidth={1.75} />
                 </button>
               </div>
-            ) : null}
-            <SidebarNav {...sidebarProps} />
-          </div>
-        </aside>
-      ) : null}
-
-      {/* Mobile drawer + main column */}
-      <div className="drawer min-h-screen min-w-0 flex-1">
-        <input id="app-drawer" type="checkbox" className="drawer-toggle" />
-        <div className="drawer-content flex min-h-screen flex-col">
-          <header className="navbar sticky top-0 z-30 border-b border-base-300/80 bg-base-100/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-base-100/85">
-            <div className="flex-none gap-1">
-              <label
-                htmlFor="app-drawer"
-                className="btn btn-ghost btn-square lg:hidden"
-                aria-label="Open menu"
-              >
-                <Menu className="h-5 w-5" />
-              </label>
-              {canCollapseSidebar && desktopSidebarHidden ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm hidden gap-1 lg:inline-flex"
-                  onClick={toggleSidebarCollapsed}
-                  aria-label="Expand sidebar"
-                  title="Show menu"
-                >
-                  <PanelLeftOpen className="h-4 w-4" />
-                  <span className="text-xs">Menu</span>
-                </button>
-              ) : null}
-            </div>
-            <div className="flex-1">
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-primary/80">
-                  Equipment Service Manager
-                </p>
-                <p className="font-display text-base font-semibold leading-tight text-base-content">
-                  Ridley Equipment Services
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 md:gap-3">
-              {inboxButton}
-              <div className="hidden items-center gap-3 md:flex">
-                <div className="text-right text-sm">
-                  <p className="font-medium">{profile.full_name || profile.email}</p>
-                  <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
-                </div>
-                <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={logout}>
-                  <LogOut className="h-4 w-4" /> Logout
-                </button>
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm md:hidden"
-                onClick={logout}
-                aria-label="Logout"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
-            </div>
-          </header>
-
-          <div className="flex items-center justify-between gap-2 border-b border-base-300/80 bg-base-100 px-4 py-2.5 md:hidden">
-            <div className="text-sm">
-              <span className="font-medium">{profile.full_name || profile.email}</span>
-              <span className="opacity-55"> · {ROLE_LABELS[profile.role]}</span>
-            </div>
-          </div>
-
-          {gateActive ? (
-            <div role="status" className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm">
-              Submit your service rating on Home to continue using the portal.
-            </div>
+              <SidebarNavBody {...sidebarBodyProps} />
+            </aside>
           ) : null}
 
-          <main className="app-main flex-1 p-5 md:p-8">{children}</main>
-        </div>
+          <div className="drawer min-h-screen min-w-0 flex-1">
+            <input id="app-drawer" type="checkbox" className="drawer-toggle" />
+            <div className="drawer-content flex min-h-screen flex-col">
+              <header className="eq-topbar">
+                <div className="flex flex-none items-center gap-2">
+                  <label
+                    htmlFor="app-drawer"
+                    className="eq-top-icon lg:hidden"
+                    aria-label="Open menu"
+                  >
+                    <Menu className="h-5 w-5" strokeWidth={1.75} />
+                  </label>
+                  {desktopSidebarHidden ? (
+                    <button
+                      type="button"
+                      className="eq-top-icon hidden lg:inline-flex"
+                      onClick={toggleSidebarCollapsed}
+                      aria-label="Expand sidebar"
+                      title="Show menu"
+                    >
+                      <PanelLeftOpen className="h-4 w-4" strokeWidth={1.75} />
+                    </button>
+                  ) : null}
+                  <div className="relative h-8 w-[132px] sm:hidden">
+                    <Image
+                      src="/equipmentiq-logo.png"
+                      alt="EquipmentIQ"
+                      fill
+                      className="object-contain object-left"
+                      sizes="132px"
+                      priority
+                    />
+                  </div>
+                </div>
 
-        {/* Mobile-only slide-out menu */}
-        <aside className="drawer-side z-40 lg:hidden">
-          <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
-          <div
-            className="app-sidebar-scroll relative z-10 w-72 border-r border-base-300/70 bg-base-100 p-4"
-            style={{
-              height: "100dvh",
-              maxHeight: "100dvh",
-              overflowY: "auto",
-              overscrollBehavior: "contain",
-            }}
-          >
-            <SidebarNav {...sidebarProps} />
+                <div className="eq-search min-w-0 flex-1">
+                  <Search className="eq-search-icon" strokeWidth={1.75} />
+                  <input
+                    type="search"
+                    className="eq-search-input"
+                    placeholder="Search customers, invoices, work orders…"
+                    aria-label="Search"
+                    readOnly
+                    onFocus={(e) => e.currentTarget.blur()}
+                    title="Search (coming soon)"
+                  />
+                </div>
+
+                <div className="flex flex-none items-center gap-1 sm:gap-1.5">
+                  {!gateActive ? (
+                    <Link href={createHref} className="eq-create-btn">
+                      <Plus className="h-4 w-4" strokeWidth={2.25} />
+                      <span className="hidden sm:inline">New</span>
+                    </Link>
+                  ) : null}
+
+                  <div className="eq-top-divider hidden sm:block" />
+
+                  {inboxControl}
+                  <button
+                    type="button"
+                    className="eq-top-icon"
+                    aria-label="Notifications"
+                    title="Notifications"
+                  >
+                    <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    className="eq-top-icon hidden sm:inline-flex"
+                    aria-label="Help"
+                    title="Help"
+                  >
+                    <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </button>
+                  <Link
+                    href="/settings"
+                    className="eq-top-icon hidden sm:inline-flex"
+                    aria-label="Settings"
+                    title="Settings"
+                  >
+                    <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </Link>
+
+                  <div className="eq-user-menu">
+                    <span className="eq-avatar" aria-hidden>
+                      {initials || "?"}
+                    </span>
+                    <div className="hidden min-w-0 text-left leading-tight md:block">
+                      <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
+                        {profile.full_name || profile.email}
+                      </p>
+                      <p className="truncate text-[11px] text-[#5c6b7a]">
+                        {ROLE_LABELS[profile.role]}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button type="button" className="eq-signout" onClick={logout} title="Sign out">
+                    <LogOut className="h-4 w-4" strokeWidth={1.75} />
+                    <span className="hidden lg:inline">Sign out</span>
+                  </button>
+                </div>
+              </header>
+
+              {gateActive ? (
+                <div
+                  role="status"
+                  className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+                >
+                  Submit your service rating on Home to continue using the portal.
+                </div>
+              ) : null}
+
+              <main className="eq-main flex-1">
+                <div className="eq-page">{children}</div>
+              </main>
+            </div>
+
+            <aside className="drawer-side z-40 lg:hidden">
+              <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
+              <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+                <SidebarNavBody {...sidebarBodyProps} />
+              </nav>
+            </aside>
           </div>
-        </aside>
-      </div>
+        </>
+      ) : (
+        <>
+          <input id="app-drawer" type="checkbox" className="drawer-toggle" />
+          <div className="drawer-content flex min-h-screen flex-col">
+            <header className="eq-topbar">
+              <div className="flex flex-none items-center gap-2 lg:hidden">
+                <label htmlFor="app-drawer" className="eq-top-icon" aria-label="Open menu">
+                  <Menu className="h-5 w-5" strokeWidth={1.75} />
+                </label>
+                <div className="relative h-8 w-[132px] sm:hidden">
+                  <Image
+                    src="/equipmentiq-logo.png"
+                    alt="EquipmentIQ"
+                    fill
+                    className="object-contain object-left"
+                    sizes="132px"
+                    priority
+                  />
+                </div>
+              </div>
+
+              <div className="eq-search min-w-0 flex-1">
+                <Search className="eq-search-icon" strokeWidth={1.75} />
+                <input
+                  type="search"
+                  className="eq-search-input"
+                  placeholder="Search customers, invoices, work orders…"
+                  aria-label="Search"
+                  readOnly
+                  onFocus={(e) => e.currentTarget.blur()}
+                  title="Search (coming soon)"
+                />
+              </div>
+
+              <div className="flex flex-none items-center gap-1 sm:gap-1.5">
+                {!gateActive ? (
+                  <Link href={createHref} className="eq-create-btn">
+                    <Plus className="h-4 w-4" strokeWidth={2.25} />
+                    <span className="hidden sm:inline">New</span>
+                  </Link>
+                ) : null}
+
+                <div className="eq-top-divider hidden sm:block" />
+
+                {inboxControl}
+                <button
+                  type="button"
+                  className="eq-top-icon"
+                  aria-label="Notifications"
+                  title="Notifications"
+                >
+                  <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+                <button
+                  type="button"
+                  className="eq-top-icon hidden sm:inline-flex"
+                  aria-label="Help"
+                  title="Help"
+                >
+                  <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+                <Link
+                  href="/settings"
+                  className="eq-top-icon hidden sm:inline-flex"
+                  aria-label="Settings"
+                  title="Settings"
+                >
+                  <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </Link>
+
+                <div className="eq-user-menu">
+                  <span className="eq-avatar" aria-hidden>
+                    {initials || "?"}
+                  </span>
+                  <div className="hidden min-w-0 text-left leading-tight md:block">
+                    <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
+                      {profile.full_name || profile.email}
+                    </p>
+                    <p className="truncate text-[11px] text-[#5c6b7a]">{ROLE_LABELS[profile.role]}</p>
+                  </div>
+                </div>
+
+                <button type="button" className="eq-signout" onClick={logout} title="Sign out">
+                  <LogOut className="h-4 w-4" strokeWidth={1.75} />
+                  <span className="hidden lg:inline">Sign out</span>
+                </button>
+              </div>
+            </header>
+
+            {gateActive ? (
+              <div
+                role="status"
+                className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+              >
+                Submit your service rating on Home to continue using the portal.
+              </div>
+            ) : null}
+
+            <main className="eq-main flex-1">
+              <div className="eq-page">{children}</div>
+            </main>
+          </div>
+
+          <aside className="drawer-side z-40">
+            <label
+              htmlFor="app-drawer"
+              className="drawer-overlay lg:pointer-events-none"
+              aria-label="Close menu"
+            />
+            <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+              <SidebarNavBody {...sidebarBodyProps} />
+            </nav>
+          </aside>
+        </>
+      )}
     </div>
   );
 }

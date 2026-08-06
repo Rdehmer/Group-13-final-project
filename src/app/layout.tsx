@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans, Sora } from "next/font/google";
+import { HydrationAttrGuard } from "@/components/HydrationAttrGuard";
 import { ThemeLock } from "@/components/ThemeLock";
 import "./globals.css";
 
@@ -14,8 +15,8 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Equipment Service Manager",
-  description: "Commercial equipment service management for Ridley Equipment Services",
+  title: "EquipmentIQ",
+  description: "Commercial equipment service management — from request to invoice",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -26,7 +27,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       data-theme="ridley"
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col bg-base-200">
+      <body className="min-h-full flex flex-col bg-[#eef2f5] text-[#1e2a36]" suppressHydrationWarning>
+        <HydrationAttrGuard />
         <ThemeLock />
         {children}
       </body>
