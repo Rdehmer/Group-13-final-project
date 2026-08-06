@@ -605,6 +605,54 @@ export type CompanySettings = {
   updated_at: string;
 };
 
+/** Payroll timesheet cycle length (configurable in timesheet_settings). */
+export type TimesheetCycleType = "weekly" | "biweekly";
+
+export type TimesheetSettings = {
+  id: string;
+  cycle_type: TimesheetCycleType;
+  week_starts_on: number;
+  updated_at: string;
+};
+
+export type TimesheetCycleStatus = "Open" | "Closed";
+
+export type TimesheetCycle = {
+  id: string;
+  start_date: string;
+  end_date: string;
+  label: string;
+  status: TimesheetCycleStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TimesheetEntry = {
+  id: string;
+  technician_id: string;
+  cycle_id: string;
+  work_date: string;
+  hours: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TimesheetSubmissionStatus = "Draft" | "Submitted" | "Approved" | "Rejected";
+
+export type TimesheetSubmission = {
+  id: string;
+  technician_id: string;
+  cycle_id: string;
+  status: TimesheetSubmissionStatus;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  review_notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 /** PTO / blocked schedule days for a technician. */
 export type TimeOffRequest = {
   id: string;

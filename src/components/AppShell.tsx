@@ -495,7 +495,8 @@ export function AppShell({
     profile.role === "service_manager" ||
     profile.role === "administrator" ||
     profile.role === "billing";
-  const canCollapseSidebar = profile.role === "service_manager";
+  const canCollapseSidebar =
+    profile.role === "service_manager" || profile.role === "administrator";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const refreshUnread = useCallback(async () => {
@@ -514,7 +515,7 @@ export function AppShell({
 
   useEffect(() => {
     setMounted(true);
-    if (profile.role !== "service_manager") return;
+    if (profile.role !== "service_manager" && profile.role !== "administrator") return;
     try {
       setSidebarCollapsed(localStorage.getItem(MANAGER_SIDEBAR_COLLAPSED_KEY) === "1");
     } catch {
