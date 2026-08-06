@@ -2,27 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
-import { RefreshCw, Truck } from "lucide-react";
+import { ArrowLeft, RefreshCw, Truck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import type { Profile } from "@/lib/types";
 
-const DISPATCH_STATUSES = [
-  "Not Started",
-  "En Route",
-  "Arrived",
-  "Working",
-  "Paused",
-  "Parts Ordered",
-  "Coming in Late",
-  "Not Available",
-  "Ready for Review",
-  "Done",
-] as const;
+/** Main path — tech only sees the next step after completing the current one. */
+const DISPATCH_FLOW = ["En Route", "In Progress", "Ready for Review", "Done"] as const;
 
-type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+type DispatchStatus = (typeof DISPATCH_FLOW)[number] | "Paused";
 
 type DispatchWorkOrder = {
   id: string;
@@ -32,7 +22,7 @@ type DispatchWorkOrder = {
   scheduled_start_time: string | null;
   priority: string;
   problem_description: string | null;
-  dispatch_status: DispatchStatus;
+  dispatch_status: string;
   dispatch_note: string | null;
   dispatch_updated_at: string | null;
   customers?: { name: string }[];
@@ -40,11 +30,45 @@ type DispatchWorkOrder = {
 
 type DispatchTechnician = Pick<Profile, "id" | "full_name" | "email" | "is_active">;
 
-function dispatchTone(status: DispatchStatus): "success" | "warning" | "error" | "info" | "neutral" {
-  if (status === "Done" || status === "Working" || status === "Arrived") return "success";
-  if (status === "Parts Ordered" || status === "Coming in Late" || status === "Paused") return "warning";
-  if (status === "Not Available") return "error";
-  if (status === "En Route" || status === "Ready for Review") return "info";
+function normalizeStatus(status: string): string {
+  if (status === "Working") return "In Progress";
+  return status;
+}
+
+function flowIndex(status: string): number {
+  const normalized = normalizeStatus(status);
+  if (normalized === "Paused") return DISPATCH_FLOW.indexOf("In Progress");
+  return DISPATCH_FLOW.indexOf(normalized as (typeof DISPATCH_FLOW)[number]);
+}
+
+/** Next action on the main path (or resume from Paused). */
+function getNextStatus(status: string): DispatchStatus | null {
+  const normalized = normalizeStatus(status);
+  if (normalized === "Paused") return "In Progress";
+  const index = flowIndex(normalized);
+  if (index < 0) return "En Route";
+  if (index >= DISPATCH_FLOW.length - 1) return null;
+  return DISPATCH_FLOW[index + 1];
+}
+
+/** Previous step for mis-clicks. */
+function getPreviousStatus(status: string): DispatchStatus | null {
+  const normalized = normalizeStatus(status);
+  if (normalized === "Paused") return "In Progress";
+  const index = flowIndex(normalized);
+  if (index <= 0) return null;
+  return DISPATCH_FLOW[index - 1];
+}
+
+function canPause(status: string): boolean {
+  return normalizeStatus(status) === "In Progress";
+}
+
+function dispatchTone(status: string): "success" | "warning" | "error" | "info" | "neutral" {
+  const normalized = normalizeStatus(status);
+  if (normalized === "Done" || normalized === "In Progress") return "success";
+  if (normalized === "Paused") return "warning";
+  if (normalized === "En Route" || normalized === "Ready for Review") return "info";
   return "neutral";
 }
 
@@ -65,6 +89,11 @@ function WorkOrderCard({
   onStatusChange: (status: DispatchStatus) => void;
   onSaveNote: () => void;
 }) {
+  const current = normalizeStatus(workOrder.dispatch_status);
+  const nextStatus = getNextStatus(workOrder.dispatch_status);
+  const previousStatus = getPreviousStatus(workOrder.dispatch_status);
+  const showPause = canPause(workOrder.dispatch_status);
+
   return (
     <div className="rounded-box border border-base-300 bg-base-100 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -78,38 +107,77 @@ function WorkOrderCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge label={workOrder.priority} tone={workOrder.priority === "Critical" ? "error" : "neutral"} />
-          <StatusBadge label={workOrder.dispatch_status} tone={dispatchTone(workOrder.dispatch_status)} />
+          <StatusBadge label={current} tone={dispatchTone(current)} />
         </div>
       </div>
 
       <p className="mt-3 text-sm">{workOrder.problem_description ?? "No problem description"}</p>
 
       {canUpdate ? (
-        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(12rem,16rem)_1fr_auto]">
-          <label className="form-control">
-            <span className="label-text font-medium">Status</span>
-            <select
-              className="select select-bordered mt-1 w-full"
-              value={workOrder.dispatch_status}
-              onChange={(event) => onStatusChange(event.target.value as DispatchStatus)}
+        <div className="mt-4 space-y-4">
+          <div>
+            <p className="mb-2 text-sm font-semibold">
+              {nextStatus ? "Next step" : "Job complete"}
+            </p>
+            <div className="flex flex-col gap-2">
+              {nextStatus ? (
+                <button
+                  type="button"
+                  className="btn btn-primary min-h-14 text-base"
+                  disabled={saving}
+                  onClick={() => onStatusChange(nextStatus)}
+                >
+                  {current === "Paused" ? `Resume — ${nextStatus}` : nextStatus}
+                </button>
+              ) : (
+                <p className="rounded-box bg-success/10 px-3 py-2 text-sm font-medium text-success">
+                  Marked Done. Use Go back if that was a mistake.
+                </p>
+              )}
+
+              {showPause ? (
+                <button
+                  type="button"
+                  className="btn btn-outline min-h-12"
+                  disabled={saving}
+                  onClick={() => onStatusChange("Paused")}
+                >
+                  Paused
+                </button>
+              ) : null}
+
+              {previousStatus ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost min-h-12 gap-2"
+                  disabled={saving}
+                  onClick={() => onStatusChange(previousStatus)}
+                >
+                  <ArrowLeft className="h-4 w-4" aria-hidden />
+                  Go back to {previousStatus}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="form-control min-w-0 flex-1">
+              <span className="label-text font-medium">Optional note</span>
+              <input
+                className="input input-bordered mt-1 w-full"
+                value={note}
+                onChange={(event) => onNoteChange(event.target.value)}
+                placeholder="Add a quick note"
+                disabled={saving}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-outline min-h-12 sm:min-h-10"
+              onClick={onSaveNote}
               disabled={saving}
             >
-              {DISPATCH_STATUSES.map((status) => <option key={status}>{status}</option>)}
-            </select>
-          </label>
-          <label className="form-control">
-            <span className="label-text font-medium">Work order note</span>
-            <input
-              className="input input-bordered mt-1 w-full"
-              value={note}
-              onChange={(event) => onNoteChange(event.target.value)}
-              placeholder="Add a dispatch note"
-              disabled={saving}
-            />
-          </label>
-          <div className="flex items-end">
-            <button type="button" className="btn btn-outline btn-sm" onClick={onSaveNote} disabled={saving}>
-              Save Note
+              Save note
             </button>
           </div>
         </div>
