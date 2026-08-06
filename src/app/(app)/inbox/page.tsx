@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Manager inbox — same customer_inbox_* threads as the customer portal, email-style UI.
+ * Manager inbox — same customer_inbox_* threads and customer portal layout.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Inbox, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/ui";
@@ -15,21 +15,18 @@ import type { Profile } from "@/lib/types";
 import { ConversationPanel } from "@/app/(app)/customer/inbox/ConversationPanel";
 import { ThreadList } from "@/app/(app)/customer/inbox/ThreadList";
 import {
-  formatMessageWhen,
   inboxCategoryLabel,
   normalizeInboxThread,
   type InboxMessage,
   type InboxThread,
 } from "@/app/(app)/customer/inbox/inbox-types";
-import { countUnreadStaffThreads, isThreadUnreadForStaff, markAllInboxThreadsReadByStaff, markInboxThreadReadByStaff } from "@/lib/manager-inbox";
+import { markInboxThreadReadByStaff } from "@/lib/manager-inbox";
 
 const THREAD_SELECT = `
   *,
   customers ( id, name, email ),
   work_orders ( work_order_number, work_order_type, status, scheduled_date, equipment ( name ) )
 `;
-
-type StatusFilter = "all" | "open" | "resolved";
 
 export default function ManagerInboxPage() {
   const supabase = createClient();
@@ -41,26 +38,13 @@ export default function ManagerInboxPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [markingRead, setMarkingRead] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reply, setReply] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const selectedThread = useMemo(
     () => threads.find((t) => t.id === selectedId) ?? null,
     [threads, selectedId],
   );
-
-  const visibleThreads = useMemo(() => {
-    if (statusFilter === "all") return threads;
-    return threads.filter((t) => t.status === statusFilter);
-  }, [threads, statusFilter]);
-
-  const openCount = useMemo(
-    () => threads.filter((t) => t.status === "open").length,
-    [threads],
-  );
-  const unreadCount = useMemo(() => countUnreadStaffThreads(threads), [threads]);
 
   const loadThreads = useCallback(async () => {
     const { data, error: loadError } = await supabase
@@ -158,44 +142,6 @@ export default function ManagerInboxPage() {
     })();
   }, [selectedId, loadMessages, supabase]);
 
-  async function handleMarkSelectedRead() {
-    if (!selectedThread || !isThreadUnreadForStaff(selectedThread)) return;
-    setMarkingRead(true);
-    setError(null);
-    try {
-      const readAt = await markInboxThreadReadByStaff(
-        supabase,
-        selectedThread.id,
-        selectedThread.last_message_at,
-      );
-      setThreads((prev) =>
-        prev.map((t) => (t.id === selectedThread.id ? { ...t, staff_last_read_at: readAt } : t)),
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not mark as read.");
-    }
-    setMarkingRead(false);
-  }
-
-  async function handleMarkAllRead() {
-    if (unreadCount === 0) return;
-    setMarkingRead(true);
-    setError(null);
-    try {
-      await markAllInboxThreadsReadByStaff(supabase, threads);
-      setThreads((prev) =>
-        prev.map((t) => {
-          if (t.status === "resolved" || !isThreadUnreadForStaff(t)) return t;
-          const ms = Math.max(Date.now(), new Date(t.last_message_at).getTime());
-          return { ...t, staff_last_read_at: new Date(ms).toISOString() };
-        }),
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not mark all as read.");
-    }
-    setMarkingRead(false);
-  }
-
   async function handleSendReply() {
     if (!profile || !selectedId || !reply.trim()) return;
     setBusy(true);
@@ -238,37 +184,26 @@ export default function ManagerInboxPage() {
   }
 
   if (!ready || profile?.role !== "service_manager") {
-    return <div className="p-8 text-center opacity-60">Loading…</div>;
+    return <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>;
   }
 
   const customerName = selectedThread?.customers?.name?.trim() || "Customer";
-  const customerEmail = selectedThread?.customers?.email?.trim() || null;
 
   return (
     <div>
       <PageHeader
         title="Inbox"
-        description="Email-style threads with customers — same conversations they see in their portal Inbox."
+        description="Messages with customers about service, billing, and contracts."
         actions={
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              disabled={markingRead || unreadCount === 0}
-              onClick={() => void handleMarkAllRead()}
-            >
-              {markingRead ? "Updating…" : "Mark all as read"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-outline btn-sm gap-1"
-              onClick={() => void refresh()}
-              disabled={loading}
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              Refresh
-            </button>
-          </div>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm gap-1"
+            onClick={() => void refresh()}
+            disabled={loading}
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
         }
       />
 
@@ -281,147 +216,69 @@ export default function ManagerInboxPage() {
         </div>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="stats stats-horizontal shadow">
-          <div className="stat px-4 py-3">
-            <div className="stat-title text-xs">Unread</div>
-            <div className="stat-value text-2xl">{unreadCount}</div>
-          </div>
-          <div className="stat px-4 py-3">
-            <div className="stat-title text-xs">Open threads</div>
-            <div className="stat-value text-2xl">{openCount}</div>
-          </div>
-          <div className="stat px-4 py-3">
-            <div className="stat-title text-xs">All threads</div>
-            <div className="stat-value text-2xl">{threads.length}</div>
-          </div>
-        </div>
-        <select
-          className="select select-bordered select-sm"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          aria-label="Filter threads"
-        >
-          <option value="all">All</option>
-          <option value="open">Open</option>
-          <option value="resolved">Resolved</option>
-        </select>
-      </div>
-
       {loading && threads.length === 0 ? (
-        <div className="space-y-3">
-          <div className="skeleton h-40 w-full rounded-2xl" />
-          <div className="skeleton h-64 w-full rounded-2xl" />
-        </div>
+        <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>
       ) : threads.length === 0 ? (
         <EmptyState
-          title="No customer messages yet"
-          description="When a customer starts a conversation in their portal Inbox, it will appear here so you can reply."
+          title="No messages yet"
+          description="When a customer starts a conversation in their portal Inbox, it will appear here."
         />
       ) : (
         <div className="grid gap-4 lg:grid-cols-5">
           <div className="lg:col-span-2">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <Inbox className="h-4 w-4 opacity-60" />
-              Mailbox
-            </div>
             <ThreadList
-              threads={visibleThreads}
+              threads={threads}
               selectedId={selectedId}
               onSelect={setSelectedId}
               showCustomer
               showUnread
-              emptyHint="No threads match this filter."
             />
           </div>
 
           <div className="lg:col-span-3">
             {selectedThread ? (
               <div className="space-y-3">
-                <div className="rounded-box border border-base-300 bg-base-100 px-4 py-3 shadow-sm">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <p className="text-lg font-semibold leading-snug">{selectedThread.subject}</p>
-                    {isThreadUnreadForStaff(selectedThread) ? (
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        disabled={markingRead}
-                        onClick={() => void handleMarkSelectedRead()}
-                      >
-                        {markingRead ? "Saving…" : "Mark as read"}
-                      </button>
-                    ) : (
-                      <span className="badge badge-ghost badge-sm self-center">Read</span>
-                    )}
-                  </div>
-                  <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
-                        From
-                      </dt>
-                      <dd className="font-medium">
-                        {selectedThread.customers?.id ? (
-                          <Link
-                            href={`/customers/${selectedThread.customers.id}`}
-                            className="link link-hover"
-                          >
-                            {customerName}
-                          </Link>
-                        ) : (
-                          customerName
-                        )}
-                        {customerEmail ? (
-                          <span className="mt-0.5 block text-xs opacity-60">&lt;{customerEmail}&gt;</span>
-                        ) : null}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
-                        To
-                      </dt>
-                      <dd className="font-medium">Ridley Equipment Services</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
-                        Category
-                      </dt>
-                      <dd>{inboxCategoryLabel(selectedThread.category)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
-                        Last activity
-                      </dt>
-                      <dd>{formatMessageWhen(selectedThread.last_message_at)}</dd>
-                    </div>
-                  </dl>
-                  {selectedThread.work_order_id && selectedThread.work_orders?.work_order_number ? (
-                    <p className="mt-3 text-sm">
-                      <span className="opacity-60">Related job: </span>
+                <div className="rounded-box border border-base-300 bg-base-100 px-4 py-3">
+                  <h2 className="font-semibold">{selectedThread.subject}</h2>
+                  <p className="mt-1 text-xs opacity-60">
+                    {selectedThread.customers?.id ? (
                       <Link
-                        href={`/work-orders/${selectedThread.work_order_id}`}
-                        className="link link-hover font-medium"
+                        href={`/customers/${selectedThread.customers.id}`}
+                        className="link link-hover"
                       >
-                        {selectedThread.work_orders.work_order_number}
+                        {customerName}
                       </Link>
-                    </p>
-                  ) : null}
+                    ) : (
+                      customerName
+                    )}
+                    {` · ${inboxCategoryLabel(selectedThread.category)}`}
+                    {selectedThread.work_order_id && selectedThread.work_orders?.work_order_number ? (
+                      <>
+                        {" · "}
+                        <Link
+                          href={`/work-orders/${selectedThread.work_order_id}`}
+                          className="link link-hover"
+                        >
+                          {selectedThread.work_orders.work_order_number}
+                        </Link>
+                      </>
+                    ) : null}
+                  </p>
                 </div>
-
                 <ConversationPanel
                   messages={messages}
                   reply={reply}
                   busy={busy}
                   viewerRole="staff"
-                  layout="email"
                   customerLabel={customerName}
-                  staffLabel="You (Ridley)"
+                  staffLabel="Ridley Equipment Services"
                   onReplyChange={setReply}
                   onSend={() => void handleSendReply()}
                 />
               </div>
             ) : (
               <div className="rounded-box border border-dashed border-base-300 p-10 text-center text-sm opacity-70">
-                Select a message from the mailbox to read and reply.
+                Select a conversation to read and reply.
               </div>
             )}
           </div>

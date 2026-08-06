@@ -198,6 +198,53 @@ function NavDetailsGroup({
   );
 }
 
+function InboxHeaderControl({
+  href,
+  unreadCount,
+  isGateActive,
+  blockNavigation,
+}: {
+  href: string;
+  unreadCount: number;
+  isGateActive?: boolean;
+  blockNavigation?: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  const pathname = usePathname();
+  const active = isPathActive(pathname, href);
+  const showBadge = unreadCount > 0;
+  const className = `btn btn-ghost btn-sm btn-square relative ${active ? "bg-base-200" : ""}`;
+
+  if (isGateActive && blockNavigation) {
+    return (
+      <span
+        role="link"
+        aria-disabled="true"
+        aria-label="Inbox"
+        className={`${className} pointer-events-none cursor-not-allowed opacity-50`}
+        onClick={blockNavigation}
+      >
+        <Mail className="h-4 w-4" />
+      </span>
+    );
+  }
+
+  return (
+    <Link
+      href={href}
+      className={className}
+      aria-label={showBadge ? `Inbox, ${unreadCount} unread` : "Inbox"}
+      title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
+    >
+      <Mail className="h-4 w-4" />
+      {showBadge ? (
+        <span className="badge badge-success absolute -right-1 -top-1 h-5 min-w-5 border-0 px-1 text-[10px] font-bold text-success-content">
+          {unreadCount > 9 ? "9+" : unreadCount}
+        </span>
+      ) : null}
+    </Link>
+  );
+}
+
 function CustomerInboxHeaderControl({
   customerId,
   isGateActive,
@@ -224,38 +271,13 @@ function CustomerInboxHeaderControl({
     return () => window.clearInterval(id);
   }, [refreshUnread, pathname]);
 
-  const active = isPathActive(pathname, "/customer/inbox");
-  const showBadge = unreadCount > 0;
-  const className = `btn btn-ghost btn-sm btn-square relative ${active ? "bg-base-200" : ""}`;
-
-  if (isGateActive) {
-    return (
-      <span
-        role="link"
-        aria-disabled="true"
-        aria-label="Inbox"
-        className={`${className} pointer-events-none cursor-not-allowed opacity-50`}
-        onClick={blockNavigation}
-      >
-        <Mail className="h-4 w-4" />
-      </span>
-    );
-  }
-
   return (
-    <Link
+    <InboxHeaderControl
       href="/customer/inbox"
-      className={className}
-      aria-label={showBadge ? `Inbox, ${unreadCount} unread` : "Inbox"}
-      title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
-    >
-      <Mail className="h-4 w-4" />
-      {showBadge ? (
-        <span className="badge badge-success absolute -right-1 -top-1 h-5 min-w-5 border-0 px-1 text-[10px] font-bold text-success-content">
-          {unreadCount > 9 ? "9+" : unreadCount}
-        </span>
-      ) : null}
-    </Link>
+      unreadCount={unreadCount}
+      isGateActive={isGateActive}
+      blockNavigation={blockNavigation}
+    />
   );
 }
 
@@ -323,24 +345,11 @@ export function AppShell({
       />
     ) : null;
 
-  const inboxButton = showManagerInbox ? (
-    <Link
-      href="/inbox"
-      className={`btn btn-ghost btn-sm relative gap-1 ${
-        pathname === "/inbox" || pathname.startsWith("/inbox/") ? "btn-active" : ""
-      }`}
-      aria-label={unreadInbox > 0 ? `Inbox, ${unreadInbox} unread` : "Inbox"}
-      title="Inbox"
-    >
-      <Mail className="h-4 w-4" />
-      <span className="hidden sm:inline">Inbox</span>
-      {unreadInbox > 0 ? (
-        <span className="badge badge-error badge-sm absolute -right-1 -top-1 min-w-5 justify-center px-1">
-          {unreadInbox > 99 ? "99+" : unreadInbox}
-        </span>
-      ) : null}
-    </Link>
+  const managerInboxControl = showManagerInbox ? (
+    <InboxHeaderControl href="/inbox" unreadCount={unreadInbox} />
   ) : null;
+
+  const inboxControl = customerInboxControl ?? managerInboxControl;
 
   return (
     <div className="drawer lg:drawer-open min-h-screen bg-base-200">
@@ -363,9 +372,8 @@ export function AppShell({
             </div>
           </div>
           <div className="flex items-center gap-2 md:gap-3">
-            {inboxButton}
             <div className="hidden items-center gap-3 md:flex">
-              {customerInboxControl}
+              {inboxControl}
               <div className="text-right text-sm">
                 <p className="font-medium">{profile.full_name || profile.email}</p>
                 <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
@@ -390,7 +398,7 @@ export function AppShell({
             <span className="font-medium">{profile.full_name || profile.email}</span>
             <span className="opacity-55"> · {ROLE_LABELS[profile.role]}</span>
           </div>
-          {customerInboxControl}
+          {inboxControl}
         </div>
 
         {gateActive ? (
@@ -437,14 +445,10 @@ export function AppShell({
             );
             const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
             const active = best?.href === item.href;
-            const showBadge = item.href === "/inbox" && unreadInbox > 0;
             return (
               <li key={item.href}>
                 <GatedNavLink
-                  item={{
-                    ...item,
-                    label: showBadge ? `${item.label} (${unreadInbox})` : item.label,
-                  }}
+                  item={item}
                   pathname={pathname}
                   className={
                     active

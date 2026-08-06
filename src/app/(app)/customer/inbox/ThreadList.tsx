@@ -55,34 +55,11 @@ export function ThreadList({
               onClick={() => onSelect(thread.id)}
               className={`w-full px-4 py-3 text-left transition hover:bg-base-200/60 ${
                 active ? "bg-primary/10 ring-1 ring-inset ring-primary/30" : ""
-              } ${unread ? "bg-warning/5" : ""}`}
+              }`}
             >
-              {showCustomer ? (
-                <div className="mb-0.5 flex items-start justify-between gap-2">
-                  <p className={`line-clamp-1 text-sm ${unread ? "font-bold" : "font-semibold"}`}>
-                    {fromName}
-                    {unread ? (
-                      <span className="ml-2 inline-block h-2 w-2 rounded-full bg-error align-middle" />
-                    ) : null}
-                  </p>
-                  <span className="shrink-0 text-[10px] opacity-50 tabular-nums">
-                    {formatInboxWhen(thread.last_message_at)}
-                  </span>
-                </div>
-              ) : null}
               <div className="flex items-start justify-between gap-2">
-                <p
-                  className={`line-clamp-1 text-sm ${
-                    showCustomer
-                      ? unread
-                        ? "font-semibold opacity-95"
-                        : "font-medium opacity-90"
-                      : unread
-                        ? "font-semibold"
-                        : "font-medium"
-                  }`}
-                >
-                  {!showCustomer && unread ? (
+                <p className={`line-clamp-1 text-sm ${unread ? "font-semibold" : "font-medium"}`}>
+                  {unread ? (
                     <span
                       className="mr-1.5 inline-block h-2 w-2 rounded-full bg-success align-middle"
                       aria-label="Unread"
@@ -90,13 +67,14 @@ export function ThreadList({
                   ) : null}
                   {thread.subject}
                 </p>
-                {!showCustomer ? (
-                  <span className="shrink-0 text-[10px] opacity-50 tabular-nums">
-                    {formatInboxWhen(thread.last_message_at)}
-                  </span>
-                ) : null}
+                <span className="shrink-0 text-[10px] opacity-50 tabular-nums">
+                  {formatInboxWhen(thread.last_message_at)}
+                </span>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2">
+                {showCustomer ? (
+                  <span className="text-[10px] font-medium opacity-70">{fromName}</span>
+                ) : null}
                 <span className="badge badge-ghost badge-xs">
                   {inboxCategoryLabel(thread.category)}
                 </span>
@@ -105,17 +83,9 @@ export function ThreadList({
                     {thread.work_orders.work_order_number}
                   </span>
                 ) : null}
-                {unread ? (
-                  <span
-                    className={`badge badge-xs ${showCustomer ? "badge-error" : "badge-success"}`}
-                  >
-                    Unread
-                  </span>
-                ) : null}
+                {unread ? <span className="badge badge-success badge-xs">Unread</span> : null}
                 {thread.status === "resolved" ? (
                   <span className="badge badge-success badge-xs">Resolved</span>
-                ) : showCustomer ? (
-                  <span className="badge badge-warning badge-xs">Open</span>
                 ) : null}
               </div>
             </button>
