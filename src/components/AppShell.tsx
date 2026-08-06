@@ -10,6 +10,8 @@ import {
   LogOut,
   Mail,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Search,
   Settings,
@@ -25,6 +27,7 @@ import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/
 
 const CUSTOMER_HOME = "/customer";
 const UNREAD_POLL_MS = 30_000;
+const MANAGER_SIDEBAR_COLLAPSED_KEY = "esm-manager-sidebar-collapsed";
 
 function isPathActive(pathname: string, href: string) {
   if (href === "/vendors") {
@@ -48,13 +51,12 @@ function gatedNavClassName(isBlocked: boolean, active: boolean, className?: stri
 
 function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
-  if (item.href === "/scheduling" && role === "technician") return "My Availability";
   if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
   return item.label;
 }
 
 function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
-  const label = navLabel(item, role);
+  const label = item.section ? item.label : navLabel(item, role);
   const children = item.children?.map((child) => labeledNavItem(child, role));
   if (label === item.label && !children) return item;
   return { ...item, label, ...(children ? { children } : {}) };
@@ -240,6 +242,57 @@ function NavDetailsGroup({
   );
 }
 
+function NavSection({
+  item,
+  pathname,
+  isGateActive,
+  blockNavigation,
+  unreadInbox,
+  badgeForHref,
+}: {
+  item: NavItem;
+  pathname: string;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  unreadInbox: number;
+  badgeForHref: (href: string) => number;
+}) {
+  return (
+    <div className="eq-nav-section-block">
+      <p className="eq-nav-heading">{item.label}</p>
+      {(item.children ?? []).map((child) => {
+        if (child.children?.length && !child.section) {
+          return (
+            <NavDetailsGroup
+              key={`${child.href}-${child.label}`}
+              item={child}
+              pathname={pathname}
+              isGateActive={isGateActive}
+              blockNavigation={blockNavigation}
+              badgeForHref={badgeForHref}
+            />
+          );
+        }
+        const active = isPathActive(pathname, child.href);
+        const badgeCount =
+          child.href === "/inbox" && unreadInbox > 0 ? unreadInbox : badgeForHref(child.href);
+        return (
+          <div key={`${child.href}-${child.label}`} className="eq-nav-row">
+            <GatedNavLink
+              item={child}
+              pathname={pathname}
+              className={active ? "eq-nav-item--active" : ""}
+              isGateActive={isGateActive}
+              blockNavigation={blockNavigation}
+              badgeCount={badgeCount}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function InboxHeaderControl({
   href,
   unreadCount,
@@ -326,6 +379,105 @@ function createHrefForRole(role: Profile["role"]): string {
   return "/work-orders";
 }
 
+function SidebarNavBody({
+  pathname,
+  navItems,
+  isGateActive,
+  blockNavigation,
+  unreadInbox,
+  badgeForHref,
+  profileEmail,
+}: {
+  pathname: string;
+  navItems: NavItem[];
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  unreadInbox: number;
+  badgeForHref: (href: string) => number;
+  profileEmail: string;
+}) {
+  return (
+    <>
+      <div className="eq-sidebar-brand">
+        <div className="eq-brand-mark">
+          <Image
+            src="/equipmentiq-logo.png"
+            alt="EquipmentIQ"
+            width={200}
+            height={48}
+            className="eq-brand-logo"
+            priority
+          />
+        </div>
+        <p className="eq-brand-tag">Service operations</p>
+      </div>
+
+      <div className="px-3 pb-2">
+        <DemoPersonaSwitcher currentEmail={profileEmail} variant="dark" />
+      </div>
+
+      <div className="eq-sidebar-scroll flex-1 overflow-y-auto px-2.5 pb-4 pt-1">
+        {navItems.map((item) => {
+          if (item.section && item.children?.length) {
+            return (
+              <NavSection
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                isGateActive={isGateActive}
+                blockNavigation={blockNavigation}
+                unreadInbox={unreadInbox}
+                badgeForHref={badgeForHref}
+              />
+            );
+          }
+
+          if (item.children?.length) {
+            return (
+              <NavDetailsGroup
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                isGateActive={isGateActive}
+                blockNavigation={blockNavigation}
+                badgeForHref={badgeForHref}
+              />
+            );
+          }
+
+          const matches = navItems.filter(
+            (n) =>
+              !n.section &&
+              !n.children &&
+              (pathname === n.href || pathname.startsWith(`${n.href}/`)),
+          );
+          const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
+          const active = best?.href === item.href;
+          const badgeCount =
+            item.href === "/inbox" && unreadInbox > 0 ? unreadInbox : badgeForHref(item.href);
+          return (
+            <div key={item.href} className="eq-nav-row">
+              <GatedNavLink
+                item={item}
+                pathname={pathname}
+                className={active ? "eq-nav-item--active" : ""}
+                isGateActive={isGateActive}
+                blockNavigation={blockNavigation}
+                badgeCount={badgeCount}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="eq-sidebar-foot">
+        <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
+        <p className="mt-0.5 text-[10px] text-white/30">Field service · Billing · Operations</p>
+      </div>
+    </>
+  );
+}
+
 export function AppShell({
   profile,
   children,
@@ -342,6 +494,8 @@ export function AppShell({
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
   const isCustomer = profile.role === "customer";
   const showManagerInbox = profile.role === "service_manager";
+  const canCollapseSidebar = profile.role === "service_manager";
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const refreshUnread = useCallback(async () => {
     if (profile.role !== "service_manager") {
@@ -359,7 +513,22 @@ export function AppShell({
 
   useEffect(() => {
     setMounted(true);
-  }, []);
+    if (profile.role !== "service_manager") return;
+    try {
+      setSidebarCollapsed(localStorage.getItem(MANAGER_SIDEBAR_COLLAPSED_KEY) === "1");
+    } catch {
+      /* ignore */
+    }
+  }, [profile.role]);
+
+  useEffect(() => {
+    if (!canCollapseSidebar) return;
+    try {
+      localStorage.setItem(MANAGER_SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [canCollapseSidebar, sidebarCollapsed]);
 
   useEffect(() => {
     if (!showManagerInbox) return;
@@ -374,7 +543,7 @@ export function AppShell({
   }, [showManagerInbox, refreshUnread, pathname]);
 
   useEffect(() => {
-    const canVendors = ["administrator", "service_manager"].includes(profile.role);
+    const canVendors = ["administrator", "service_manager", "billing"].includes(profile.role);
     if (!canVendors) {
       setPendingByHref({});
       return;
@@ -410,6 +579,10 @@ export function AppShell({
     return pendingByHref[href] ?? 0;
   }
 
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((v) => !v);
+  }
+
   async function logout() {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -438,166 +611,285 @@ export function AppShell({
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
   const createHref = createHrefForRole(profile.role);
+  const desktopSidebarHidden = canCollapseSidebar && sidebarCollapsed;
+
+  const sidebarBodyProps = {
+    pathname,
+    navItems,
+    isGateActive: gateActive,
+    blockNavigation,
+    unreadInbox,
+    badgeForHref,
+    profileEmail: profile.email,
+  };
 
   return (
-    <div className="drawer lg:drawer-open eq-shell min-h-screen">
-      <input id="app-drawer" type="checkbox" className="drawer-toggle" />
-      <div className="drawer-content flex min-h-screen flex-col">
-        <header className="eq-topbar">
-          <div className="flex flex-none items-center gap-2 lg:hidden">
-            <label htmlFor="app-drawer" className="eq-top-icon" aria-label="Open menu">
-              <Menu className="h-5 w-5" strokeWidth={1.75} />
-            </label>
-            <div className="relative h-8 w-[132px] sm:hidden">
-              <Image
-                src="/equipmentiq-logo.png"
-                alt="EquipmentIQ"
-                fill
-                className="object-contain object-left"
-                sizes="132px"
-                priority
-              />
-            </div>
-          </div>
-
-          <div className="eq-search min-w-0 flex-1">
-            <Search className="eq-search-icon" strokeWidth={1.75} />
-            <input
-              type="search"
-              className="eq-search-input"
-              placeholder="Search customers, invoices, work orders…"
-              aria-label="Search"
-              readOnly
-              onFocus={(e) => e.currentTarget.blur()}
-              title="Search (coming soon)"
-            />
-          </div>
-
-          <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-            {!gateActive ? (
-              <Link href={createHref} className="eq-create-btn">
-                <Plus className="h-4 w-4" strokeWidth={2.25} />
-                <span className="hidden sm:inline">New</span>
-              </Link>
-            ) : null}
-
-            <div className="eq-top-divider hidden sm:block" />
-
-            {inboxControl}
-            <button type="button" className="eq-top-icon" aria-label="Notifications" title="Notifications">
-              <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            </button>
-            <button type="button" className="eq-top-icon hidden sm:inline-flex" aria-label="Help" title="Help">
-              <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            </button>
-            <Link
-              href="/settings"
-              className="eq-top-icon hidden sm:inline-flex"
-              aria-label="Settings"
-              title="Settings"
-            >
-              <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            </Link>
-
-            <div className="eq-user-menu">
-              <span className="eq-avatar" aria-hidden>
-                {initials || "?"}
-              </span>
-              <div className="hidden min-w-0 text-left leading-tight md:block">
-                <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
-                  {profile.full_name || profile.email}
-                </p>
-                <p className="truncate text-[11px] text-[#5c6b7a]">{ROLE_LABELS[profile.role]}</p>
+    <div
+      className={`eq-shell min-h-screen ${
+        canCollapseSidebar ? "lg:flex" : "drawer lg:drawer-open"
+      }`}
+    >
+      {canCollapseSidebar ? (
+        <>
+          {!desktopSidebarHidden ? (
+            <aside className="eq-sidebar relative z-10 hidden w-[15.75rem] shrink-0 flex-col lg:flex">
+              <div className="flex justify-end px-2 pt-2">
+                <button
+                  type="button"
+                  className="eq-top-icon"
+                  onClick={toggleSidebarCollapsed}
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                >
+                  <PanelLeftClose className="h-4 w-4" strokeWidth={1.75} />
+                </button>
               </div>
-            </div>
+              <SidebarNavBody {...sidebarBodyProps} />
+            </aside>
+          ) : null}
 
-            <button type="button" className="eq-signout" onClick={logout} title="Sign out">
-              <LogOut className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden lg:inline">Sign out</span>
-            </button>
-          </div>
-        </header>
+          <div className="drawer min-h-screen min-w-0 flex-1">
+            <input id="app-drawer" type="checkbox" className="drawer-toggle" />
+            <div className="drawer-content flex min-h-screen flex-col">
+              <header className="eq-topbar">
+                <div className="flex flex-none items-center gap-2">
+                  <label
+                    htmlFor="app-drawer"
+                    className="eq-top-icon lg:hidden"
+                    aria-label="Open menu"
+                  >
+                    <Menu className="h-5 w-5" strokeWidth={1.75} />
+                  </label>
+                  {desktopSidebarHidden ? (
+                    <button
+                      type="button"
+                      className="eq-top-icon hidden lg:inline-flex"
+                      onClick={toggleSidebarCollapsed}
+                      aria-label="Expand sidebar"
+                      title="Show menu"
+                    >
+                      <PanelLeftOpen className="h-4 w-4" strokeWidth={1.75} />
+                    </button>
+                  ) : null}
+                  <div className="relative h-8 w-[132px] sm:hidden">
+                    <Image
+                      src="/equipmentiq-logo.png"
+                      alt="EquipmentIQ"
+                      fill
+                      className="object-contain object-left"
+                      sizes="132px"
+                      priority
+                    />
+                  </div>
+                </div>
 
-        {gateActive ? (
-          <div
-            role="status"
-            className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
-          >
-            Submit your service rating on Home to continue using the portal.
-          </div>
-        ) : null}
-
-        <main className="eq-main flex-1">
-          <div className="eq-page">{children}</div>
-        </main>
-      </div>
-
-      <aside className="drawer-side z-40">
-        <label
-          htmlFor="app-drawer"
-          className="drawer-overlay lg:pointer-events-none"
-          aria-label="Close menu"
-        />
-        <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
-          <div className="eq-sidebar-brand">
-            <div className="eq-brand-mark">
-              <Image
-                src="/equipmentiq-logo.png"
-                alt="EquipmentIQ"
-                width={200}
-                height={48}
-                className="eq-brand-logo"
-                priority
-              />
-            </div>
-            <p className="eq-brand-tag">Service operations</p>
-          </div>
-
-          <div className="px-3 pb-2">
-            <DemoPersonaSwitcher currentEmail={profile.email} variant="dark" />
-          </div>
-
-          <div className="eq-sidebar-scroll flex-1 overflow-y-auto px-2.5 pb-4 pt-1">
-            <p className="eq-nav-heading">Menu</p>
-            {navItems.map((item) => {
-              if (item.children?.length) {
-                return (
-                  <NavDetailsGroup
-                    key={item.href}
-                    item={item}
-                    pathname={pathname}
-                    isGateActive={gateActive}
-                    blockNavigation={blockNavigation}
-                    badgeForHref={badgeForHref}
-                  />
-                );
-              }
-
-              const matches = navItems.filter(
-                (n) => !n.children && (pathname === n.href || pathname.startsWith(`${n.href}/`)),
-              );
-              const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
-              const active = best?.href === item.href;
-              return (
-                <div key={item.href} className="eq-nav-row">
-                  <GatedNavLink
-                    item={item}
-                    pathname={pathname}
-                    className={active ? "eq-nav-item--active" : ""}
-                    isGateActive={gateActive}
-                    blockNavigation={blockNavigation}
+                <div className="eq-search min-w-0 flex-1">
+                  <Search className="eq-search-icon" strokeWidth={1.75} />
+                  <input
+                    type="search"
+                    className="eq-search-input"
+                    placeholder="Search customers, invoices, work orders…"
+                    aria-label="Search"
+                    readOnly
+                    onFocus={(e) => e.currentTarget.blur()}
+                    title="Search (coming soon)"
                   />
                 </div>
-              );
-            })}
+
+                <div className="flex flex-none items-center gap-1 sm:gap-1.5">
+                  {!gateActive ? (
+                    <Link href={createHref} className="eq-create-btn">
+                      <Plus className="h-4 w-4" strokeWidth={2.25} />
+                      <span className="hidden sm:inline">New</span>
+                    </Link>
+                  ) : null}
+
+                  <div className="eq-top-divider hidden sm:block" />
+
+                  {inboxControl}
+                  <button
+                    type="button"
+                    className="eq-top-icon"
+                    aria-label="Notifications"
+                    title="Notifications"
+                  >
+                    <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    className="eq-top-icon hidden sm:inline-flex"
+                    aria-label="Help"
+                    title="Help"
+                  >
+                    <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </button>
+                  <Link
+                    href="/settings"
+                    className="eq-top-icon hidden sm:inline-flex"
+                    aria-label="Settings"
+                    title="Settings"
+                  >
+                    <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </Link>
+
+                  <div className="eq-user-menu">
+                    <span className="eq-avatar" aria-hidden>
+                      {initials || "?"}
+                    </span>
+                    <div className="hidden min-w-0 text-left leading-tight md:block">
+                      <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
+                        {profile.full_name || profile.email}
+                      </p>
+                      <p className="truncate text-[11px] text-[#5c6b7a]">
+                        {ROLE_LABELS[profile.role]}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button type="button" className="eq-signout" onClick={logout} title="Sign out">
+                    <LogOut className="h-4 w-4" strokeWidth={1.75} />
+                    <span className="hidden lg:inline">Sign out</span>
+                  </button>
+                </div>
+              </header>
+
+              {gateActive ? (
+                <div
+                  role="status"
+                  className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+                >
+                  Submit your service rating on Home to continue using the portal.
+                </div>
+              ) : null}
+
+              <main className="eq-main flex-1">
+                <div className="eq-page">{children}</div>
+              </main>
+            </div>
+
+            <aside className="drawer-side z-40 lg:hidden">
+              <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
+              <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+                <SidebarNavBody {...sidebarBodyProps} />
+              </nav>
+            </aside>
+          </div>
+        </>
+      ) : (
+        <>
+          <input id="app-drawer" type="checkbox" className="drawer-toggle" />
+          <div className="drawer-content flex min-h-screen flex-col">
+            <header className="eq-topbar">
+              <div className="flex flex-none items-center gap-2 lg:hidden">
+                <label htmlFor="app-drawer" className="eq-top-icon" aria-label="Open menu">
+                  <Menu className="h-5 w-5" strokeWidth={1.75} />
+                </label>
+                <div className="relative h-8 w-[132px] sm:hidden">
+                  <Image
+                    src="/equipmentiq-logo.png"
+                    alt="EquipmentIQ"
+                    fill
+                    className="object-contain object-left"
+                    sizes="132px"
+                    priority
+                  />
+                </div>
+              </div>
+
+              <div className="eq-search min-w-0 flex-1">
+                <Search className="eq-search-icon" strokeWidth={1.75} />
+                <input
+                  type="search"
+                  className="eq-search-input"
+                  placeholder="Search customers, invoices, work orders…"
+                  aria-label="Search"
+                  readOnly
+                  onFocus={(e) => e.currentTarget.blur()}
+                  title="Search (coming soon)"
+                />
+              </div>
+
+              <div className="flex flex-none items-center gap-1 sm:gap-1.5">
+                {!gateActive ? (
+                  <Link href={createHref} className="eq-create-btn">
+                    <Plus className="h-4 w-4" strokeWidth={2.25} />
+                    <span className="hidden sm:inline">New</span>
+                  </Link>
+                ) : null}
+
+                <div className="eq-top-divider hidden sm:block" />
+
+                {inboxControl}
+                <button
+                  type="button"
+                  className="eq-top-icon"
+                  aria-label="Notifications"
+                  title="Notifications"
+                >
+                  <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+                <button
+                  type="button"
+                  className="eq-top-icon hidden sm:inline-flex"
+                  aria-label="Help"
+                  title="Help"
+                >
+                  <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+                <Link
+                  href="/settings"
+                  className="eq-top-icon hidden sm:inline-flex"
+                  aria-label="Settings"
+                  title="Settings"
+                >
+                  <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </Link>
+
+                <div className="eq-user-menu">
+                  <span className="eq-avatar" aria-hidden>
+                    {initials || "?"}
+                  </span>
+                  <div className="hidden min-w-0 text-left leading-tight md:block">
+                    <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
+                      {profile.full_name || profile.email}
+                    </p>
+                    <p className="truncate text-[11px] text-[#5c6b7a]">{ROLE_LABELS[profile.role]}</p>
+                  </div>
+                </div>
+
+                <button type="button" className="eq-signout" onClick={logout} title="Sign out">
+                  <LogOut className="h-4 w-4" strokeWidth={1.75} />
+                  <span className="hidden lg:inline">Sign out</span>
+                </button>
+              </div>
+            </header>
+
+            {gateActive ? (
+              <div
+                role="status"
+                className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+              >
+                Submit your service rating on Home to continue using the portal.
+              </div>
+            ) : null}
+
+            <main className="eq-main flex-1">
+              <div className="eq-page">{children}</div>
+            </main>
           </div>
 
-          <div className="eq-sidebar-foot">
-            <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
-            <p className="mt-0.5 text-[10px] text-white/30">Field service · Billing · Operations</p>
-          </div>
-        </nav>
-      </aside>
+          <aside className="drawer-side z-40">
+            <label
+              htmlFor="app-drawer"
+              className="drawer-overlay lg:pointer-events-none"
+              aria-label="Close menu"
+            />
+            <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+              <SidebarNavBody {...sidebarBodyProps} />
+            </nav>
+          </aside>
+        </>
+      )}
     </div>
   );
 }
