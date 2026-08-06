@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   addDays,
   addMonths,
@@ -177,6 +178,7 @@ function ScheduleLegend({ sticky }: { sticky?: boolean }) {
 
 export default function TechnicianSchedulePage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
   const dayCalendarRef = useRef<HTMLDivElement>(null);
   const timelineDropRef = useRef<HTMLDivElement>(null);
 
@@ -250,6 +252,34 @@ export default function TechnicianSchedulePage() {
     }
     setPrefsHydrated(true);
   }, [isManager]);
+
+  /** Deep-link from Dashboard daily schedule: /technician?day=YYYY-MM-DD&wo=… */
+  useEffect(() => {
+    const dayParam = searchParams.get("day");
+    const woParam = searchParams.get("wo");
+    if (dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam)) {
+      try {
+        const day = startOfDay(parseISO(dayParam));
+        if (!Number.isNaN(day.getTime())) {
+          setSelectedDay(day);
+          setMonthCursor(startOfMonth(day));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (woParam) {
+      setSelectedId(woParam);
+    }
+    if (!dayParam && !woParam) return;
+    const t = window.setTimeout(() => {
+      if (dayParam || woParam) {
+        dayCalendarRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        dayCalendarRef.current?.focus({ preventScroll: true });
+      }
+    }, 160);
+    return () => window.clearTimeout(t);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!prefsHydrated) return;
@@ -2070,6 +2100,7 @@ export default function TechnicianSchedulePage() {
       <div className="grid gap-4 xl:grid-cols-2">
         {/* Day calendar — first on mobile */}
         <section
+          id="day-calendar"
           ref={dayCalendarRef}
           tabIndex={0}
           onKeyDown={handleDayKeyDown}

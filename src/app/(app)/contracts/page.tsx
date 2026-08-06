@@ -72,6 +72,7 @@ export default function ContractsPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const statusFromUrl = searchParams.get("status") ?? "";
+  const typeFromUrl = searchParams.get("type") ?? "";
   const [profile, setProfile] = useState<Profile | null>(null);
   const [contracts, setContracts] = useState<ContractRow[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -84,7 +85,7 @@ export default function ContractsPage() {
   const [filters, setFilters] = useState({
     name: "",
     customer: "",
-    type: "",
+    type: typeFromUrl,
     price: "",
     status: statusFromUrl,
     end: "",
@@ -110,8 +111,8 @@ export default function ContractsPage() {
   }, []);
 
   useEffect(() => {
-    setFilters((prev) => ({ ...prev, status: statusFromUrl }));
-  }, [statusFromUrl]);
+    setFilters((prev) => ({ ...prev, status: statusFromUrl, type: typeFromUrl }));
+  }, [statusFromUrl, typeFromUrl]);
 
   async function load() {
     const [{ data: sc }, { data: cust }, { data: { user } }] = await Promise.all([
