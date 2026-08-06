@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
+import { formatMonthlyPremium } from "@/lib/contract-pricing";
 import {
   buildWorkOrderPreview,
   daysPastDue,
@@ -26,7 +27,14 @@ import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
 import { loadInvoiceBatchMap, type BatchLookup } from "@/lib/batches";
-import type { Invoice, Payment, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
+import type { Invoice, Payment, Profile, ServiceContract, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
+import {
+  coverageCapsFromContract,
+  isTmBillingEligible,
+  pricingSummaryFromContract,
+  sameBreakdownFeeWaived,
+  suggestedContractServiceFee,
+} from "@/lib/contract-pricing";
 
 type InvoiceDetail = Invoice & {
   assigned_to?: string | null;
@@ -63,6 +71,11 @@ export default function InvoiceDetailPage() {
   const [notes, setNotes] = useState("");
   const [addKind, setAddKind] = useState<EditableInvoiceLine["kind"]>("additional");
   const [invoiceBatch, setInvoiceBatch] = useState<BatchLookup | null>(null);
+  const [pricingBanner, setPricingBanner] = useState<{
+    kind: "tm" | "contract" | "over_cap";
+    message: string;
+    suggestFee?: number;
+  } | null>(null);
 
   async function load() {
     const [{ data }, { data: pay }, { data: settings }, { data: members }, batchRes] = await Promise.all([
@@ -175,6 +188,147 @@ export default function InvoiceDetailPage() {
     if (isUnsentInvoice(invoice.status)) {
       setEditLines(invoiceToEditableLines(invoice));
     }
+
+    await loadPricingBanner(invoice, detailLines);
+  }
+
+  async function loadPricingBanner(invoice: InvoiceDetail, detailLines: BillableLine[]) {
+    if (!invoice.work_order_id || !invoice.customer_id) {
+      setPricingBanner(null);
+      return;
+    }
+
+    const [{ data: wo }, { data: contracts }] = await Promise.all([
+      supabase
+        .from("work_orders")
+        .select(
+          "id, contract_id, outside_contract, equipment_id, problem_description, completion_date, created_at",
+        )
+        .eq("id", invoice.work_order_id)
+        .maybeSingle(),
+      supabase
+        .from("service_contracts")
+        .select("*")
+        .eq("customer_id", invoice.customer_id),
+    ]);
+
+    const workOrder = wo as Pick<
+      WorkOrder,
+      | "contract_id"
+      | "outside_contract"
+      | "equipment_id"
+      | "problem_description"
+      | "completion_date"
+      | "created_at"
+    > | null;
+
+    const activeContracts = ((contracts as ServiceContract[]) ?? []).filter((c) =>
+      /active|renewed/i.test(c.status),
+    );
+    const onContractWorkOrder = Boolean(workOrder?.contract_id) && !workOrder?.outside_contract;
+    const tmPath = isTmBillingEligible({
+      outsideContract: workOrder?.outside_contract,
+      hasActiveContract: onContractWorkOrder,
+    });
+
+    if (tmPath) {
+      setPricingBanner({
+        kind: "tm",
+        message:
+          "Time & materials (non-contract) — full labor + parts + tax. Customer may save with a Gold, Silver, or Bronze plan.",
+      });
+      return;
+    }
+
+    const contract =
+      activeContracts.find((c) => c.id === workOrder?.contract_id) ?? activeContracts[0];
+    if (!contract) {
+      setPricingBanner(null);
+      return;
+    }
+
+    let priorRows: Pick<
+      WorkOrder,
+      "equipment_id" | "problem_description" | "completion_date" | "created_at"
+    >[] = [];
+    if (workOrder?.equipment_id) {
+      const { data: prior } = await supabase
+        .from("work_orders")
+        .select("equipment_id, problem_description, completion_date, created_at")
+        .eq("customer_id", invoice.customer_id)
+        .eq("equipment_id", workOrder.equipment_id)
+        .neq("id", invoice.work_order_id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      priorRows = (prior as typeof priorRows) ?? [];
+    }
+
+    const waived = workOrder
+      ? sameBreakdownFeeWaived(
+          {
+            equipmentId: workOrder.equipment_id,
+            problemDescription: workOrder.problem_description,
+            completionDate: workOrder.completion_date,
+            createdAt: workOrder.created_at,
+          },
+          priorRows.map((row) => ({
+            equipmentId: row.equipment_id,
+            problemDescription: row.problem_description,
+            completionDate: row.completion_date,
+            createdAt: row.created_at,
+          })),
+        )
+      : false;
+
+    const fee = suggestedContractServiceFee(contract, waived);
+    const summary = pricingSummaryFromContract(contract);
+    const caps = coverageCapsFromContract(contract);
+    const laborParts =
+      detailLines
+        .filter((l) => l.kind === "labor" || l.kind === "parts")
+        .reduce((s, l) => s + Math.max(0, Number(l.amount)), 0) ||
+      Number(invoice.labor_charges) + Number(invoice.parts_charges);
+
+    let message = `Contract pricing — ${formatMonthlyPremium(summary.monthlyPremium)} · $${summary.serviceFeePerVisit}/visit`;
+    if (waived) {
+      message += " · Service fee waived (same breakdown within 30 days)";
+    } else if (fee > 0) {
+      message += ` · Suggested service fee: ${formatMoney(fee)}`;
+    }
+
+    if (caps.partsAllowance > 0 && laborParts > caps.partsAllowance) {
+      setPricingBanner({
+        kind: "over_cap",
+        message: `${message}. May exceed annual parts allowance (${formatMoney(caps.partsAllowance)}) — ${contract.approval_requirements ?? "manager approval required"}.`,
+        suggestFee: fee,
+      });
+      return;
+    }
+
+    setPricingBanner({
+      kind: "contract",
+      message,
+      suggestFee: fee > 0 ? fee : undefined,
+    });
+  }
+
+  function applySuggestedServiceFee() {
+    if (!pricingBanner?.suggestFee || pricingBanner.suggestFee <= 0) return;
+    const hasFee = editLines.some(
+      (l) => l.kind === "additional" && /service fee/i.test(l.description),
+    );
+    if (hasFee) return;
+    setEditLines((rows) => [
+      ...rows,
+      {
+        ...newEditableLine("additional"),
+        description: "Contract service fee — per service visit",
+        quantity: "1",
+        unitPrice: String(pricingBanner.suggestFee),
+        amount: String(pricingBanner.suggestFee),
+      },
+    ]);
+    setDirty(true);
   }
 
   useEffect(() => {
@@ -567,6 +721,27 @@ export default function InvoiceDetailPage() {
                 </>
               ) : null}
             </p>
+          </div>
+        </div>
+      ) : null}
+
+      {pricingBanner ? (
+        <div
+          className={`alert mb-4 text-sm ${
+            pricingBanner.kind === "tm"
+              ? "alert-info"
+              : pricingBanner.kind === "over_cap"
+                ? "alert-warning"
+                : "alert-success"
+          }`}
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p>{pricingBanner.message}</p>
+            {canEdit && pricingBanner.suggestFee && pricingBanner.suggestFee > 0 ? (
+              <button type="button" className="btn btn-sm btn-primary" onClick={applySuggestedServiceFee}>
+                Add {formatMoney(pricingBanner.suggestFee)} service fee
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -208,8 +208,8 @@ export default function CustomerContractDetailPage() {
         </dl>
       </SectionCard>
 
-      <SectionCard title="Your coverage">
-        <ContractCoveragePanel contract={contract} compact />
+      <SectionCard title="Coverage & pricing">
+        <ContractCoveragePanel contract={contract} />
       </SectionCard>
 
       <SectionCard title="Covered equipment">
@@ -227,27 +227,6 @@ export default function CustomerContractDetailPage() {
             ))}
           </ul>
         )}
-      </SectionCard>
-
-      <SectionCard title="Billing">
-        <dl className="grid gap-2 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="opacity-70">Billing method</dt>
-            <dd className="font-medium">{contract.billing_method}</dd>
-          </div>
-          {contract.payment_terms ? (
-            <div>
-              <dt className="opacity-70">Payment terms</dt>
-              <dd className="font-medium">{contract.payment_terms}</dd>
-            </div>
-          ) : null}
-          {contract.contract_price > 0 ? (
-            <div>
-              <dt className="opacity-70">Contract price</dt>
-              <dd className="font-medium">{formatMoney(contract.contract_price)}</dd>
-            </div>
-          ) : null}
-        </dl>
       </SectionCard>
 
       {(contract.warranty_terms ||

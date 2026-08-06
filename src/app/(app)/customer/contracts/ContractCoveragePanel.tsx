@@ -1,4 +1,4 @@
-import { formatMoney } from "@/lib/calculations";
+import { ContractPricingSummary } from "@/components/ContractPricingSummary";
 import type { CustomerContract } from "@/lib/contracts";
 
 type Props = {
@@ -17,27 +17,16 @@ function DetailRow({ label, value }: { label: string; value: string | number | n
 }
 
 export function ContractCoveragePanel({ contract, compact = false }: Props) {
-  const partsAllowance =
-    contract.included_replacement_parts > 0
-      ? formatMoney(contract.included_replacement_parts)
-      : null;
-
   return (
-    <dl className={`grid gap-x-4 gap-y-2 ${compact ? "text-sm sm:grid-cols-2" : "sm:grid-cols-2"}`}>
-      <DetailRow label="Included visits" value={contract.included_service_visits || null} />
-      <DetailRow label="Visit frequency" value={contract.service_frequency} />
-      <DetailRow label="Included labor hours" value={contract.included_labor_hours || null} />
-      <DetailRow label="Parts allowance" value={partsAllowance} />
-      <DetailRow label="Emergency response" value={contract.emergency_response_commitment} />
+    <div className="space-y-4">
+      <ContractPricingSummary variant="contract" contract={contract} compact={compact} />
       {!compact ? (
-        <>
-          <DetailRow label="Billing method" value={contract.billing_method} />
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+          <DetailRow label="Visit frequency" value={contract.service_frequency} />
+          <DetailRow label="Emergency response" value={contract.emergency_response_commitment} />
           <DetailRow label="Payment terms" value={contract.payment_terms} />
-          {contract.contract_price > 0 ? (
-            <DetailRow label="Contract price" value={formatMoney(contract.contract_price)} />
-          ) : null}
-        </>
+        </dl>
       ) : null}
-    </dl>
+    </div>
   );
 }

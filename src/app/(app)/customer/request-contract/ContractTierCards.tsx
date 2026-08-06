@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Columns2 } from "lucide-react";
 import {
   getContractTier,
@@ -8,7 +8,15 @@ import {
   tierBadgeClass,
   type ContractTierId,
 } from "@/lib/contracts";
-import { listActivePacks, loadCatalog, type IndustryPack } from "@/lib/contract-plans";
+import { formatMoney } from "@/lib/calculations";
+import {
+  listActivePacks,
+  loadCatalog,
+  midBandMidpointAssetValue,
+  resolvePlan,
+  type IndustryPack,
+} from "@/lib/contract-plans";
+import { premiumForFeeOption } from "@/lib/contract-pricing";
 import { ContractTierCompare } from "./ContractTierCompare";
 
 type Props = {
@@ -48,7 +56,10 @@ export function ContractTierCards({
   const activePack = packs.find((p) => p.id === selectedPackId) ?? packs[0];
   const activeTier = getContractTier(selectedTier, selectedPackId);
   const tiers = listContractTiersForUi(selectedPackId);
-  const selectedTierDetails = tiers.find((t) => t.id === selectedTier) ?? tiers[0];
+  const assetValue = useMemo(() => {
+    if (!activePack) return 100_000;
+    return midBandMidpointAssetValue(activePack);
+  }, [activePack]);
 
   if (collapsed) {
     return (
@@ -73,55 +84,90 @@ export function ContractTierCards({
         <div>
           <p className="mb-1 text-sm font-medium">What kind of coverage do you need?</p>
           <p className="text-sm opacity-70">
-            Pick an industry and coverage level from the menus. Details update for your selection.
+            Choose your industry, then pick Gold, Silver, or Bronze. All three plans are shown below.
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="form-control w-full">
-            <span className="label-text text-sm font-medium">Industry</span>
-            <select
-              className="select select-bordered w-full"
-              value={selectedPackId}
-              onChange={(e) => onSelectPack(e.target.value)}
-            >
-              {packs.map((pack) => (
-                <option key={pack.id} value={pack.id}>
-                  {pack.name}
-                </option>
-              ))}
-            </select>
-            {activePack ? (
-              <span className="label-text-alt mt-1 opacity-70">{activePack.description}</span>
-            ) : null}
-          </label>
+        <label className="form-control w-full max-w-md">
+          <span className="label-text text-sm font-medium">Industry</span>
+          <select
+            className="select select-bordered w-full"
+            value={selectedPackId}
+            onChange={(e) => onSelectPack(e.target.value)}
+          >
+            {packs.map((pack) => (
+              <option key={pack.id} value={pack.id}>
+                {pack.name}
+              </option>
+            ))}
+          </select>
+          {activePack ? (
+            <span className="label-text-alt mt-1 opacity-70">{activePack.description}</span>
+          ) : null}
+        </label>
+      </div>
 
-          <label className="form-control w-full">
-            <span className="label-text text-sm font-medium">Coverage level</span>
-            <select
-              className="select select-bordered w-full"
-              value={selectedTier}
-              onChange={(e) => onSelectTier(e.target.value as ContractTierId)}
-            >
-              {tiers.map((tier) => (
-                <option key={tier.id} value={tier.id}>
-                  {tier.name}
-                  {recommendedTier === tier.id ? " (recommended)" : ""}
-                  {tier.recommended && recommendedTier !== tier.id ? " (popular)" : ""}
-                </option>
-              ))}
-            </select>
-            {selectedTierDetails ? (
-              <span className="label-text-alt mt-1 opacity-70">{selectedTierDetails.tagline}</span>
-            ) : null}
-          </label>
-        </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        {tiers.map((tier) => {
+          const resolved = resolvePlan(selectedPackId, tier.id, assetValue, loadCatalog());
+          const monthly125 = resolved
+            ? premiumForFeeOption(resolved.thresholds, 125)
+            : 0;
+          const monthly100 = resolved
+            ? premiumForFeeOption(resolved.thresholds, 100)
+            : 0;
+          const selected = selectedTier === tier.id;
 
+          return (
+            <button
+              key={tier.id}
+              type="button"
+              className={`card bg-base-100 text-left shadow transition hover:shadow-md ${
+                selected ? "ring-2 ring-primary" : "ring-1 ring-base-300"
+              } ${tier.id === "gold" ? "border-t-4 border-warning" : ""}`}
+              onClick={() => onSelectTier(tier.id)}
+              aria-pressed={selected}
+            >
+              <div className="card-body gap-3 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`badge badge-sm ${TIER_BADGE[tier.id]}`}>{tier.name}</span>
+                  {recommendedTier === tier.id ? (
+                    <span className="badge badge-primary badge-sm">Recommended</span>
+                  ) : null}
+                  {tier.recommended && recommendedTier !== tier.id ? (
+                    <span className="badge badge-outline badge-sm">Popular</span>
+                  ) : null}
+                </div>
+                <h3 className="font-bold leading-snug">{tier.tagline}</h3>
+                {monthly125 > 0 ? (
+                  <p className="text-sm">
+                    <span className="font-semibold tabular-nums">{formatMoney(monthly125)}/mo</span>
+                    <span className="opacity-70"> @ $125/visit</span>
+                    <span className="block text-xs opacity-60">
+                      or {formatMoney(monthly100)}/mo @ $100/visit
+                    </span>
+                  </p>
+                ) : null}
+                <ul className="space-y-1 text-sm opacity-80">
+                  {tier.coverages.slice(0, 6).map((c) => (
+                    <li key={c}>• {c}</li>
+                  ))}
+                </ul>
+                {selected ? (
+                  <span className="text-xs font-medium text-primary">Selected</span>
+                ) : (
+                  <span className="text-xs opacity-60">Select {tier.name}</span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
-          className={`btn btn-lg w-full gap-2 sm:w-auto ${
-            showCompare ? "btn-primary" : "btn-secondary"
-          }`}
+          className={`btn gap-2 ${showCompare ? "btn-primary" : "btn-secondary"}`}
           onClick={() => setShowCompare((v) => !v)}
           aria-expanded={showCompare}
         >
@@ -136,34 +182,6 @@ export function ContractTierCards({
             Side-by-side for {activePack?.name ?? "this industry"}
           </p>
           <ContractTierCompare recommendedTier={recommendedTier} packId={selectedPackId} />
-        </div>
-      ) : null}
-
-      {selectedTierDetails ? (
-        <div
-          className={`card bg-base-100 shadow ring-1 ring-base-300 ${
-            selectedTierDetails.id === "gold" ? "border-t-4 border-warning" : ""
-          }`}
-        >
-          <div className="card-body gap-3 p-5">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={`badge badge-sm ${TIER_BADGE[selectedTierDetails.id]}`}>
-                {selectedTierDetails.name}
-              </span>
-              {activePack ? (
-                <span className="badge badge-sm badge-outline">{activePack.name}</span>
-              ) : null}
-              {recommendedTier === selectedTierDetails.id ? (
-                <span className="badge badge-primary badge-sm">Recommended</span>
-              ) : null}
-            </div>
-            <h3 className="font-bold">{selectedTierDetails.tagline}</h3>
-            <ul className="space-y-1 text-sm opacity-80">
-              {selectedTierDetails.coverages.map((c) => (
-                <li key={c}>• {c}</li>
-              ))}
-            </ul>
-          </div>
         </div>
       ) : null}
 

@@ -511,7 +511,7 @@ export default function ContractsPage() {
                   <option value="unlabeled">Unlabeled (no plan tag)</option>
                   {planPacks.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} — Gold Mid from {formatMoney(packGoldMidPrice(p))}/yr
+                      {p.name} — Gold Mid from {formatMoney(Math.round(packGoldMidPrice(p) / 12))}/mo
                     </option>
                   ))}
                 </select>
