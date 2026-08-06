@@ -16,6 +16,8 @@ export type PermissionKey =
   | "time_off"
   | "dispatch"
   | "parts"
+  | "emergency_purchases"
+  | "inbox"
   | "billing"
   | "payments"
   | "batches"

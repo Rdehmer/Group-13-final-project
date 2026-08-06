@@ -111,7 +111,8 @@ export default function EquipmentDetailPage() {
     retirement_note: "",
   });
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
 
   async function loadNameplatePreview(path: string | null | undefined) {
     if (!path) {
@@ -247,7 +248,10 @@ export default function EquipmentDetailPage() {
         retirement_note: eq.retirement_note ?? "",
       });
 
-      if (nextProfile?.role === "service_manager") {
+      if (
+        nextProfile?.role === "administrator" ||
+        nextProfile?.role === "service_manager"
+      ) {
         await loadManagerExtras(eq);
       } else {
         setCoverage({ covered: false });

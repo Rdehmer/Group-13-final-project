@@ -1,17 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, LogOut, Wrench } from "lucide-react";
+import { LogOut, Mail, Menu, Wrench } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
+import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
 
 const CUSTOMER_HOME = "/customer";
+const UNREAD_POLL_MS = 30_000;
 
 function isPathActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -40,6 +42,11 @@ function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
   return { ...item, label, ...(children ? { children } : {}) };
 }
 
+function closeMobileDrawer() {
+  const toggle = document.getElementById("app-drawer") as HTMLInputElement | null;
+  if (toggle) toggle.checked = false;
+}
+
 function GatedNavLink({
   item,
   pathname,
@@ -53,6 +60,7 @@ function GatedNavLink({
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
+  const router = useRouter();
   const active = item.href === CUSTOMER_HOME
     ? pathname === CUSTOMER_HOME
     : isPathActive(pathname, item.href);
@@ -72,7 +80,16 @@ function GatedNavLink({
   }
 
   return (
-    <Link href={item.href} className={gatedNavClassName(false, active, className)}>
+    <Link
+      href={item.href}
+      className={gatedNavClassName(false, active, className)}
+      onClick={(event) => {
+        // DaisyUI drawer overlay can swallow default Link navigation on some viewports.
+        event.preventDefault();
+        closeMobileDrawer();
+        router.push(item.href);
+      }}
+    >
       {item.label}
     </Link>
   );
@@ -140,11 +157,39 @@ export function AppShell({
   const router = useRouter();
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
+  const [unreadInbox, setUnreadInbox] = useState(0);
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
+  const showManagerInbox = profile.role === "service_manager";
+
+  const refreshUnread = useCallback(async () => {
+    if (profile.role !== "service_manager") {
+      setUnreadInbox(0);
+      return;
+    }
+    try {
+      const supabase = createClient();
+      const count = await fetchManagerUnreadInboxCount(supabase);
+      setUnreadInbox(count);
+    } catch {
+      /* keep last known count */
+    }
+  }, [profile.role]);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!showManagerInbox) return;
+    void refreshUnread();
+    const onUnreadChanged = () => void refreshUnread();
+    window.addEventListener(MANAGER_INBOX_UNREAD_EVENT, onUnreadChanged);
+    const id = window.setInterval(() => void refreshUnread(), UNREAD_POLL_MS);
+    return () => {
+      window.removeEventListener(MANAGER_INBOX_UNREAD_EVENT, onUnreadChanged);
+      window.clearInterval(id);
+    };
+  }, [showManagerInbox, refreshUnread, pathname]);
 
   const gateActive = mounted && isGateActive;
 
@@ -154,6 +199,27 @@ export function AppShell({
     router.push("/login");
     router.refresh();
   }
+
+  const inboxButton = showManagerInbox ? (
+    <Link
+      href="/inbox"
+      className={`btn btn-ghost btn-sm relative gap-1 ${
+        pathname === "/inbox" || pathname.startsWith("/inbox/") ? "btn-active" : ""
+      }`}
+      aria-label={
+        unreadInbox > 0 ? `Inbox, ${unreadInbox} unread` : "Inbox"
+      }
+      title="Inbox"
+    >
+      <Mail className="h-4 w-4" />
+      <span className="hidden sm:inline">Inbox</span>
+      {unreadInbox > 0 ? (
+        <span className="badge badge-error badge-sm absolute -right-1 -top-1 min-w-5 justify-center px-1">
+          {unreadInbox > 99 ? "99+" : unreadInbox}
+        </span>
+      ) : null}
+    </Link>
+  ) : null;
 
   return (
     <div className="drawer lg:drawer-open min-h-screen bg-base-200">
@@ -175,13 +241,24 @@ export function AppShell({
               </p>
             </div>
           </div>
-          <div className="hidden items-center gap-3 md:flex">
-            <div className="text-right text-sm">
-              <p className="font-medium">{profile.full_name || profile.email}</p>
-              <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
+          <div className="flex items-center gap-2 md:gap-3">
+            {inboxButton}
+            <div className="hidden items-center gap-3 md:flex">
+              <div className="text-right text-sm">
+                <p className="font-medium">{profile.full_name || profile.email}</p>
+                <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
+              </div>
+              <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={logout}>
+                <LogOut className="h-4 w-4" /> Logout
+              </button>
             </div>
-            <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={logout}>
-              <LogOut className="h-4 w-4" /> Logout
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm md:hidden"
+              onClick={logout}
+              aria-label="Logout"
+            >
+              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -191,9 +268,6 @@ export function AppShell({
             <span className="font-medium">{profile.full_name || profile.email}</span>
             <span className="opacity-55"> · {ROLE_LABELS[profile.role]}</span>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={logout} aria-label="Logout">
-            <LogOut className="h-4 w-4" />
-          </button>
         </div>
 
         {gateActive ? (
@@ -206,8 +280,12 @@ export function AppShell({
       </div>
 
       <aside className="drawer-side z-40">
-        <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
-        <nav className="menu min-h-full w-72 gap-0.5 border-r border-base-300/70 bg-base-100 p-4 text-base-content">
+        <label
+          htmlFor="app-drawer"
+          className="drawer-overlay lg:pointer-events-none"
+          aria-label="Close menu"
+        />
+        <nav className="relative z-10 menu min-h-full w-72 gap-0.5 border-r border-base-300/70 bg-base-100 p-4 text-base-content">
           <div className="mb-5 flex items-center gap-3 rounded-2xl bg-primary/10 px-3 py-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-content shadow-sm">
               <Wrench className="h-5 w-5" />
@@ -236,10 +314,14 @@ export function AppShell({
             );
             const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
             const active = best?.href === item.href;
+            const showBadge = item.href === "/inbox" && unreadInbox > 0;
             return (
               <li key={item.href}>
                 <GatedNavLink
-                  item={item}
+                  item={{
+                    ...item,
+                    label: showBadge ? `${item.label} (${unreadInbox})` : item.label,
+                  }}
                   pathname={pathname}
                   className={
                     active

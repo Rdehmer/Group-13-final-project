@@ -17,6 +17,12 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["administrator", "service_manager"],
   },
   {
+    href: "/inbox",
+    /** Manager mailbox linked to customer portal Inbox threads. */
+    label: "Inbox",
+    roles: ["service_manager"],
+  },
+  {
     href: "/customers",
     label: "Customers",
     roles: ["administrator", "service_manager", "billing"],
@@ -61,6 +67,12 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/parts",
     label: "Parts",
     roles: ["administrator", "service_manager", "technician", "billing"],
+  },
+  {
+    href: "/emergency-purchases",
+    /** Manager inbox for technician “I bought a part” emergency buys. */
+    label: "Reimbursements",
+    roles: ["service_manager"],
   },
   {
     href: "/billing",

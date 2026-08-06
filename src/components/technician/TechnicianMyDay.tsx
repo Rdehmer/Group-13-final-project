@@ -5,9 +5,9 @@
  * List of assigned jobs with time-off awareness; opens JobSheet for work.
  */
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import {
   CalendarDays,
@@ -192,7 +192,6 @@ function Section({
 export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const jobFromUrl = searchParams.get("job");
 
@@ -207,19 +206,31 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
   const [, startTransition] = useTransition();
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const setJobSelection = useCallback(
     (id: string | null) => {
       setSelectedId(id);
       startTransition(() => {
-        const params = new URLSearchParams(searchParams.toString());
+        // Skip if My Day already unmounted (user left via sidebar) so we don't yank them back.
+        if (!mountedRef.current) return;
+        if (typeof window !== "undefined" && window.location.pathname !== "/technician") {
+          return;
+        }
+        const params = new URLSearchParams();
         if (id) params.set("job", id);
-        else params.delete("job");
         const q = params.toString();
-        router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
+        router.replace(q ? `/technician?${q}` : "/technician", { scroll: false });
       });
     },
-    [pathname, router, searchParams, startTransition],
+    [router, startTransition],
   );
 
   // Sync URL → selection (browser back, deep link)
