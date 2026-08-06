@@ -33,12 +33,17 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/work-orders",
-    label: "Jobs",
+    label: "Work Orders",
     roles: ["administrator", "service_manager", "billing"],
   },
   {
     href: "/technician",
     label: "Technician Schedule",
+    roles: ["administrator", "service_manager", "technician"],
+  },
+  {
+    href: "/time-off",
+    label: "Time Off Requests",
     roles: ["administrator", "service_manager", "technician"],
   },
   {
@@ -64,6 +69,11 @@ export const NAV_ITEMS: NavItem[] = [
   {
     href: "/batches",
     label: "Batches",
+    roles: ["administrator", "billing"],
+  },
+  {
+    href: "/accounting/close",
+    label: "Period Close",
     roles: ["administrator", "billing"],
   },
   {

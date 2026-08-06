@@ -391,43 +391,43 @@ export default function PaymentsPage() {
                   {filteredPayments.map((p) => {
                     const batchInfo = paymentBatchMap.get(p.id);
                     return (
-                    <tr key={p.id}>
-                      <td className="font-medium">{p.payment_number}</td>
-                      <td>
-                        {p.invoice_id ? (
-                          <Link href={`/billing/${p.invoice_id}`} className="link link-primary">
-                            View invoice
-                          </Link>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td>
-                        {p.customer_id ? (
-                          <Link href={`/customers/${p.customer_id}`} className="link link-hover">
-                            {p.customers?.name ?? "—"}
-                          </Link>
-                        ) : (
-                          p.customers?.name ?? "—"
-                        )}
-                      </td>
-                      <td>{p.payment_date}</td>
-                      <td>{p.payment_method}</td>
-                      <td>
-                        {batchInfo ? (
-                          <Link
-                            href={`/batches/${batchInfo.batchId}`}
-                            className="badge badge-primary badge-outline badge-sm"
-                            title={batchInfo.status}
-                          >
-                            {batchInfo.batchNumber}
-                          </Link>
-                        ) : (
-                          <span className="text-xs opacity-40">—</span>
-                        )}
-                      </td>
-                      <td>{formatMoney(p.payment_amount)}</td>
-                    </tr>
+                      <tr key={p.id}>
+                        <td className="font-medium">{p.payment_number}</td>
+                        <td>
+                          {p.invoice_id ? (
+                            <Link href={`/billing/${p.invoice_id}`} className="link link-primary">
+                              View invoice
+                            </Link>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td>
+                          {p.customer_id ? (
+                            <Link href={`/customers/${p.customer_id}`} className="link link-hover">
+                              {p.customers?.name ?? "—"}
+                            </Link>
+                          ) : (
+                            p.customers?.name ?? "—"
+                          )}
+                        </td>
+                        <td>{p.payment_date}</td>
+                        <td>{p.payment_method}</td>
+                        <td>
+                          {batchInfo ? (
+                            <Link
+                              href={`/batches/${batchInfo.batchId}`}
+                              className="badge badge-primary badge-outline badge-sm"
+                              title={batchInfo.status}
+                            >
+                              {batchInfo.batchNumber}
+                            </Link>
+                          ) : (
+                            <span className="text-xs opacity-40">—</span>
+                          )}
+                        </td>
+                        <td>{formatMoney(p.payment_amount)}</td>
+                      </tr>
                     );
                   })}
                 </tbody>

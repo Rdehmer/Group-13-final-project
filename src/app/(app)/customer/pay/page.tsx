@@ -1,33 +1,26 @@
 "use client";
 
 /**
- * Customer bill-pay portal (QuickBooks Online–style):
- * account balance, select invoices, pay by card/ACH (simulated), history & receipt.
+ * Customer bill-pay portal (QBO-style) with Stripe Payment Element.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-  CreditCard,
-  Building2,
   CheckCircle2,
   FileText,
   Lock,
   RefreshCw,
   AlertCircle,
+  CreditCard,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
+import { StripeCheckout } from "@/components/StripeCheckout";
 import { formatMoney } from "@/lib/calculations";
 import { daysPastDue } from "@/lib/billing";
-import {
-  applyInvoicePayment,
-  formatPaymentMethodLabel,
-  type PayMethodKind,
-} from "@/lib/payments";
 import type { Invoice, Payment, Profile } from "@/lib/types";
 
 type OpenInvoice = Invoice & {
@@ -42,10 +35,20 @@ type Receipt = {
   invoiceLabels: string[];
 };
 
-export default function CustomerPayPortalPage() {
+type StripeSession = {
+  clientSecret: string;
+  publishableKey: string;
+  paymentIntentId: string;
+  amount: number;
+};
+
+function PayPortalInner() {
   const supabase = createClient();
   const searchParams = useSearchParams();
   const preselectInvoice = searchParams.get("invoice");
+  const stripeReturn = searchParams.get("stripe");
+  const clientSecretFromUrl = searchParams.get("payment_intent_client_secret");
+  const paymentIntentFromUrl = searchParams.get("payment_intent");
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [customerName, setCustomerName] = useState("");
@@ -59,17 +62,10 @@ export default function CustomerPayPortalPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [partialMode, setPartialMode] = useState(false);
   const [customAmount, setCustomAmount] = useState("");
-
-  const [method, setMethod] = useState<PayMethodKind>("card");
-  // Simulated card / bank fields (never sent to a processor)
-  const [cardName, setCardName] = useState("");
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardExp, setCardExp] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
-  const [bankName, setBankName] = useState("");
-  const [routing, setRouting] = useState("");
-  const [account, setAccount] = useState("");
   const [memo, setMemo] = useState("");
+
+  const [stripeConfigured, setStripeConfigured] = useState<boolean | null>(null);
+  const [stripeSession, setStripeSession] = useState<StripeSession | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,7 +84,7 @@ export default function CustomerPayPortalPage() {
       return;
     }
 
-    const [{ data: inv }, { data: pay }, { data: cust }] = await Promise.all([
+    const [{ data: inv }, { data: pay }, { data: cust }, configRes] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, work_orders(work_order_number)")
@@ -103,12 +99,14 @@ export default function CustomerPayPortalPage() {
         .order("payment_date", { ascending: false })
         .limit(50),
       supabase.from("customers").select("name").eq("id", p.customer_id).maybeSingle(),
+      fetch("/api/stripe/config").then((r) => r.json()).catch(() => ({ configured: false })),
     ]);
 
     const open = (inv as OpenInvoice[]) ?? [];
     setInvoices(open);
     setHistory((pay as Payment[]) ?? []);
     setCustomerName(cust?.name ?? p.full_name ?? "Account");
+    setStripeConfigured(Boolean(configRes?.configured));
 
     setSelected((prev) => {
       if (preselectInvoice && open.some((i) => i.id === preselectInvoice)) {
@@ -127,6 +125,49 @@ export default function CustomerPayPortalPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Handle Stripe redirect return
+  useEffect(() => {
+    if (!stripeReturn && !paymentIntentFromUrl) return;
+    const pi = paymentIntentFromUrl;
+    if (!pi) return;
+    let cancelled = false;
+    (async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/stripe/complete-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paymentIntentId: pi }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(data.error ?? "Could not finalize Stripe payment.");
+        } else {
+          setSuccess({
+            paymentNumbers: data.paymentNumbers ?? [],
+            totalPaid: data.totalPaid ?? 0,
+            method: data.method ?? "Stripe",
+            paidAt: data.paidAt ?? new Date().toISOString(),
+            invoiceLabels: data.invoiceLabels ?? [],
+          });
+          setStripeSession(null);
+          await load();
+        }
+      } catch {
+        if (!cancelled) setError("Could not finalize Stripe payment.");
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stripeReturn, paymentIntentFromUrl, load]);
+
+  void clientSecretFromUrl; // reserved for full return_url flows
 
   const today = useMemo(() => new Date(), []);
 
@@ -162,6 +203,7 @@ export default function CustomerPayPortalPage() {
 
   function toggleInvoice(id: string) {
     setSuccess(null);
+    setStripeSession(null);
     setSelected((prev) => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id);
@@ -171,49 +213,20 @@ export default function CustomerPayPortalPage() {
   }
 
   function selectAll() {
+    setStripeSession(null);
     setSelected(new Set(invoices.map((i) => i.id)));
     setPartialMode(false);
   }
 
   function selectNone() {
+    setStripeSession(null);
     setSelected(new Set());
   }
 
-  function digitsOnly(s: string) {
-    return s.replace(/\D/g, "");
-  }
-
-  function formatCardInput(raw: string) {
-    const d = digitsOnly(raw).slice(0, 16);
-    return d.replace(/(\d{4})(?=\d)/g, "$1 ").trim();
-  }
-
-  function formatExp(raw: string) {
-    const d = digitsOnly(raw).slice(0, 4);
-    if (d.length <= 2) return d;
-    return `${d.slice(0, 2)}/${d.slice(2)}`;
-  }
-
-  function validatePayInstrument(): string | null {
-    if (method === "card") {
-      if (!cardName.trim()) return "Enter the name on the card.";
-      const num = digitsOnly(cardNumber);
-      if (num.length < 13) return "Enter a valid card number.";
-      if (digitsOnly(cardExp).length < 4) return "Enter card expiration (MM/YY).";
-      if (digitsOnly(cardCvv).length < 3) return "Enter the CVV.";
-    }
-    if (method === "bank") {
-      if (!bankName.trim()) return "Enter your bank name.";
-      if (digitsOnly(routing).length !== 9) return "Routing number must be 9 digits.";
-      if (digitsOnly(account).length < 4) return "Enter your account number.";
-    }
-    return null;
-  }
-
-  async function submitPayment() {
+  async function startStripeCheckout() {
     setError(null);
     setSuccess(null);
-    if (!profile?.customer_id || selectedInvoices.length === 0) {
+    if (selectedInvoices.length === 0) {
       setError("Select at least one invoice to pay.");
       return;
     }
@@ -221,105 +234,74 @@ export default function CustomerPayPortalPage() {
       setError("Payment amount must be greater than zero.");
       return;
     }
+    if (payAmount < 0.5) {
+      setError("Stripe requires a minimum payment of $0.50.");
+      return;
+    }
     if (partialMode && selectedInvoices.length !== 1) {
       setError("Partial payment applies to one invoice at a time.");
       return;
     }
-    const instrumentErr = validatePayInstrument();
-    if (instrumentErr) {
-      setError(instrumentErr);
-      return;
-    }
 
     setBusy(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    const last4 =
-      method === "card"
-        ? digitsOnly(cardNumber).slice(-4)
-        : method === "bank"
-          ? digitsOnly(account).slice(-4)
-          : undefined;
-    const methodLabel = formatPaymentMethodLabel(method, last4);
-    const ref =
-      method === "card"
-        ? `SIM-CARD-${last4}`
-        : method === "bank"
-          ? `SIM-ACH-${last4}`
-          : memo.trim() || null;
-
-    const paymentNumbers: string[] = [];
-    const invoiceLabels: string[] = [];
-    let remainingToApply = payAmount;
-    let totalPaid = 0;
-
-    // Apply full balances in due-date order, residual goes to last selected in partial mode
-    const ordered = [...selectedInvoices].sort((a, b) => a.due_date.localeCompare(b.due_date));
-
-    for (let i = 0; i < ordered.length; i++) {
-      const inv = ordered[i];
-      const invBal = Number(inv.remaining_balance);
-      let applyAmt: number;
-      if (partialMode && ordered.length === 1) {
-        applyAmt = Math.min(payAmount, invBal);
-      } else if (i === ordered.length - 1) {
-        applyAmt = Math.min(remainingToApply, invBal);
-      } else {
-        applyAmt = Math.min(remainingToApply, invBal);
-      }
-      if (applyAmt <= 0.005) continue;
-
-      const result = await applyInvoicePayment(supabase, {
-        invoiceId: inv.id,
-        customerId: profile.customer_id,
-        invoiceTotal: Number(inv.invoice_total),
-        amountPaidSoFar: Number(inv.amount_paid),
-        remaining: invBal,
-        amount: Math.round(applyAmt * 100) / 100,
-        paymentMethod: methodLabel,
-        referenceNumber: ref,
-        notes: memo.trim() || `Customer portal · ${customerName}`,
-        userId: user?.id ?? null,
+    try {
+      const res = await fetch("/api/stripe/create-payment-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceIds: selectedInvoices.map((i) => i.id),
+          partialAmount: partialMode && selectedInvoices.length === 1 ? payAmount : null,
+          memo: memo.trim() || null,
+        }),
       });
-
-      if (!result.ok) {
-        setError(result.error);
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Could not start Stripe checkout.");
         setBusy(false);
-        await load();
         return;
       }
-
-      paymentNumbers.push(result.paymentNumber);
-      invoiceLabels.push(inv.invoice_number);
-      totalPaid += applyAmt;
-      remainingToApply -= applyAmt;
-      await logActivity(supabase, {
-        userId: user?.id ?? null,
-        action: "customer_portal_payment",
-        recordType: "payment",
-        recordId: inv.id,
-        newValue: result.paymentNumber,
+      setStripeSession({
+        clientSecret: data.clientSecret,
+        publishableKey: data.publishableKey,
+        paymentIntentId: data.paymentIntentId,
+        amount: data.amount,
       });
+    } catch {
+      setError("Could not reach the payment server.");
     }
+    setBusy(false);
+  }
 
-    setSuccess({
-      paymentNumbers,
-      totalPaid,
-      method: methodLabel,
-      paidAt: new Date().toISOString(),
-      invoiceLabels,
-    });
-    setCardNumber("");
-    setCardCvv("");
-    setCardExp("");
-    setAccount("");
-    setRouting("");
-    setMemo("");
-    setCustomAmount("");
-    setPartialMode(false);
-    await load();
+  async function finalizeStripePayment(paymentIntentId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/stripe/complete-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentIntentId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Payment succeeded in Stripe but failed to post to invoices.");
+        setBusy(false);
+        return;
+      }
+      setSuccess({
+        paymentNumbers: data.paymentNumbers ?? [],
+        totalPaid: data.totalPaid ?? 0,
+        method: data.method ?? "Stripe",
+        paidAt: data.paidAt ?? new Date().toISOString(),
+        invoiceLabels: data.invoiceLabels ?? [],
+      });
+      setStripeSession(null);
+      setMemo("");
+      setCustomAmount("");
+      setPartialMode(false);
+      await load();
+    } catch {
+      setError("Could not record payment on invoices.");
+    }
     setBusy(false);
   }
 
@@ -340,23 +322,50 @@ export default function CustomerPayPortalPage() {
     <div className="space-y-5">
       <PageHeader
         title="Pay bills"
-        description={`${customerName} · Secure online payments for Ridley Equipment Services`}
+        description={`${customerName} · Secure Stripe checkout for Ridley Equipment Services`}
         actions={
-          <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => void load()} disabled={loading || busy}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm gap-1"
+            onClick={() => void load()}
+            disabled={loading || busy}
+          >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </button>
         }
       />
 
-      {/* Trust strip — QBO-style */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-emerald-700/20 bg-emerald-700 px-4 py-3 text-emerald-50 shadow-sm">
         <Lock className="h-4 w-4 shrink-0 opacity-90" />
         <p className="text-sm font-medium">
-          Secure payment portal · Simulated checkout (demo — no live card processing)
+          Powered by Stripe · Card & bank payments (PCI-compliant)
         </p>
         <span className="ml-auto text-xs opacity-80">Ridley Equipment Services</span>
       </div>
+
+      {stripeConfigured === false ? (
+        <div className="alert alert-warning text-sm">
+          <AlertCircle className="h-4 w-4" />
+          <div>
+            <p className="font-semibold">Stripe keys required</p>
+            <p className="opacity-80">
+              Add <code className="text-xs">STRIPE_SECRET_KEY</code> and{" "}
+              <code className="text-xs">NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY</code> to{" "}
+              <code className="text-xs">.env.local</code>, then restart the dev server. Use test keys from{" "}
+              <a
+                className="link"
+                href="https://dashboard.stripe.com/test/apikeys"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Stripe Dashboard → API keys
+              </a>
+              .
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <StatCard label="Balance due" value={formatMoney(totalDue)} danger={totalDue > 0} />
@@ -401,11 +410,10 @@ export default function CustomerPayPortalPage() {
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-5">
-        {/* Invoice statement */}
         <section className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-200 px-4 py-3">
             <div>
-              <h2 className="font-bold flex items-center gap-2">
+              <h2 className="flex items-center gap-2 font-bold">
                 <FileText className="h-4 w-4" /> Open invoices
               </h2>
               <p className="text-xs opacity-55">Select invoices to include in this payment</p>
@@ -503,11 +511,10 @@ export default function CustomerPayPortalPage() {
           )}
         </section>
 
-        {/* Checkout panel */}
         <section className="lg:col-span-2 rounded-2xl border border-base-300 bg-base-100 shadow-sm lg:sticky lg:top-20 lg:self-start">
           <div className="border-b border-base-200 bg-base-200/40 px-4 py-3">
             <h2 className="font-bold">Make a payment</h2>
-            <p className="text-2xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400 mt-1">
+            <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
               {formatMoney(payAmount)}
             </p>
             <p className="text-xs opacity-55">
@@ -516,175 +523,91 @@ export default function CustomerPayPortalPage() {
           </div>
 
           <div className="space-y-4 p-4">
-            {selectedInvoices.length === 1 ? (
-              <label className="flex cursor-pointer items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="checkbox checkbox-sm"
-                  checked={partialMode}
-                  onChange={(e) => {
-                    setPartialMode(e.target.checked);
-                    if (e.target.checked) {
-                      setCustomAmount(String(Number(selectedInvoices[0].remaining_balance).toFixed(2)));
-                    }
-                  }}
-                />
-                Pay a different amount
-              </label>
-            ) : null}
-
-            {partialMode && selectedInvoices.length === 1 ? (
-              <label className="form-control">
-                <span className="label-text text-xs">Amount to pay</span>
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  max={Number(selectedInvoices[0].remaining_balance)}
-                  className="input input-bordered input-sm"
-                  value={customAmount}
-                  onChange={(e) => setCustomAmount(e.target.value)}
-                />
-              </label>
-            ) : null}
-
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">
-                Payment method
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  className={`btn btn-sm gap-1 ${method === "card" ? "btn-success" : "btn-outline"}`}
-                  onClick={() => setMethod("card")}
-                >
-                  <CreditCard className="h-4 w-4" /> Card
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-sm gap-1 ${method === "bank" ? "btn-success" : "btn-outline"}`}
-                  onClick={() => setMethod("bank")}
-                >
-                  <Building2 className="h-4 w-4" /> Bank
-                </button>
-              </div>
-            </div>
-
-            {method === "card" ? (
-              <div className="space-y-2">
-                <label className="form-control">
-                  <span className="label-text text-xs">Name on card</span>
-                  <input
-                    className="input input-bordered input-sm"
-                    autoComplete="cc-name"
-                    value={cardName}
-                    onChange={(e) => setCardName(e.target.value)}
-                    placeholder="As printed on card"
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text text-xs">Card number</span>
-                  <input
-                    className="input input-bordered input-sm font-mono"
-                    autoComplete="cc-number"
-                    inputMode="numeric"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(formatCardInput(e.target.value))}
-                    placeholder="4242 4242 4242 4242"
-                  />
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="form-control">
-                    <span className="label-text text-xs">Expires</span>
-                    <input
-                      className="input input-bordered input-sm font-mono"
-                      autoComplete="cc-exp"
-                      inputMode="numeric"
-                      value={cardExp}
-                      onChange={(e) => setCardExp(formatExp(e.target.value))}
-                      placeholder="MM/YY"
-                    />
-                  </label>
-                  <label className="form-control">
-                    <span className="label-text text-xs">CVV</span>
-                    <input
-                      className="input input-bordered input-sm font-mono"
-                      autoComplete="cc-csc"
-                      inputMode="numeric"
-                      value={cardCvv}
-                      onChange={(e) => setCardCvv(digitsOnly(e.target.value).slice(0, 4))}
-                      placeholder="123"
-                    />
-                  </label>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <label className="form-control">
-                  <span className="label-text text-xs">Bank name</span>
-                  <input
-                    className="input input-bordered input-sm"
-                    value={bankName}
-                    onChange={(e) => setBankName(e.target.value)}
-                    placeholder="Your bank"
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text text-xs">Routing number</span>
-                  <input
-                    className="input input-bordered input-sm font-mono"
-                    inputMode="numeric"
-                    value={routing}
-                    onChange={(e) => setRouting(digitsOnly(e.target.value).slice(0, 9))}
-                    placeholder="9 digits"
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text text-xs">Account number</span>
-                  <input
-                    className="input input-bordered input-sm font-mono"
-                    inputMode="numeric"
-                    value={account}
-                    onChange={(e) => setAccount(digitsOnly(e.target.value).slice(0, 17))}
-                    placeholder="Account #"
-                  />
-                </label>
-              </div>
-            )}
-
-            <label className="form-control">
-              <span className="label-text text-xs">Memo (optional)</span>
-              <input
-                className="input input-bordered input-sm"
-                value={memo}
-                onChange={(e) => setMemo(e.target.value)}
-                placeholder="Invoice note for your records"
+            {stripeSession ? (
+              <StripeCheckout
+                clientSecret={stripeSession.clientSecret}
+                publishableKey={stripeSession.publishableKey}
+                amount={stripeSession.amount}
+                paymentIntentId={stripeSession.paymentIntentId}
+                onSuccess={(id) => void finalizeStripePayment(id)}
+                onError={(msg) => setError(msg)}
+                onCancel={() => setStripeSession(null)}
               />
-            </label>
+            ) : (
+              <>
+                {selectedInvoices.length === 1 ? (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={partialMode}
+                      onChange={(e) => {
+                        setPartialMode(e.target.checked);
+                        if (e.target.checked) {
+                          setCustomAmount(
+                            String(Number(selectedInvoices[0].remaining_balance).toFixed(2)),
+                          );
+                        }
+                      }}
+                    />
+                    Pay a different amount
+                  </label>
+                ) : null}
 
-            <button
-              type="button"
-              className="btn btn-success w-full gap-2"
-              disabled={busy || selectedInvoices.length === 0 || payAmount <= 0}
-              onClick={() => void submitPayment()}
-            >
-              {busy ? (
-                <span className="loading loading-spinner loading-sm" />
-              ) : (
-                <Lock className="h-4 w-4" />
-              )}
-              Pay {formatMoney(payAmount)}
-            </button>
+                {partialMode && selectedInvoices.length === 1 ? (
+                  <label className="form-control">
+                    <span className="label-text text-xs">Amount to pay</span>
+                    <input
+                      type="number"
+                      min="0.50"
+                      step="0.01"
+                      max={Number(selectedInvoices[0].remaining_balance)}
+                      className="input input-bordered input-sm"
+                      value={customAmount}
+                      onChange={(e) => setCustomAmount(e.target.value)}
+                    />
+                  </label>
+                ) : null}
 
-            <p className="text-[11px] leading-snug opacity-50">
-              Demo portal mirrors QuickBooks Online customer payments. Card and bank details are validated
-              locally only and never charged.
-            </p>
+                <label className="form-control">
+                  <span className="label-text text-xs">Memo (optional)</span>
+                  <input
+                    className="input input-bordered input-sm"
+                    value={memo}
+                    onChange={(e) => setMemo(e.target.value)}
+                    placeholder="Note for your records"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  className="btn btn-success w-full gap-2"
+                  disabled={
+                    busy ||
+                    selectedInvoices.length === 0 ||
+                    payAmount < 0.5 ||
+                    stripeConfigured === false
+                  }
+                  onClick={() => void startStripeCheckout()}
+                >
+                  {busy ? (
+                    <span className="loading loading-spinner loading-sm" />
+                  ) : (
+                    <CreditCard className="h-4 w-4" />
+                  )}
+                  Continue to Stripe · {formatMoney(payAmount)}
+                </button>
+
+                <p className="text-[11px] leading-snug opacity-50">
+                  Card data is entered on Stripe&apos;s secure form (never stored in Ridley). Minimum charge
+                  $0.50.
+                </p>
+              </>
+            )}
           </div>
         </section>
       </div>
 
-      {/* Payment history */}
       <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
         <div className="border-b border-base-200 px-4 py-3">
           <h2 className="font-bold">Payment history</h2>
@@ -710,8 +633,12 @@ export default function CustomerPayPortalPage() {
                     <td className="font-medium">{p.payment_number}</td>
                     <td className="tabular-nums">{p.payment_date}</td>
                     <td>{p.payment_method}</td>
-                    <td className="text-xs opacity-60">{p.reference_number ?? "—"}</td>
-                    <td className="text-right font-medium tabular-nums">{formatMoney(p.payment_amount)}</td>
+                    <td className="max-w-[12rem] truncate text-xs opacity-60" title={p.reference_number ?? ""}>
+                      {p.reference_number ?? "—"}
+                    </td>
+                    <td className="text-right font-medium tabular-nums">
+                      {formatMoney(p.payment_amount)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -719,14 +646,14 @@ export default function CustomerPayPortalPage() {
           </div>
         )}
       </section>
-
-      <p className="text-center text-xs opacity-45">
-        Questions about a bill?{" "}
-        <Link href="/customer" className="link link-hover">
-          Contact us from Home
-        </Link>{" "}
-        or call Ridley support.
-      </p>
     </div>
+  );
+}
+
+export default function CustomerPayPortalPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-sm opacity-60">Loading payment portal…</div>}>
+      <PayPortalInner />
+    </Suspense>
   );
 }

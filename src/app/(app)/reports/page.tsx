@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Download,
@@ -29,6 +29,7 @@ import {
   customerBalanceSummary,
   defaultLast12Months,
   defaultYtdRange,
+  deferredRevenueSchedule,
   executiveSnapshot,
   exportCsv,
   formatReportMoney,
@@ -52,6 +53,8 @@ import {
   type ReportId,
   type TechProfile,
 } from "@/lib/reports";
+import { contractAssetRollforward } from "@/lib/accounting/earned-revenue";
+import { trialBalance } from "@/lib/accounting/ledger-local";
 import type {
   Part,
   Payment,
@@ -143,8 +146,8 @@ export default function ReportsPage() {
     })).filter((g) => g.reports.length > 0);
   }, [query]);
 
-  const pnl = useMemo(() => profitAndLoss(invoices, range, costs), [invoices, range, costs]);
-  const pnlCmp = useMemo(() => comparePnl(invoices, range, costs), [invoices, range, costs]);
+  const pnl = useMemo(() => profitAndLoss(invoices, range, costs, contracts), [invoices, range, costs, contracts]);
+  const pnlCmp = useMemo(() => comparePnl(invoices, range, costs, contracts), [invoices, range, costs, contracts]);
   const openAr = useMemo(() => openInvoicesAt(invoices, new Date(asOf + "T12:00:00")), [invoices, asOf]);
   const aging = useMemo(() => arAgingSummary(openAr), [openAr]);
   const byCustomer = useMemo(() => salesByCustomer(invoices, range), [invoices, range]);
@@ -152,8 +155,8 @@ export default function ReportsPage() {
   const byService = useMemo(() => salesByService(invoices, range), [invoices, range]);
   const cash = useMemo(() => cashFlowStatement(invoices, payments, range), [invoices, payments, range]);
   const sheet = useMemo(
-    () => balanceSheetGaap(invoices, payments, parts, jobs, costs, asOf),
-    [invoices, payments, parts, jobs, costs, asOf],
+    () => balanceSheetGaap(invoices, payments, parts, jobs, costs, asOf, contracts),
+    [invoices, payments, parts, jobs, costs, asOf, contracts],
   );
   const contractsProfit = useMemo(
     () => contractProfitabilityGaap(contracts, invoices, costs),
@@ -162,9 +165,12 @@ export default function ReportsPage() {
   const jobSummary = useMemo(() => jobStatusSummary(jobs), [jobs]);
   const unbilled = useMemo(() => unbilledJobs(jobs, costs), [jobs, costs]);
   const invList = useMemo(() => invoicesInRange(invoices, range), [invoices, range]);
+  const deferredRev = useMemo(() => deferredRevenueSchedule(contracts, asOf), [contracts, asOf]);
+  const contractAsset = useMemo(() => contractAssetRollforward(jobs, invoices, asOf), [jobs, invoices, asOf]);
+  const glTrial = useMemo(() => trialBalance(asOf), [asOf, invoices, contracts]); // refresh with data loads
   const executive = useMemo(
-    () => executiveSnapshot(invoices, payments, parts, jobs, costs, range, asOf),
-    [invoices, payments, parts, jobs, costs, range, asOf],
+    () => executiveSnapshot(invoices, payments, parts, jobs, costs, range, asOf, contracts),
+    [invoices, payments, parts, jobs, costs, range, asOf, contracts],
   );
   const collections = useMemo(
     () => collectionsAnalysis(invoices, payments, range, asOf),
@@ -199,6 +205,9 @@ export default function ReportsPage() {
     "customer_balances",
     "collections",
     "sales_tax",
+    "deferred_revenue",
+    "trial_balance",
+    "contract_asset",
   ].includes(reportId);
   const needsRange = ![
     "ar_aging",
@@ -208,6 +217,9 @@ export default function ReportsPage() {
     "unbilled",
     "contract_profit",
     "balance_sheet",
+    "deferred_revenue",
+    "trial_balance",
+    "contract_asset",
   ].includes(reportId);
 
   function printReport() {
@@ -353,6 +365,39 @@ export default function ReportsPage() {
           ]),
         );
         break;
+      case "deferred_revenue":
+        exportCsv(
+          `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${asOf}`,
+          [
+            "Contract",
+            "Customer",
+            "Billing method",
+            "Start",
+            "End",
+            "Contract price",
+            "Monthly recognition",
+            "Recognized to date",
+            "Deferred balance",
+            "Current portion",
+            "Noncurrent portion",
+            "Status",
+          ],
+          deferredRev.rows.map((r) => [
+            r.name,
+            r.customerName,
+            r.billingMethod,
+            r.startDate,
+            r.endDate,
+            r.contractPrice,
+            r.monthlyRecognition,
+            r.recognizedToDate,
+            r.deferredBalance,
+            r.currentPortion,
+            r.noncurrentPortion,
+            r.status,
+          ]),
+        );
+        break;
       case "cash_flow":
         exportCsv(
           name,
@@ -476,6 +521,9 @@ export default function ReportsPage() {
           ["Contract assets (unbilled)", sheet.contractAsset],
           ["Total assets", sheet.totalAssets],
           ["Sales tax payable", sheet.salesTaxPayable],
+          ["Deferred revenue (current)", sheet.deferredCurrent],
+          ["Deferred revenue (noncurrent)", sheet.deferredNoncurrent],
+          ["Deferred revenue (total)", sheet.deferredRevenue],
           ["Total liabilities", sheet.totalLiabilities],
           ["Equity (assets − liabilities)", sheet.equity],
         ]);
@@ -601,6 +649,7 @@ export default function ReportsPage() {
                   {reportId === "job_profit" ? " · Job-level margin" : null}
                   {reportId === "cash_flow" ? " · Cash · payment date" : null}
                   {reportId === "balance_sheet" ? " · Accrual position" : null}
+                  {reportId === "deferred_revenue" ? " · Prepaid contract unearned balances" : null}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 print:hidden">
@@ -702,6 +751,9 @@ export default function ReportsPage() {
               {reportId === "tech_labor" ? <TechLaborReport data={techLabor} /> : null}
               {reportId === "inventory" ? <InventoryReport data={inventory} /> : null}
               {reportId === "invoice_list" ? <InvoiceListReport rows={invList} /> : null}
+              {reportId === "deferred_revenue" ? <DeferredRevenueReport data={deferredRev} /> : null}
+              {reportId === "contract_asset" ? <ContractAssetReport data={contractAsset} asOf={asOf} /> : null}
+              {reportId === "trial_balance" ? <TrialBalanceReport data={glTrial} asOf={asOf} /> : null}
               {reportId === "policies" ? <PoliciesReport /> : null}
             </div>
           )}
@@ -1270,8 +1322,7 @@ function SalesTaxReportView({ data }: { data: ReturnType<typeof salesTaxReport> 
         </tr>
       </ReportTable>
       <PolicyNote>
-        {ACCOUNTING_POLICIES.taxLiability} Remittance estimate supports filing prep; remittances are not recorded
-        in-app.
+        {ACCOUNTING_POLICIES.taxLiability} Record remittances from Period Close when filed.
       </PolicyNote>
     </div>
   );
@@ -1290,7 +1341,7 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
         <StatCard
           label="Service revenue"
           value={formatReportMoney(pnl.serviceRevenue)}
-          hint={`${pnl.invoiceCount} recognized invoices`}
+          hint={`${pnl.earnedJobCount ?? 0} completed jobs · ASC 606`}
         />
         <StatCard
           label="Cost of services"
@@ -1303,7 +1354,31 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
-          Revenue (accrual)
+          Earned revenue (ASC 606)
+        </h3>
+        <ReportTable headers={["Component", "Amount"]}>
+          <tr>
+            <td className="pl-4">Completed work (invoiced)</td>
+            <MoneyCell n={pnl.billedCompletion ?? 0} />
+          </tr>
+          <tr>
+            <td className="pl-4">Completed work (unbilled estimate)</td>
+            <MoneyCell n={pnl.unbilledCompletion ?? 0} />
+          </tr>
+          <tr>
+            <td className="pl-4">Prepaid contract recognition</td>
+            <MoneyCell n={pnl.deferredRecognized ?? 0} />
+          </tr>
+          <tr className="font-semibold">
+            <td>Total earned service revenue</td>
+            <MoneyCell n={pnl.serviceRevenue} bold />
+          </tr>
+        </ReportTable>
+      </section>
+
+      <section>
+        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
+          Billing components (invoice date, disclosure)
         </h3>
         <ReportTable headers={["Account", "Total"]}>
           {incomeLines.map(([label, amt]) => (
@@ -1325,8 +1400,8 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             </tr>
           ) : null}
           <tr className="border-t-2 border-base-content/15 font-semibold">
-            <td>Service revenue (excludes sales tax)</td>
-            <MoneyCell n={pnl.serviceRevenue} bold />
+            <td>Invoice register total (disclosure)</td>
+            <MoneyCell n={pnl.invoiceTotals} bold />
           </tr>
         </ReportTable>
       </section>
@@ -1449,6 +1524,22 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <MoneyCell n={sheet.salesTaxPayable} />
           </tr>
           <tr>
+            <td className="pl-4">
+              Deferred revenue — current
+              <span className="block text-[11px] font-normal opacity-50">
+                Next 12 months of prepaid / annual contract recognition
+              </span>
+            </td>
+            <MoneyCell n={sheet.deferredCurrent} />
+          </tr>
+          <tr>
+            <td className="pl-4">
+              Deferred revenue — noncurrent
+              <span className="block text-[11px] font-normal opacity-50">Beyond 12 months</span>
+            </td>
+            <MoneyCell n={sheet.deferredNoncurrent} />
+          </tr>
+          <tr>
             <td className="pl-4 opacity-50">Accounts payable (not in subledger)</td>
             <MoneyCell n={0} />
           </tr>
@@ -1488,7 +1579,7 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
 
       <PolicyNote>
         {ACCOUNTING_POLICIES.cash} {ACCOUNTING_POLICIES.inventory} {ACCOUNTING_POLICIES.wip}{" "}
-        {ACCOUNTING_POLICIES.limitations}
+        {ACCOUNTING_POLICIES.deferredRevenue} {ACCOUNTING_POLICIES.limitations}
       </PolicyNote>
     </div>
   );
@@ -2002,11 +2093,233 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
   );
 }
 
+function ContractAssetReport({
+  data,
+  asOf,
+}: {
+  data: ReturnType<typeof contractAssetRollforward>;
+  asOf: string;
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Beginning" value={formatReportMoney(data.beginning)} />
+        <StatCard label="+ Earned unbilled" value={formatReportMoney(data.earnedUnbilled)} />
+        <StatCard label="− Billed" value={formatReportMoney(data.billed)} />
+        <StatCard label="Ending contract asset" value={formatReportMoney(data.ending)} hint={`As of ${asOf}`} />
+      </div>
+      {data.rows.length === 0 ? (
+        <EmptyState title="No unbilled completions" description="Completed jobs without invoices appear here." />
+      ) : (
+        <ReportTable headers={["Work order", "Completed", "Source", "Amount"]}>
+          {data.rows.map((r) => (
+            <tr key={r.workOrderId}>
+              <td>{r.workOrderNumber}</td>
+              <td>{r.completionDate}</td>
+              <td>{r.source}</td>
+              <MoneyCell n={r.amount} />
+            </tr>
+          ))}
+        </ReportTable>
+      )}
+      <PolicyNote>{ACCOUNTING_POLICIES.wip}</PolicyNote>
+    </div>
+  );
+}
+
+function TrialBalanceReport({
+  data,
+  asOf,
+}: {
+  data: ReturnType<typeof trialBalance>;
+  asOf: string;
+}) {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm opacity-70">
+        Posted GL journals through {asOf}. Post batches and period-close entries from{" "}
+        <a className="link" href="/accounting/close">
+          Period Close
+        </a>
+        .
+      </p>
+      {data.rows.length === 0 ? (
+        <EmptyState title="No GL activity" description="Trial balance fills as journals are posted." />
+      ) : (
+        <ReportTable headers={["Account", "Name", "Debit", "Credit", "Balance"]}>
+          {data.rows.map((r) => (
+            <tr key={r.accountCode}>
+              <td className="font-mono text-xs">{r.accountCode}</td>
+              <td>{r.accountName}</td>
+              <MoneyCell n={r.debit} />
+              <MoneyCell n={r.credit} />
+              <MoneyCell n={r.balance} />
+            </tr>
+          ))}
+          <tr className="border-t-2 font-bold">
+            <td colSpan={2}>Total {data.balanced ? "(balanced)" : "(out of balance)"}</td>
+            <MoneyCell n={data.totalDebit} bold />
+            <MoneyCell n={data.totalCredit} bold />
+            <td />
+          </tr>
+        </ReportTable>
+      )}
+      <PolicyNote>{ACCOUNTING_POLICIES.periodClose}</PolicyNote>
+    </div>
+  );
+}
+
+function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredRevenueSchedule> }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  if (data.contractCount === 0) {
+    return (
+      <EmptyState
+        title="No deferred revenue contracts"
+        description="Annual fixed-fee / prepaid maintenance contracts appear here with a straight-line recognition schedule."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Deferred revenue"
+          value={formatReportMoney(data.totalDeferred)}
+          hint={`${data.contractCount} prepaid contract${data.contractCount === 1 ? "" : "s"}`}
+        />
+        <StatCard label="Current portion" value={formatReportMoney(data.totalCurrent)} hint="Next 12 months" />
+        <StatCard
+          label="Noncurrent portion"
+          value={formatReportMoney(data.totalNoncurrent)}
+          hint="Beyond 12 months"
+        />
+        <StatCard
+          label="Recognized to date"
+          value={formatReportMoney(data.totalRecognized)}
+          hint={`Of ${formatReportMoney(data.totalContractPrice)} prepaid`}
+        />
+      </div>
+
+      <section>
+        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
+          Contract balances as of {data.asOf}
+        </h3>
+        <ReportTable
+          headers={[
+            "Contract",
+            "Customer",
+            "Term",
+            "Price",
+            "Monthly",
+            "Earned to date",
+            "Deferred",
+            "Current",
+            "Noncurrent",
+          ]}
+        >
+          {data.rows.map((r) => (
+            <Fragment key={r.id}>
+              <tr
+                className="cursor-pointer hover:bg-base-200/60"
+                onClick={() => setExpandedId((id) => (id === r.id ? null : r.id))}
+              >
+                <td>
+                  <span className="font-medium">{r.name}</span>
+                  <span className="mt-0.5 block text-[11px] opacity-60">
+                    {r.billingMethod} · {r.status}
+                    {expandedId === r.id ? " · hide schedule" : " · view schedule"}
+                  </span>
+                </td>
+                <td>{r.customerName}</td>
+                <td className="whitespace-nowrap text-xs">
+                  {r.startDate} → {r.endDate}
+                  <span className="mt-0.5 block opacity-60">
+                    {r.monthsElapsed}/{r.monthsTotal} mo
+                  </span>
+                </td>
+                <MoneyCell n={r.contractPrice} />
+                <MoneyCell n={r.monthlyRecognition} />
+                <MoneyCell n={r.recognizedToDate} />
+                <MoneyCell n={r.deferredBalance} />
+                <MoneyCell n={r.currentPortion} />
+                <MoneyCell n={r.noncurrentPortion} />
+              </tr>
+              {expandedId === r.id ? (
+                <tr>
+                  <td colSpan={9} className="bg-base-200/40 p-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-70">
+                      Recognition schedule
+                    </p>
+                    <div className="max-h-64 overflow-auto">
+                      <table className="table table-xs">
+                        <thead>
+                          <tr>
+                            <th>Month</th>
+                            <th className="text-right">Beginning</th>
+                            <th className="text-right">Recognized</th>
+                            <th className="text-right">Ending</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {r.schedule.map((m) => (
+                            <tr key={m.month}>
+                              <td>{monthLabel(m.month)}</td>
+                              <td className="text-right tabular-nums">{formatReportMoney(m.beginningBalance)}</td>
+                              <td className="text-right tabular-nums">{formatReportMoney(m.recognized)}</td>
+                              <td className="text-right tabular-nums">{formatReportMoney(m.endingBalance)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
+          ))}
+          <tr className="border-t-2 font-bold">
+            <td colSpan={3}>Total</td>
+            <MoneyCell n={data.totalContractPrice} bold />
+            <td />
+            <MoneyCell n={data.totalRecognized} bold />
+            <MoneyCell n={data.totalDeferred} bold />
+            <MoneyCell n={data.totalCurrent} bold />
+            <MoneyCell n={data.totalNoncurrent} bold />
+          </tr>
+        </ReportTable>
+      </section>
+
+      <section>
+        <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
+          Consolidated monthly rollforward
+        </h3>
+        <ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
+          {data.consolidated.map((m) => (
+            <tr key={m.month}>
+              <td>{monthLabel(m.month)}</td>
+              <MoneyCell n={m.beginningBalance} />
+              <MoneyCell n={m.billings} />
+              <MoneyCell n={m.recognized} />
+              <MoneyCell n={m.endingBalance} />
+            </tr>
+          ))}
+        </ReportTable>
+      </section>
+
+      <PolicyNote>{ACCOUNTING_POLICIES.deferredRevenue}</PolicyNote>
+    </div>
+  );
+}
+
 function PoliciesReport() {
   const entries: { key: string; title: string; body: string }[] = [
     { key: "framework", title: "Framework", body: ACCOUNTING_POLICIES.framework },
     { key: "basis", title: "Basis of accounting", body: ACCOUNTING_POLICIES.basis },
     { key: "revenue", title: "Revenue recognition", body: ACCOUNTING_POLICIES.revenue },
+    { key: "deferred", title: "Deferred revenue", body: ACCOUNTING_POLICIES.deferredRevenue },
+    { key: "periodClose", title: "Period close", body: ACCOUNTING_POLICIES.periodClose },
     { key: "receivables", title: "Accounts receivable", body: ACCOUNTING_POLICIES.receivables },
     { key: "allowance", title: "Allowance for credit losses", body: ACCOUNTING_POLICIES.allowance },
     { key: "cogs", title: "Cost of services", body: ACCOUNTING_POLICIES.cogs },
