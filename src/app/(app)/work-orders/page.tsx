@@ -109,6 +109,26 @@ export default function WorkOrdersPage() {
     load();
   }, []);
 
+  // Prefill create form from Equipment "Create work order" links (manager).
+  useEffect(() => {
+    if (searchParams.get("new") !== "1") return;
+    const customerId = searchParams.get("customer_id") ?? "";
+    const equipmentId = searchParams.get("equipment_id") ?? "";
+    setForm({
+      ...emptyWorkOrderForm,
+      customer_id: customerId,
+      equipment_id: equipmentId,
+    });
+    setShowForm(true);
+    setError(null);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("new");
+    params.delete("customer_id");
+    params.delete("equipment_id");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+  }, [searchParams, pathname, router]);
+
   useEffect(() => {
     setFilters((prev) => ({ ...prev, status: statusFilter ?? "" }));
   }, [statusFilter]);

@@ -3,6 +3,7 @@ export type EquipmentCoverage = {
   contractId?: string;
   contractName?: string;
   contractType?: string;
+  contractPrice?: number;
   endDate?: string;
 };
 
@@ -13,6 +14,7 @@ export type ContractEquipmentLink = {
         id: string;
         name: string;
         contract_type: string;
+        contract_price: number | string;
         status: string;
         start_date: string;
         end_date: string;
@@ -21,6 +23,7 @@ export type ContractEquipmentLink = {
         id: string;
         name: string;
         contract_type: string;
+        contract_price: number | string;
         status: string;
         start_date: string;
         end_date: string;
@@ -29,7 +32,7 @@ export type ContractEquipmentLink = {
 };
 
 const CONTRACT_SELECT =
-  "equipment_id, service_contracts(id, name, contract_type, status, start_date, end_date)";
+  "equipment_id, service_contracts(id, name, contract_type, contract_price, status, start_date, end_date)";
 
 function resolveContract(link: ContractEquipmentLink) {
   const raw = link.service_contracts;
@@ -64,6 +67,7 @@ export function buildCoverageMap(
       contractId: contract.id,
       contractName: contract.name,
       contractType: contract.contract_type,
+      contractPrice: Number(contract.contract_price) || 0,
       endDate: contract.end_date,
     });
   }

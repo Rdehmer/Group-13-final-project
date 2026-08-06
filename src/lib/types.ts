@@ -56,6 +56,14 @@ export type Equipment = {
   last_service_date: string | null;
   next_scheduled_service_date: string | null;
   notes: string | null;
+  /** Soft estimate — not a GAAP fixed-asset ledger field. */
+  replacement_cost?: number | null;
+  /** Soft residual estimate for accounting discussions. */
+  estimated_residual?: number | null;
+  /** Why retired / OOS — supports write-off conversations. */
+  retirement_note?: string | null;
+  /** Storage path in equipment-nameplates bucket. */
+  nameplate_path?: string | null;
   created_at: string;
   updated_at: string;
 };
