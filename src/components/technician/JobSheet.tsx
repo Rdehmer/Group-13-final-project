@@ -114,6 +114,7 @@ export function JobSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [showCustomerPhone, setShowCustomerPhone] = useState(false);
   const [showProof, setShowProof] = useState(false);
   const address = jobAddress(job);
   const phone = jobPhone(job);
@@ -157,6 +158,7 @@ export function JobSheet({
     setScopeAck(false);
     setShowAddEntry(false);
     setShowProof(false);
+    setShowCustomerPhone(false);
     setNotes(parseDiagnosticNotes(job));
     resetAddEntryForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally when job.id changes
@@ -439,12 +441,38 @@ export function JobSheet({
             </p>
           ) : null}
           {(phone || address) && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {phone ? (
-                <a href={telHref(phone)} className="btn btn-outline btn-sm min-h-11 gap-1">
-                  <Phone className="h-4 w-4" />
-                  Call customer
-                </a>
+                showCustomerPhone ? (
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2">
+                    <Phone className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium uppercase tracking-wide opacity-60">Customer number</p>
+                      <a
+                        href={telHref(phone)}
+                        className="block truncate text-base font-semibold text-primary underline-offset-2 hover:underline"
+                      >
+                        {phone}
+                      </a>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setShowCustomerPhone(false)}
+                    >
+                      Hide
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm min-h-11 gap-1"
+                    onClick={() => setShowCustomerPhone(true)}
+                  >
+                    <Phone className="h-4 w-4" />
+                    Call customer
+                  </button>
+                )
               ) : null}
               {address ? (
                 <a
@@ -606,7 +634,7 @@ export function JobSheet({
         <p className="text-xs opacity-60" aria-live="polite">
           {step === "arrived" && "Tap Arrived when you reach the site."}
           {step === "working" && "Tap In Progress to start a Working timesheet (clock runs until Complete)."}
-          {step === "complete" && "Tap Complete to clock out Working and capture customer sign-off."}
+          {step === "complete" && "Tap Complete — customer must sign off with initials or a signature."}
           {step === "done" && "This job is closed out."}
         </p>
       </section>
@@ -868,7 +896,7 @@ export function JobSheet({
           onCancel={() => setShowProof(false)}
           onCompleted={async () => {
             setShowProof(false);
-            setMessage("Job completed with customer sign-off.");
+            setMessage("Job completed with customer initials or signature on file.");
             await onRefresh();
             onBack();
           }}

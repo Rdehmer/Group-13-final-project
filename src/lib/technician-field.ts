@@ -272,7 +272,7 @@ export function nextStepLabel(
 ): { label: string; action: "arrived" | "working" | "complete" | null } {
   if (step === "arrived") return { label: "Mark Arrived", action: "arrived" };
   if (step === "working") return { label: "Start Working", action: "working" };
-  if (step === "complete") return { label: "Complete & Sign-off", action: "complete" };
+  if (step === "complete") return { label: "Complete (customer sign-off)", action: "complete" };
   return { label: "Job closed", action: null };
 }
 

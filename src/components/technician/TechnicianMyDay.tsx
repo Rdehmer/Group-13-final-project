@@ -69,6 +69,7 @@ function JobCard({
   const active = isActivelyWorking(job);
   const hint = relativeScheduleHint(job);
   const step = nextChecklistStep(job);
+  const [showCustomerPhone, setShowCustomerPhone] = useState(false);
 
   return (
     <div
@@ -119,16 +120,47 @@ function JobCard({
         </div>
       </button>
       {(address || phone) && (
-        <div className="flex flex-wrap gap-2 border-t border-base-200 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-2 border-t border-base-200 px-4 py-2">
           {phone ? (
-            <a
-              href={telHref(phone)}
-              className="btn btn-outline btn-sm min-h-11 gap-1"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Phone className="h-4 w-4" />
-              Call
-            </a>
+            showCustomerPhone ? (
+              <div
+                className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Phone className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                <div className="min-w-0">
+                  <p className="text-xs font-medium uppercase tracking-wide opacity-60">Customer number</p>
+                  <a
+                    href={telHref(phone)}
+                    className="block truncate text-base font-semibold text-primary underline-offset-2 hover:underline"
+                  >
+                    {phone}
+                  </a>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowCustomerPhone(false);
+                  }}
+                >
+                  Hide
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm min-h-11 gap-1"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowCustomerPhone(true);
+                }}
+              >
+                <Phone className="h-4 w-4" />
+                Call customer
+              </button>
+            )
           ) : null}
           {address ? (
             <a
@@ -152,7 +184,7 @@ function stepCta(job: FieldJob): string {
   const step = nextChecklistStep(job);
   if (step === "arrived") return "Start → Arrived";
   if (step === "working") return "Continue → In Progress";
-  if (step === "complete") return "Finish → Sign-off";
+  if (step === "complete") return "Finish → initials or signature";
   return "View job";
 }
 

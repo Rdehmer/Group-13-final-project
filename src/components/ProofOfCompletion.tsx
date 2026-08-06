@@ -30,10 +30,14 @@ const MAX_PHOTO_BYTES = 1024 * 1024;
 const MAX_PHOTO_DIMENSION = 1600;
 
 function requirementText(requirement: CompletionProofRequirement) {
-  if (requirement === "both") return "This job requires a photo and customer signature.";
+  if (requirement === "both") {
+    return "Customer must sign off (initials or signature) and a finished-work photo is required.";
+  }
   if (requirement === "photo") return "This job requires a finished-work photo.";
-  if (requirement === "signature") return "This job requires a customer signature.";
-  return "Add a finished-work photo or customer signature.";
+  if (requirement === "signature") {
+    return "Ask the customer to sign off with their initials or signature before leaving.";
+  }
+  return "Ask the customer to sign off with initials or a signature. A finished-work photo is optional.";
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement, quality: number) {
@@ -92,12 +96,16 @@ export function ProofOfCompletion({
   const drawingRef = useRef(false);
   const hasInkRef = useRef(false);
 
+  // Prefer customer sign-off first (initials or signature) unless photo-only.
   const [activeTab, setActiveTab] = useState<"photo" | "signature">(
-    requirement === "signature" ? "signature" : "photo",
+    requirement === "photo" ? "photo" : "signature",
   );
+  const [signMethod, setSignMethod] = useState<"signature" | "initials">("signature");
+  const [initials, setInitials] = useState("");
   const [photo, setPhoto] = useState<PhotoProof | null>(null);
   const [signatureData, setSignatureData] = useState<string | null>(null);
   const [signatureCapturedAt, setSignatureCapturedAt] = useState<string | null>(null);
+  const [signKind, setSignKind] = useState<"signature" | "initials" | null>(null);
   const [processingPhoto, setProcessingPhoto] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +128,7 @@ export function ProofOfCompletion({
   }, [photo]);
 
   useEffect(() => {
-    if (activeTab !== "signature" || signatureData) return;
+    if (activeTab !== "signature" || signatureData || signMethod !== "signature") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -139,7 +147,7 @@ export function ProofOfCompletion({
     context.lineWidth = 3;
     context.lineCap = "round";
     context.lineJoin = "round";
-  }, [activeTab, signatureData]);
+  }, [activeTab, signatureData, signMethod]);
 
   function canvasPoint(event: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -183,16 +191,18 @@ export function ProofOfCompletion({
   function clearSignature() {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-
-    context.save();
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.restore();
+    if (canvas && context) {
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.restore();
+    }
     hasInkRef.current = false;
     setSignatureData(null);
     setSignatureCapturedAt(null);
+    setSignKind(null);
+    setInitials("");
     setError(null);
   }
 
@@ -211,6 +221,42 @@ export function ProofOfCompletion({
 
     setSignatureData(data);
     setSignatureCapturedAt(new Date().toISOString());
+    setSignKind("signature");
+    setError(null);
+  }
+
+  function saveInitials() {
+    const cleaned = initials.trim().toUpperCase().replace(/[^A-Z.]/g, "");
+    if (cleaned.length < 1 || cleaned.length > 4) {
+      setError("Enter 1–4 letters for the customer’s initials (example: JD).");
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 280;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setError("Could not capture initials on this device.");
+      return;
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#111827";
+    context.font = "bold 120px Georgia, 'Times New Roman', serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(cleaned, canvas.width / 2, canvas.height / 2 - 12);
+    context.font = "24px system-ui, sans-serif";
+    context.fillStyle = "#6b7280";
+    context.fillText("Customer initials sign-off", canvas.width / 2, canvas.height - 36);
+
+    const data = canvas.toDataURL("image/png");
+    setSignatureData(data);
+    setSignatureCapturedAt(new Date().toISOString());
+    setSignKind("initials");
+    setInitials(cleaned);
     setError(null);
   }
 
@@ -248,7 +294,7 @@ export function ProofOfCompletion({
 
   async function markCompleted() {
     if (!proofSatisfied) {
-      setError("Photo or signature required to complete this job.");
+      setError("Customer initials or signature required to complete this job.");
       return;
     }
 
@@ -341,11 +387,22 @@ export function ProofOfCompletion({
     <dialog className="modal modal-open" aria-labelledby="proof-of-completion-title">
       <div className="modal-box max-w-3xl border-2 border-base-content/20 p-4 sm:p-6">
         <h2 id="proof-of-completion-title" className="text-2xl font-bold">
-          Proof of Completion
+          Customer sign-off
         </h2>
         <p className="mt-1 text-base font-medium opacity-80">{requirementText(requirement)}</p>
 
         <div role="tablist" aria-label="Proof type" className="mt-5 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "signature"}
+            className={`btn min-h-14 text-base ${activeTab === "signature" ? "btn-primary" : "btn-outline"}`}
+            onClick={() => setActiveTab("signature")}
+          >
+            <PenLine className="h-5 w-5" />
+            Initials / Signature {signatureData ? <Check className="h-5 w-5" aria-label="saved" /> : null}
+            {requiresSignature ? <span className="sr-only">required</span> : null}
+          </button>
           <button
             type="button"
             role="tab"
@@ -356,17 +413,6 @@ export function ProofOfCompletion({
             <Camera className="h-5 w-5" />
             Photo {photo ? <Check className="h-5 w-5" aria-label="captured" /> : null}
             {requiresPhoto ? <span className="sr-only">required</span> : null}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "signature"}
-            className={`btn min-h-14 text-base ${activeTab === "signature" ? "btn-primary" : "btn-outline"}`}
-            onClick={() => setActiveTab("signature")}
-          >
-            <PenLine className="h-5 w-5" />
-            Signature {signatureData ? <Check className="h-5 w-5" aria-label="saved" /> : null}
-            {requiresSignature ? <span className="sr-only">required</span> : null}
           </button>
         </div>
 
@@ -428,36 +474,99 @@ export function ProofOfCompletion({
             <p className="mt-2 text-sm opacity-70">Photos are resized and compressed below 1 MB before upload.</p>
           </section>
         ) : (
-          <section className="mt-4" aria-label="Customer signature">
+          <section className="mt-4" aria-label="Customer sign-off">
             {signatureData ? (
               <div>
+                <p className="mb-2 text-sm font-semibold">
+                  Saved customer {signKind === "initials" ? "initials" : "signature"}
+                </p>
                 <div className="relative h-[260px] overflow-hidden rounded-box border-2 border-base-content/40 bg-white">
-                  <Image src={signatureData} alt="Saved customer signature" fill unoptimized className="object-contain" />
+                  <Image
+                    src={signatureData}
+                    alt={signKind === "initials" ? "Saved customer initials" : "Saved customer signature"}
+                    fill
+                    unoptimized
+                    className="object-contain"
+                  />
                 </div>
                 <button type="button" className="btn btn-outline mt-3 min-h-12 w-full" onClick={clearSignature}>
-                  Clear and sign again
+                  Clear and capture again
                 </button>
               </div>
             ) : (
               <>
-                <p className="mb-2 text-sm font-semibold">Customer signature</p>
-                <canvas
-                  ref={canvasRef}
-                  className="h-[260px] w-full touch-none rounded-box border-2 border-base-content/50 bg-white"
-                  onPointerDown={startSignature}
-                  onPointerMove={drawSignature}
-                  onPointerUp={stopSignature}
-                  onPointerCancel={stopSignature}
-                  aria-label="Signature pad"
-                />
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  <button type="button" className="btn btn-outline min-h-12" onClick={clearSignature}>
-                    Clear
+                <div className="mb-3 grid grid-cols-2 gap-2" role="group" aria-label="Sign-off method">
+                  <button
+                    type="button"
+                    className={`btn min-h-12 ${signMethod === "signature" ? "btn-primary" : "btn-outline"}`}
+                    onClick={() => {
+                      setSignMethod("signature");
+                      setError(null);
+                    }}
+                  >
+                    Signature
                   </button>
-                  <button type="button" className="btn btn-primary min-h-12" onClick={saveSignature}>
-                    Save Signature
+                  <button
+                    type="button"
+                    className={`btn min-h-12 ${signMethod === "initials" ? "btn-primary" : "btn-outline"}`}
+                    onClick={() => {
+                      setSignMethod("initials");
+                      setError(null);
+                    }}
+                  >
+                    Initials
                   </button>
                 </div>
+
+                {signMethod === "initials" ? (
+                  <div className="space-y-3">
+                    <label className="form-control">
+                      <span className="label-text font-semibold">Customer initials</span>
+                      <input
+                        className="input input-bordered input-lg mt-1 w-full text-center text-2xl font-bold tracking-[0.3em] uppercase"
+                        value={initials}
+                        maxLength={4}
+                        placeholder="JD"
+                        autoComplete="off"
+                        onChange={(event) =>
+                          setInitials(event.target.value.toUpperCase().replace(/[^A-Z.]/g, "").slice(0, 4))
+                        }
+                      />
+                    </label>
+                    <p className="text-sm opacity-70">
+                      Have the customer type their initials (1–4 letters), then save the sign-off.
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button type="button" className="btn btn-outline min-h-12" onClick={clearSignature}>
+                        Clear
+                      </button>
+                      <button type="button" className="btn btn-primary min-h-12" onClick={saveInitials}>
+                        Save initials
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="mb-2 text-sm font-semibold">Customer signature pad</p>
+                    <canvas
+                      ref={canvasRef}
+                      className="h-[260px] w-full touch-none rounded-box border-2 border-base-content/50 bg-white"
+                      onPointerDown={startSignature}
+                      onPointerMove={drawSignature}
+                      onPointerUp={stopSignature}
+                      onPointerCancel={stopSignature}
+                      aria-label="Signature pad"
+                    />
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <button type="button" className="btn btn-outline min-h-12" onClick={clearSignature}>
+                        Clear
+                      </button>
+                      <button type="button" className="btn btn-primary min-h-12" onClick={saveSignature}>
+                        Save signature
+                      </button>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </section>
@@ -479,7 +588,7 @@ export function ProofOfCompletion({
             onClick={markCompleted}
             disabled={!proofSatisfied || submitting || processingPhoto}
           >
-            {submitting ? "Completing…" : "Mark as Completed"}
+            {submitting ? "Completing…" : "Submit sign-off & complete"}
           </button>
         </div>
       </div>
