@@ -65,7 +65,15 @@ Extra technicians: tech2–tech5@equipmentiq-demo.test
 
 ## Seed data included
 
-At least: 10 customers, 20 equipment, 10 contracts, 30 work orders, 5 technicians, 20 parts, 15 invoices, 10 payments, plus edge cases (unprofitable contract, emergency/critical, overdue PM, waiting on parts, warranty, partial/past-due/disputed invoices, expired/renewed contracts, pending additional work, completed-unbilled, low stock).
+**Minimal C2C scaffold** (migration `20260808230000_minimal_c2c_seed_reset`):
+
+- **Kept:** demo logins/profiles, parts catalog, vendor1, company settings
+- **Customers:** Northwind Cold Storage (`customer1`, Active contract) and Summit Cold Express (`customer2`, no contract / hot prospect)
+- **Equipment:** 2 units each (Northwind: Blast Freezer A, Compressor Rack 1)
+- **Contracts:** one Active Northwind PM Gold (started 2026-01-01 so service requests are allowed)
+- **Cleared:** work orders, invoices, payments, labor, time entries, inbox threads, showcase CRM customers
+
+Walk the happy path empty: customer request → manager assign → tech complete → billing invoice/pay.
 
 ## Important limits (first version)
 
