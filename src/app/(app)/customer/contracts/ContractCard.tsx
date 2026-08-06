@@ -1,4 +1,3 @@
-import type { Ref } from "react";
 import Link from "next/link";
 import {
   CONTRACT_TYPE_HELP,
@@ -9,6 +8,7 @@ import {
   formatRenewalNote,
   inferContractTier,
   isExpiringSoon,
+  formatContractDisplayName,
   tierBadgeClass,
   type CustomerContract,
 } from "@/lib/contracts";
@@ -26,17 +26,14 @@ import { StatusBadge, statusTone } from "@/components/ui";
 type Props = {
   contract: CustomerContract;
   standing?: ContractPaymentStanding | null;
-  highlighted?: boolean;
-  highlightRef?: Ref<HTMLElement>;
 };
 
 export function ContractCard({
   contract,
   standing: standingProp,
-  highlighted = false,
-  highlightRef,
 }: Props) {
   const tier = inferContractTier(contract.name);
+  const displayName = formatContractDisplayName(contract.name, contract.status);
   const renewal = formatRenewalNote(contract.renewal_option);
   const expiringSoon = contract.status.toLowerCase() === "active" && isExpiringSoon(contract.end_date);
   const isActive = contract.status.toLowerCase() === "active" || contract.status.toLowerCase() === "renewed";
@@ -47,22 +44,12 @@ export function ContractCard({
   const deductible = resolvedDeductible(contract);
 
   return (
-    <article
-      ref={highlightRef}
-      className={`card bg-base-100 shadow transition-all duration-500 ${
-        highlighted
-          ? "ring-2 ring-primary/40 border border-primary/25 bg-primary/[0.04] shadow-md"
-          : ""
-      }`}
-    >
+    <article className="card bg-base-100 shadow">
       <div className="card-body gap-4">
-        {highlighted ? (
-          <p className="text-xs font-medium uppercase tracking-wide text-primary">Just Submitted</p>
-        ) : null}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="card-title text-base">{contract.name}</h2>
+              <h2 className="card-title text-base">{displayName}</h2>
               {tier ? (
                 <span className={`badge badge-sm ${tierBadgeClass(tier)}`}>
                   {tier.charAt(0).toUpperCase() + tier.slice(1)}

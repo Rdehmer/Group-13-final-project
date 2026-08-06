@@ -22,7 +22,8 @@ import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
-import { countUnreadInboxThreads } from "@/lib/customer-inbox";
+import { EquipmentIQMark } from "@/components/brand/EquipmentIQLogo";
+import { countUnreadInboxThreads, CUSTOMER_INBOX_UNREAD_EVENT } from "@/lib/customer-inbox";
 import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
 
 const CUSTOMER_HOME = "/customer";
@@ -356,10 +357,13 @@ function CustomerInboxHeaderControl({
 
   useEffect(() => {
     void refreshUnread();
-    const id = window.setInterval(() => {
-      void refreshUnread();
-    }, UNREAD_POLL_MS);
-    return () => window.clearInterval(id);
+    const onUnreadChanged = () => void refreshUnread();
+    window.addEventListener(CUSTOMER_INBOX_UNREAD_EVENT, onUnreadChanged);
+    const id = window.setInterval(() => void refreshUnread(), UNREAD_POLL_MS);
+    return () => {
+      window.removeEventListener(CUSTOMER_INBOX_UNREAD_EVENT, onUnreadChanged);
+      window.clearInterval(id);
+    };
   }, [refreshUnread, pathname]);
 
   return (
@@ -387,6 +391,7 @@ function SidebarNavBody({
   unreadInbox,
   badgeForHref,
   profileEmail,
+  isCustomer,
 }: {
   pathname: string;
   navItems: NavItem[];
@@ -395,21 +400,30 @@ function SidebarNavBody({
   unreadInbox: number;
   badgeForHref: (href: string) => number;
   profileEmail: string;
+  isCustomer: boolean;
 }) {
   return (
     <>
       <div className="eq-sidebar-brand">
-        <div className="eq-brand-mark">
-          <Image
-            src="/equipmentiq-logo.png"
-            alt="EquipmentIQ"
-            width={200}
-            height={48}
-            className="eq-brand-logo"
-            priority
-          />
-        </div>
-        <p className="eq-brand-tag">Service operations</p>
+        {isCustomer ? (
+          <span aria-label="EquipmentIQ">
+            <EquipmentIQMark className="h-11 w-11" pop />
+          </span>
+        ) : (
+          <>
+            <div className="eq-brand-mark">
+              <Image
+                src="/equipmentiq-logo.png"
+                alt="EquipmentIQ"
+                width={200}
+                height={48}
+                className="eq-brand-logo"
+                priority
+              />
+            </div>
+            <p className="eq-brand-tag">Service operations</p>
+          </>
+        )}
       </div>
 
       <div className="px-3 pb-2">
@@ -472,7 +486,7 @@ function SidebarNavBody({
 
       <div className="eq-sidebar-foot">
         <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
-        <p className="mt-0.5 text-[10px] text-white/30">Field service · Billing · Operations</p>
+        <p className="mt-0.5 text-[10px] text-white/30">Field service ?? Billing ?? Operations</p>
       </div>
     </>
   );
@@ -621,6 +635,7 @@ export function AppShell({
     unreadInbox,
     badgeForHref,
     profileEmail: profile.email,
+    isCustomer,
   };
 
   return (
@@ -683,54 +698,62 @@ export function AppShell({
                   </div>
                 </div>
 
-                <div className="eq-search min-w-0 flex-1">
-                  <Search className="eq-search-icon" strokeWidth={1.75} />
-                  <input
-                    type="search"
-                    className="eq-search-input"
-                    placeholder="Search customers, invoices, work orders…"
-                    aria-label="Search"
-                    readOnly
-                    onFocus={(e) => e.currentTarget.blur()}
-                    title="Search (coming soon)"
-                  />
-                </div>
+                {!isCustomer ? (
+                  <div className="eq-search min-w-0 flex-1">
+                    <Search className="eq-search-icon" strokeWidth={1.75} />
+                    <input
+                      type="search"
+                      className="eq-search-input"
+                      placeholder="Search customers, invoices, work orders?"
+                      aria-label="Search"
+                      readOnly
+                      onFocus={(e) => e.currentTarget.blur()}
+                      title="Search (coming soon)"
+                    />
+                  </div>
+                ) : (
+                  <div className="min-w-0 flex-1" aria-hidden />
+                )}
 
                 <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-                  {!gateActive ? (
+                  {!isCustomer && !gateActive ? (
                     <Link href={createHref} className="eq-create-btn">
                       <Plus className="h-4 w-4" strokeWidth={2.25} />
                       <span className="hidden sm:inline">New</span>
                     </Link>
                   ) : null}
 
-                  <div className="eq-top-divider hidden sm:block" />
+                  {!isCustomer ? <div className="eq-top-divider hidden sm:block" /> : null}
 
                   {inboxControl}
-                  <button
-                    type="button"
-                    className="eq-top-icon"
-                    aria-label="Notifications"
-                    title="Notifications"
-                  >
-                    <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                  </button>
-                  <button
-                    type="button"
-                    className="eq-top-icon hidden sm:inline-flex"
-                    aria-label="Help"
-                    title="Help"
-                  >
-                    <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                  </button>
-                  <Link
-                    href="/settings"
-                    className="eq-top-icon hidden sm:inline-flex"
-                    aria-label="Settings"
-                    title="Settings"
-                  >
-                    <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                  </Link>
+                  {!isCustomer ? (
+                    <>
+                      <button
+                        type="button"
+                        className="eq-top-icon"
+                        aria-label="Notifications"
+                        title="Notifications"
+                      >
+                        <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        className="eq-top-icon hidden sm:inline-flex"
+                        aria-label="Help"
+                        title="Help"
+                      >
+                        <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </button>
+                      <Link
+                        href="/settings"
+                        className="eq-top-icon hidden sm:inline-flex"
+                        aria-label="Settings"
+                        title="Settings"
+                      >
+                        <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </Link>
+                    </>
+                  ) : null}
 
                   <div className="eq-user-menu">
                     <span className="eq-avatar" aria-hidden>
@@ -796,54 +819,62 @@ export function AppShell({
                 </div>
               </div>
 
-              <div className="eq-search min-w-0 flex-1">
-                <Search className="eq-search-icon" strokeWidth={1.75} />
-                <input
-                  type="search"
-                  className="eq-search-input"
-                  placeholder="Search customers, invoices, work orders…"
-                  aria-label="Search"
-                  readOnly
-                  onFocus={(e) => e.currentTarget.blur()}
-                  title="Search (coming soon)"
-                />
-              </div>
+              {!isCustomer ? (
+                <div className="eq-search min-w-0 flex-1">
+                  <Search className="eq-search-icon" strokeWidth={1.75} />
+                  <input
+                    type="search"
+                    className="eq-search-input"
+                    placeholder="Search customers, invoices, work orders?"
+                    aria-label="Search"
+                    readOnly
+                    onFocus={(e) => e.currentTarget.blur()}
+                    title="Search (coming soon)"
+                  />
+                </div>
+              ) : (
+                <div className="min-w-0 flex-1" aria-hidden />
+              )}
 
               <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-                {!gateActive ? (
+                {!isCustomer && !gateActive ? (
                   <Link href={createHref} className="eq-create-btn">
                     <Plus className="h-4 w-4" strokeWidth={2.25} />
                     <span className="hidden sm:inline">New</span>
                   </Link>
                 ) : null}
 
-                <div className="eq-top-divider hidden sm:block" />
+                {!isCustomer ? <div className="eq-top-divider hidden sm:block" /> : null}
 
                 {inboxControl}
-                <button
-                  type="button"
-                  className="eq-top-icon"
-                  aria-label="Notifications"
-                  title="Notifications"
-                >
-                  <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                </button>
-                <button
-                  type="button"
-                  className="eq-top-icon hidden sm:inline-flex"
-                  aria-label="Help"
-                  title="Help"
-                >
-                  <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                </button>
-                <Link
-                  href="/settings"
-                  className="eq-top-icon hidden sm:inline-flex"
-                  aria-label="Settings"
-                  title="Settings"
-                >
-                  <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                </Link>
+                {!isCustomer ? (
+                  <>
+                    <button
+                      type="button"
+                      className="eq-top-icon"
+                      aria-label="Notifications"
+                      title="Notifications"
+                    >
+                      <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    </button>
+                    <button
+                      type="button"
+                      className="eq-top-icon hidden sm:inline-flex"
+                      aria-label="Help"
+                      title="Help"
+                    >
+                      <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    </button>
+                    <Link
+                      href="/settings"
+                      className="eq-top-icon hidden sm:inline-flex"
+                      aria-label="Settings"
+                      title="Settings"
+                    >
+                      <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    </Link>
+                  </>
+                ) : null}
 
                 <div className="eq-user-menu">
                   <span className="eq-avatar" aria-hidden>

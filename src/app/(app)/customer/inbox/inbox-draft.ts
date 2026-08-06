@@ -14,11 +14,10 @@ function stageSpecificAsk(status: string): string {
     case "Requested":
       return "Could you share an update on review and when scheduling might begin?";
     case "Awaiting Approval":
-      return "Could you let me know the review timeline and next steps?";
+    case "Assigned":
+      return "Please confirm the visit window or let me know if the date has changed.";
     case "Scheduled":
       return "Please confirm the visit window or let me know if the date has changed.";
-    case "Assigned":
-      return "Do you have an estimated arrival time for the technician?";
     case "In Progress":
     case "Ready for Review":
       return "Is there anything you need from me on-site, or an updated completion estimate?";

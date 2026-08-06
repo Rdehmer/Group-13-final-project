@@ -27,7 +27,7 @@ export function LoginWelcomeSplash({ exiting = false, displayName, role }: Props
       <div className="customer-welcome-content flex w-full max-w-md flex-col items-center text-center">
         <div className="customer-welcome-brand-block flex flex-col items-center gap-2.5">
           <EquipmentIQLogo variant="splash" onDark />
-          <h1 className="customer-welcome-title text-2xl font-bold sm:text-3xl">{greeting}</h1>
+          <h1 className="customer-welcome-title !text-white text-2xl font-bold sm:text-3xl">{greeting}</h1>
         </div>
 
         <p className="customer-welcome-subtitle mt-2 text-sm opacity-80 sm:text-base">{subtitle}</p>
