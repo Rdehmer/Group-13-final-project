@@ -45,12 +45,17 @@ export default function InvoiceCashReportsPage() {
   return (
     <div>
       <PageHeader
-        title="Reports-Invoice & Cash"
+        title="Invoice & Cash"
         description="Revenue recognition on completed work, with invoice, payment, and AR detail"
         actions={
-          <Link href="/reports" className="btn btn-ghost btn-sm">
-            Reports-Contracts
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/reports" className="btn btn-ghost btn-sm">
+              ← Financial Reports
+            </Link>
+            <Link href="/reports/contracts" className="btn btn-outline btn-sm">
+              Contract profitability
+            </Link>
+          </div>
         }
       />
       <InvoiceCashReport />

@@ -31,13 +31,14 @@ import {
   deleteEmptyOpenBatch,
   exportBatch,
   exportBatchCsv,
-  isSchemaError,
+  exportBatchJournalCsv,
   loadBatchDetail,
   loadUnbatchedInvoices,
   loadUnbatchedPayments,
   postBatch,
   removeInvoiceLine,
   removePaymentLine,
+  unexportBatch,
   unpostBatch,
   type InvoiceForBatch,
   type PaymentForBatch,
@@ -71,11 +72,6 @@ export default function BatchDetailPage() {
     setLoading(true);
     setError(null);
     const detail = await loadBatchDetail(supabase, id);
-    if (isSchemaError(detail.error)) {
-      setError(detail.error);
-      setLoading(false);
-      return;
-    }
     if (detail.error) setError(detail.error);
     setBatch(detail.batch);
     setInvoices(detail.invoices);
@@ -133,13 +129,17 @@ export default function BatchDetailPage() {
     setBusy(false);
   }
 
-  async function doExport() {
+  async function doExport(kind: "transactions" | "journal" | "both" = "both") {
     if (!batch) return;
     setBusy(true);
     setError(null);
     const { data } = await supabase.auth.getUser();
-    // Always download CSV; mark exported if posted
-    exportBatchCsv(batch, invoices, payments);
+    if (kind === "transactions" || kind === "both") {
+      exportBatchCsv(batch, invoices, payments);
+    }
+    if (kind === "journal" || kind === "both") {
+      exportBatchJournalCsv(batch, invoices, payments);
+    }
     if (batch.status === "Posted") {
       const { error: err } = await exportBatch(supabase, batch.id, data.user?.id ?? null);
       if (err) setError(err);
@@ -153,6 +153,28 @@ export default function BatchDetailPage() {
         });
         await load();
       }
+    }
+    setBusy(false);
+  }
+
+  async function doUnexport() {
+    if (!batch) return;
+    if (!confirm("Return this batch to Posted so it can be re-exported?")) return;
+    setBusy(true);
+    setError(null);
+    const { data } = await supabase.auth.getUser();
+    const { error: err } = await unexportBatch(supabase, batch.id);
+    if (err) setError(err);
+    else {
+      await logActivity(supabase, {
+        userId: data.user?.id ?? null,
+        action: "unexported",
+        recordType: "accounting_batch",
+        recordId: batch.id,
+        previousValue: "Exported",
+        newValue: "Posted",
+      });
+      await load();
     }
     setBusy(false);
   }
@@ -269,6 +291,25 @@ export default function BatchDetailPage() {
         </div>
       ) : null}
 
+      {isOpen ? (
+        <div className="alert alert-warning text-sm">
+          <Unlock className="h-4 w-4" />
+          <span>Open batch — add or remove lines, then <strong>Post</strong> to lock for export.</span>
+        </div>
+      ) : null}
+      {isPosted ? (
+        <div className="alert alert-info text-sm">
+          <Lock className="h-4 w-4" />
+          <span>Posted — lines are locked. Export downloads G/L files and marks exported.</span>
+        </div>
+      ) : null}
+      {isExported ? (
+        <div className="alert alert-success text-sm">
+          <Send className="h-4 w-4" />
+          <span>Exported to accounting. Re-download files anytime, or unexport to re-open export.</span>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-3 shadow-sm">
         <StatusBadge label={batch.status} tone={statusTone(batch.status)} />
         <span className="badge badge-ghost capitalize">{batch.batch_type}</span>
@@ -324,8 +365,16 @@ export default function BatchDetailPage() {
         ) : null}
         {isPosted ? (
           <>
-            <button type="button" className="btn btn-primary gap-1" disabled={busy} onClick={() => void doExport()}>
-              <Send className="h-4 w-4" /> Export &amp; mark exported
+            <button type="button" className="btn btn-primary gap-1" disabled={busy} onClick={() => void doExport("both")}>
+              <Send className="h-4 w-4" /> Export journal + transactions
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              disabled={busy}
+              onClick={() => void doExport("journal")}
+            >
+              <Download className="h-4 w-4" /> Journal CSV only
             </button>
             <button type="button" className="btn btn-outline btn-sm gap-1" disabled={busy} onClick={() => void doUnpost()}>
               <Unlock className="h-4 w-4" /> Unpost
@@ -333,19 +382,42 @@ export default function BatchDetailPage() {
           </>
         ) : null}
         {isExported ? (
-          <button type="button" className="btn btn-outline btn-sm gap-1" disabled={busy} onClick={() => void doExport()}>
-            <Download className="h-4 w-4" /> Re-download CSV
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              disabled={busy}
+              onClick={() => {
+                exportBatchCsv(batch, invoices, payments);
+                exportBatchJournalCsv(batch, invoices, payments);
+              }}
+            >
+              <Download className="h-4 w-4" /> Re-download files
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm gap-1" disabled={busy} onClick={() => void doUnexport()}>
+              Unexport (return to Posted)
+            </button>
+          </>
         ) : null}
         {isOpen ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm gap-1"
-            disabled={busy || invoices.length + payments.length === 0}
-            onClick={() => exportBatchCsv(batch, invoices, payments)}
-          >
-            <Download className="h-4 w-4" /> Preview CSV
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm gap-1"
+              disabled={busy || invoices.length + payments.length === 0}
+              onClick={() => exportBatchCsv(batch, invoices, payments)}
+            >
+              <Download className="h-4 w-4" /> Preview transactions
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm gap-1"
+              disabled={busy || invoices.length + payments.length === 0}
+              onClick={() => exportBatchJournalCsv(batch, invoices, payments)}
+            >
+              <Download className="h-4 w-4" /> Preview journal
+            </button>
+          </div>
         ) : null}
       </div>
 

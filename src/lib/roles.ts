@@ -68,12 +68,12 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/reports",
-    label: "Reports-Contracts",
+    label: "Reports",
     roles: ["administrator", "service_manager", "billing"],
   },
   {
     href: "/reports/invoice-cash",
-    label: "Reports-Invoice & Cash",
+    label: "Invoice & Cash",
     roles: ["service_manager"],
   },
   {
@@ -89,6 +89,11 @@ export const NAV_ITEMS: NavItem[] = [
       {
         href: "/customer/open-request",
         label: "Active Service",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/pay",
+        label: "Pay bills",
         roles: ["customer"],
       },
       {

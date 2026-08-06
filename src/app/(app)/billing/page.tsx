@@ -24,6 +24,7 @@ import {
 import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { equipmentLabel } from "@/lib/equipment";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
+import { loadInvoiceBatchMap, type BatchLookup } from "@/lib/batches";
 import type { Invoice, Profile, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
 
 type InvoiceRow = Invoice & {
@@ -83,6 +84,7 @@ export default function BillingPage() {
   const [busy, setBusy] = useState(false);
   const [poByInvoice, setPoByInvoice] = useState<Record<string, PoBadge>>({});
   const [poByWorkOrder, setPoByWorkOrder] = useState<Record<string, PoBadge>>({});
+  const [invoiceBatchMap, setInvoiceBatchMap] = useState<Map<string, BatchLookup>>(new Map());
 
   async function loadPoBadges(invoiceList: InvoiceRow[], readyWo: WoRow[]) {
     const invIds = invoiceList.map((i) => i.id);
@@ -212,6 +214,8 @@ export default function BillingPage() {
     for (const m of teamList) map[m.id] = m.full_name || m.email;
     setTeamMap(map);
     await loadPoBadges(list, ready);
+    const { map: batchMap } = await loadInvoiceBatchMap(supabase);
+    setInvoiceBatchMap(batchMap);
     const rate = settings?.default_tax_rate ? Number(settings.default_tax_rate) : taxRate;
     if (settings?.default_tax_rate) setTaxRate(rate);
     if (!selectedId && !deepLinkWo && list.length > 0) setSelectedId(list[0].id);
@@ -628,6 +632,7 @@ export default function BillingPage() {
                         </button>
                       </th>
                       <th>PO</th>
+                      <th>Batch</th>
                       <th>Status</th>
                       <th>Assignee</th>
                       <th />
@@ -642,6 +647,7 @@ export default function BillingPage() {
                       const hasPo =
                         Boolean(inv.po_number) || Boolean(poBadge?.lastPoNumber) || (poBadge?.poCount ?? 0) > 0;
                       const hasReceipt = (poBadge?.receiptCount ?? 0) > 0;
+                      const batchInfo = invoiceBatchMap.get(inv.id);
                       return (
                         <tr
                           key={inv.id}
@@ -690,6 +696,19 @@ export default function BillingPage() {
                                   </span>
                                 ) : null}
                               </div>
+                            ) : (
+                              <span className="text-xs opacity-40">—</span>
+                            )}
+                          </td>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            {batchInfo ? (
+                              <Link
+                                href={`/batches/${batchInfo.batchId}`}
+                                className="badge badge-primary badge-outline badge-sm link"
+                                title={batchInfo.status}
+                              >
+                                {batchInfo.batchNumber}
+                              </Link>
                             ) : (
                               <span className="text-xs opacity-40">—</span>
                             )}

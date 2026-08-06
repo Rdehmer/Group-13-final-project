@@ -33,7 +33,8 @@ export async function updateSession(request: NextRequest) {
   const isPublic =
     path === "/login" ||
     path.startsWith("/auth") ||
-    path === "/favicon.ico";
+    path === "/favicon.ico" ||
+    path === "/api/stripe/config";
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
