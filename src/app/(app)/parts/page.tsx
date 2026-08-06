@@ -12,13 +12,13 @@ import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
 import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
-import type { Part, Profile, TechPartOrderRequest, WorkOrder } from "@/lib/types";
+import type { Part, Profile, TechPartOrderRequest, Vendor, WorkOrder } from "@/lib/types";
 
 type PartForm = {
   part_number: string;
   name: string;
   category: string;
-  supplier: string;
+  vendor_id: string;
   quantity_on_hand: string;
   reorder_level: string;
   unit_cost: string;
@@ -61,7 +61,7 @@ const EMPTY_FORM: PartForm = {
   part_number: "",
   name: "",
   category: "",
-  supplier: "",
+  vendor_id: "",
   quantity_on_hand: "0",
   reorder_level: "5",
   unit_cost: "0",
@@ -113,6 +113,7 @@ export default function PartsPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [parts, setParts] = useState<Part[]>([]);
+  const [suppliers, setSuppliers] = useState<Pick<Vendor, "id" | "name">[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
   const [managerPos, setManagerPos] = useState<PurchaseOrderRow[]>([]);
   const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchaseReviewRow[]>([]);
@@ -232,13 +233,39 @@ export default function PartsPage() {
       return;
     }
 
-    const [{ data: currentProfile }, { data }] = await Promise.all([
+    const [{ data: currentProfile }, { data }, { data: vendorRows }] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("parts").select("*").order("name"),
+      supabase
+        .from("vendors")
+        .select("id, name")
+        .eq("is_active", true)
+        .eq("approval_status", "Approved")
+        .order("name"),
     ]);
     const loadedProfile = currentProfile as Profile | null;
     setProfile(loadedProfile);
     setParts((data as Part[]) ?? []);
+    setSuppliers((vendorRows as Pick<Vendor, "id" | "name">[]) ?? []);
+    // Ensure currently linked (possibly inactive) suppliers still appear in the picker.
+    const linkedIds = new Set(
+      ((data as Part[]) ?? []).map((p) => p.vendor_id).filter(Boolean) as string[],
+    );
+    const loadedSuppliers = (vendorRows as Pick<Vendor, "id" | "name">[]) ?? [];
+    const missingLinked = [...linkedIds].filter((id) => !loadedSuppliers.some((v) => v.id === id));
+    if (missingLinked.length > 0) {
+      const { data: extra } = await supabase
+        .from("vendors")
+        .select("id, name")
+        .in("id", missingLinked);
+      if (extra?.length) {
+        setSuppliers(
+          [...loadedSuppliers, ...(extra as Pick<Vendor, "id" | "name">[])].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          ),
+        );
+      }
+    }
     if (loadedProfile?.role === "technician") {
       await loadTechnicianData(loadedProfile.id);
     } else if (
@@ -451,7 +478,7 @@ export default function PartsPage() {
       part_number: part.part_number,
       name: part.name,
       category: part.category ?? "",
-      supplier: part.supplier ?? "",
+      vendor_id: part.vendor_id ?? "",
       quantity_on_hand: String(part.quantity_on_hand),
       reorder_level: String(part.reorder_level),
       unit_cost: String(part.unit_cost),
@@ -500,11 +527,13 @@ export default function PartsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const selectedVendor = suppliers.find((v) => v.id === form.vendor_id) ?? null;
     const payload = {
       part_number: form.part_number.trim(),
       name: form.name.trim(),
       category: form.category.trim() || null,
-      supplier: form.supplier.trim() || null,
+      vendor_id: selectedVendor?.id ?? null,
+      supplier: selectedVendor?.name ?? null,
       quantity_on_hand: Number(form.quantity_on_hand),
       reorder_level: Number(form.reorder_level),
       unit_cost: Number(form.unit_cost),
@@ -992,11 +1021,23 @@ export default function PartsPage() {
                 />
               </FormRow>
               <FormRow label="Supplier">
-                <input
-                  className="input input-bordered w-full"
-                  value={form.supplier}
-                  onChange={(e) => setForm({ ...form, supplier: e.target.value })}
-                />
+                <select
+                  className="select select-bordered w-full"
+                  value={form.vendor_id}
+                  onChange={(e) => setForm({ ...form, vendor_id: e.target.value })}
+                >
+                  <option value="">No supplier</option>
+                  {suppliers.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                {suppliers.length === 0 ? (
+                  <p className="mt-1 text-xs opacity-60">
+                    No approved suppliers yet. Add one under Vendors → Suppliers.
+                  </p>
+                ) : null}
               </FormRow>
               <FormRow label="Qty">
                 <input
@@ -1330,7 +1371,15 @@ export default function PartsPage() {
                           {isManager ? (
                             <>
                               <td className="align-top">{p.category ?? "—"}</td>
-                              <td className="align-top">{p.supplier ?? "—"}</td>
+                              <td className="align-top">
+                                {p.vendor_id ? (
+                                  <Link href={`/vendors/${p.vendor_id}`} className="link link-hover">
+                                    {p.supplier ?? "—"}
+                                  </Link>
+                                ) : (
+                                  (p.supplier ?? "—")
+                                )}
+                              </td>
                             </>
                           ) : null}
                           <td className="align-top">

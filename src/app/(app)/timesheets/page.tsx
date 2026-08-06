@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Field-service timesheets (ServiceTitan-style).
- * Technicians: clock status, today/week totals, manual entries, filters.
- * Managers/Billing: review, approve/reject/lock, risk flags, cost visibility.
+ * Field-service timesheets (ServiceTitan-style) with internal controls:
+ * SOD, one active clock, WO authorization, overlap/duration, approval,
+ * weekly certification, exceptions, audit, soft-void, billing readiness.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -16,6 +16,7 @@ import {
   Clock,
   Lock,
   RefreshCw,
+  ShieldCheck,
   TriangleAlert,
   Unlock,
   XCircle,
@@ -28,13 +29,14 @@ import type {
   TimeActivityType,
   TimeApprovalStatus,
   TimeEntry,
+  WeeklyTimesheet,
 } from "@/lib/types";
 import {
   ACTIVITY_LABELS,
   ACTIVITY_TYPES,
   APPROVAL_LABELS,
   approveEntry,
-  canEditEntry,
+  CERTIFICATION_TEXT,
   clockOut,
   createManualEntry,
   flagEntry,
@@ -44,20 +46,32 @@ import {
   isTimesheetMissingTable,
   loadOtMultiplier,
   loadTimeEntries,
+  loadWeeklyTimesheet,
   localDateTimeToIso,
   money,
   rejectEntry,
   reopenEntry,
+  requestCorrection,
   shiftWeek,
   softDeleteEntry,
+  submitWeeklyTimesheet,
   sumEntries,
   supabaseErrorMessage,
   todayIso,
   weekContaining,
 } from "@/lib/timesheets";
+import {
+  BILLING_STATUS_LABELS,
+  controlsExplainer,
+  detectExceptions,
+  managerApprovalWarnings,
+  severityTone,
+  weeklyOtWarnings,
+  type TimesheetException,
+} from "@/lib/time-entry-controls";
 
 function approvalTone(status: TimeApprovalStatus): ReturnType<typeof statusTone> {
-  return statusTone(APPROVAL_LABELS[status]);
+  return statusTone(APPROVAL_LABELS[status] ?? status);
 }
 
 function shortIso(iso: string | null) {
@@ -89,6 +103,16 @@ export default function TimesheetsPage() {
 
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [rejectMode, setRejectMode] = useState<"reject" | "correction">("reject");
+
+  const [reopenId, setReopenId] = useState<string | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
+  const [voidId, setVoidId] = useState<string | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+
+  const [certifyOk, setCertifyOk] = useState(false);
+  const [weeklySheet, setWeeklySheet] = useState<WeeklyTimesheet | null>(null);
+  const [manualWarn12, setManualWarn12] = useState(false);
 
   const [manual, setManual] = useState({
     date: todayIso(),
@@ -104,11 +128,11 @@ export default function TimesheetsPage() {
   >([]);
 
   const [storageMode, setStorageMode] = useState<"time_entries" | "fallback" | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
-  const isManager =
-    profile?.role === "administrator" ||
-    profile?.role === "service_manager" ||
-    profile?.role === "billing";
+  const isApprover =
+    profile?.role === "administrator" || profile?.role === "service_manager";
+  const isManager = isApprover || profile?.role === "billing";
   const isTech = profile?.role === "technician";
   const showCost = isManager;
 
@@ -158,8 +182,7 @@ export default function TimesheetsPage() {
         setTechs((staff as Profile[]) ?? []);
       }
 
-      const techFilter =
-        !manager ? meP.id : filterTech !== "all" ? filterTech : undefined;
+      const techFilter = !manager ? meP.id : filterTech !== "all" ? filterTech : undefined;
 
       const rows = await loadTimeEntries(supabase, {
         from: week.start,
@@ -174,10 +197,7 @@ export default function TimesheetsPage() {
       if (filterCustomer.trim()) {
         const q = filterCustomer.trim().toLowerCase();
         filtered = rows.filter((e) => {
-          const name =
-            e.customers?.name ||
-            e.work_orders?.customers?.name ||
-            "";
+          const name = e.customers?.name || e.work_orders?.customers?.name || "";
           return name.toLowerCase().includes(q);
         });
       }
@@ -192,6 +212,12 @@ export default function TimesheetsPage() {
         }
       } catch {
         setActive(null);
+      }
+
+      try {
+        setWeeklySheet(await loadWeeklyTimesheet(supabase, meP.id, week.start));
+      } catch {
+        setWeeklySheet(null);
       }
 
       const { data: jobs } = await supabase
@@ -210,7 +236,6 @@ export default function TimesheetsPage() {
       );
     } catch (e) {
       const msg = supabaseErrorMessage(e) || "Failed to load timesheets.";
-      // Last resort: empty board, not a hard dead end
       if (isTimesheetMissingTable(msg)) {
         setStorageMode("fallback");
         setEntries([]);
@@ -238,7 +263,8 @@ export default function TimesheetsPage() {
   const weekByTech = useMemo(() => {
     const map = new Map<string, number>();
     for (const e of entries) {
-      if (e.approval_status === "rejected") continue;
+      if (e.approval_status === "rejected" || e.is_void || e.deleted_at) continue;
+      if (e.approval_status === "missing_clock_out") continue;
       const h =
         e.approval_status === "active" && e.clock_in_at
           ? 0
@@ -247,6 +273,10 @@ export default function TimesheetsPage() {
     }
     return map;
   }, [entries]);
+
+  const exceptions = useMemo(() => detectExceptions(entries), [entries]);
+  const otMsgs = useMemo(() => weeklyOtWarnings(totals.totalHours), [totals.totalHours]);
+  const controlCards = useMemo(() => controlsExplainer(), []);
 
   async function run<T>(id: string, fn: () => Promise<T>, ok: string) {
     setBusyId(id);
@@ -267,7 +297,16 @@ export default function TimesheetsPage() {
     e.preventDefault();
     if (!profile) return;
     const clockIn = localDateTimeToIso(manual.date, manual.start);
-    const clockOut = localDateTimeToIso(manual.date, manual.end);
+    const clockOutT = localDateTimeToIso(manual.date, manual.end);
+    const mins = (parseISO(clockOutT).getTime() - parseISO(clockIn).getTime()) / 60_000;
+    if (mins > 12 * 60 && !manualWarn12) {
+      setManualWarn12(true);
+      setError(
+        "Warning: this entry is longer than 12 hours. Confirm and submit again if intentional (shifts over 16 hours require manager review).",
+      );
+      return;
+    }
+    setManualWarn12(false);
     await run(
       "manual",
       () =>
@@ -276,14 +315,20 @@ export default function TimesheetsPage() {
           workOrderId: manual.workOrderId || null,
           entryDate: manual.date,
           clockInLocal: clockIn,
-          clockOutLocal: clockOut,
+          clockOutLocal: clockOutT,
           activityType: manual.activity,
           notes: manual.notes,
           reason: manual.reason,
         }),
-      "Manual entry submitted for approval.",
+      "Manual entry submitted for approval. Original values preserved.",
     );
     setManual((m) => ({ ...m, notes: "", reason: "" }));
+  }
+
+  function jumpToException(ex: TimesheetException) {
+    setHighlightId(ex.entryId);
+    const el = document.getElementById(`te-${ex.entryId}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   return (
@@ -292,8 +337,8 @@ export default function TimesheetsPage() {
         title={isTech ? "My Timesheet" : "Timesheets"}
         description={
           isTech
-            ? "Clock status, daily and weekly hours, and manual adjustments pending manager approval."
-            : "Review technician time, approve adjustments, lock payroll, and catch risk flags."
+            ? "Enter and submit your time. Manual and edited entries require manager approval. You cannot approve your own time."
+            : "Approve, reject, reopen, and lock timesheets. Billing uses only approved, ready-to-bill hours."
         }
         actions={
           <button
@@ -323,12 +368,11 @@ export default function TimesheetsPage() {
       {storageMode === "fallback" ? (
         <div className="alert alert-info text-sm">
           Running in compatibility mode using job labor records (the optional{" "}
-          <code>time_entries</code> table is not on this Supabase project yet). Clock-in/out,
-          approvals, and totals still work.
+          <code>time_entries</code> table is not on this Supabase project yet). Controls still
+          enforce rules in app logic (and DB triggers when the migration is applied).
         </div>
       ) : null}
 
-      {/* Period + clock banner */}
       <section className="rounded-2xl border border-base-300 bg-gradient-to-br from-slate-900 via-slate-800 to-teal-900 px-4 py-5 text-slate-50 shadow-md sm:px-6">
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -343,7 +387,9 @@ export default function TimesheetsPage() {
               Work week (Sun–Sat)
             </p>
             <p className="text-xl font-bold">{week.label}</p>
-            <p className="text-xs text-slate-300">OT after 40 hours · mult. {otMult}× cost</p>
+            <p className="text-xs text-slate-300">
+              OT after 40 hours (system-calculated) · mult. {otMult}× cost
+            </p>
           </div>
           <button
             type="button"
@@ -355,7 +401,10 @@ export default function TimesheetsPage() {
           {active ? (
             <div className="ml-auto flex flex-wrap items-center gap-2 rounded-xl border border-teal-400/40 bg-teal-500/20 px-3 py-2">
               <span className="badge badge-success badge-sm gap-1">
-                <Clock className="h-3 w-3" /> Currently Clocked In
+                <Clock className="h-3 w-3" />{" "}
+                {active.approval_status === "missing_clock_out"
+                  ? "Missing Clock-Out"
+                  : "Currently Clocked In"}
               </span>
               <span className="text-sm">
                 {active.work_orders?.work_order_number ?? "Job"} · since{" "}
@@ -368,11 +417,7 @@ export default function TimesheetsPage() {
                   disabled={busyId === "out"}
                   onClick={() =>
                     profile &&
-                    void run(
-                      "out",
-                      () => clockOut(supabase, { profile }),
-                      "Clocked out.",
-                    )
+                    void run("out", () => clockOut(supabase, { profile }), "Clocked out.")
                   }
                 >
                   Clock out
@@ -383,7 +428,7 @@ export default function TimesheetsPage() {
                   href={`/work-orders/${active.work_order_id}`}
                   className="btn btn-sm btn-ghost text-teal-100"
                 >
-                  Open WO
+                  Return to active job
                 </Link>
               ) : null}
             </div>
@@ -393,13 +438,12 @@ export default function TimesheetsPage() {
               <Link href="/technician" className="link link-hover text-teal-200">
                 My Day
               </Link>
-              .
+              . Only one active clock-in is allowed.
             </p>
           ) : null}
         </div>
       </section>
 
-      {/* Stats */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Today hours" value={formatHours(todayTotals.totalHours)} />
         <StatCard
@@ -414,30 +458,158 @@ export default function TimesheetsPage() {
         />
         <StatCard
           label={showCost ? "Labor cost (int.)" : "Pending / rejected"}
-          value={
-            showCost
-              ? money(totals.laborCost)
-              : `${totals.pending} / ${totals.rejected}`
-          }
+          value={showCost ? money(totals.laborCost) : `${totals.pending} / ${totals.rejected}`}
           hint={
             showCost
               ? `Billable $ ${money(totals.billableAmount)} · ${totals.pending} pending`
-              : totals.active ? `${totals.active} clocked in` : undefined
+              : totals.active
+                ? `${totals.active} open / missing out`
+                : undefined
           }
           danger={totals.pending + totals.rejected > 0}
         />
       </div>
 
-      {totals.totalHours >= 36 ? (
-        <div className={`alert text-sm ${totals.totalHours > 40 ? "alert-warning" : "alert-info"}`}>
+      {otMsgs.map((m) => (
+        <div
+          key={m}
+          className={`alert text-sm ${totals.totalHours > 40 ? "alert-warning" : "alert-info"}`}
+        >
           <TriangleAlert className="h-4 w-4" />
-          {totals.totalHours > 40
-            ? `Weekly total exceeds 40 hours (${formatHours(totals.totalHours)}). Overtime hours are calculated and cost uses OT multiplier; customer OT billing follows work-order/contract terms (not auto-forced).`
-            : `Approaching weekly OT threshold (${formatHours(totals.totalHours)} / 40).`}
+          {m} Overtime hours are calculated from weekly totals — users cannot manually reclassify OT.
+        </div>
+      ))}
+
+      {(isTech || (profile && filterTech === profile.id)) && (
+        <section className="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+          <h2 className="font-semibold">Weekly certification</h2>
+          <p className="mt-1 text-sm opacity-70">
+            Submit this week after all clock-outs are complete. After submission, you cannot edit
+            unless a manager returns or reopens the week.
+          </p>
+          {weeklySheet?.status === "submitted" || weeklySheet?.status === "locked" ? (
+            <div className="mt-2 alert alert-success text-sm">
+              Week status: <strong className="ml-1">{weeklySheet.status}</strong>
+              {weeklySheet.certified_at
+                ? ` · certified ${shortIso(weeklySheet.certified_at)}`
+                : null}
+            </div>
+          ) : (
+            <>
+              <label className="label cursor-pointer justify-start gap-3 mt-3">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={certifyOk}
+                  onChange={(e) => setCertifyOk(e.target.checked)}
+                />
+                <span className="label-text text-sm">{CERTIFICATION_TEXT}</span>
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm mt-2"
+                disabled={!profile || !certifyOk || busyId === "week"}
+                onClick={() =>
+                  profile &&
+                  void run(
+                    "week",
+                    () => submitWeeklyTimesheet(supabase, profile, week.start, certifyOk),
+                    "Weekly timesheet submitted for manager approval.",
+                  )
+                }
+              >
+                Submit week for approval
+              </button>
+            </>
+          )}
+        </section>
+      )}
+
+      {isApprover ? (
+        <>
+          <details className="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+            <summary className="cursor-pointer font-semibold flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" /> Controls — Why this matters
+            </summary>
+            <ul className="mt-3 space-y-3 text-sm">
+              {controlCards.map((c) => (
+                <li key={c.risk} className="border-l-2 border-teal-600 pl-3">
+                  <p>
+                    <span className="font-semibold">Risk:</span> {c.risk}
+                  </p>
+                  <p className="opacity-80">
+                    <span className="font-semibold">Control:</span> {c.control}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </details>
+
+          <section className="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+            <h2 className="font-semibold">Timesheet exceptions</h2>
+            <p className="text-xs opacity-60 mb-2">
+              Critical / Warning / Review / Resolved — click Open to jump to the entry.
+            </p>
+            {exceptions.length === 0 ? (
+              <p className="text-sm opacity-60">No exceptions detected for this week.</p>
+            ) : (
+              <div className="overflow-x-auto max-h-72">
+                <table className="table table-xs">
+                  <thead>
+                    <tr>
+                      <th>Severity</th>
+                      <th>Type</th>
+                      <th>Detail</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {exceptions.map((ex) => (
+                      <tr key={ex.id} className="hover">
+                        <td>
+                          <span className={`badge badge-sm ${severityTone(ex.severity)}`}>
+                            {ex.severity}
+                          </span>
+                        </td>
+                        <td className="font-medium">{ex.label}</td>
+                        <td className="text-xs opacity-80 max-w-md">{ex.detail}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            onClick={() => jumpToException(ex)}
+                          >
+                            Open
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
+
+      {isTech &&
+      entries.some(
+        (e) =>
+          e.approval_status === "missing_clock_out" ||
+          (e.approval_status === "active" && e.clock_in_at),
+      ) ? (
+        <div className="alert alert-warning text-sm">
+          <TriangleAlert className="h-4 w-4" />
+          You have an open or missing clock-out. It is excluded from billing and payroll until
+          corrected and approved.{" "}
+          {active?.work_order_id ? (
+            <Link href={`/work-orders/${active.work_order_id}`} className="link font-medium">
+              Return to active entry
+            </Link>
+          ) : null}
         </div>
       ) : null}
 
-      {/* Filters */}
       <div className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-end">
         <label className="form-control">
           <span className="label-text text-xs">Status</span>
@@ -491,12 +663,11 @@ export default function TimesheetsPage() {
         </label>
       </div>
 
-      {/* Manual entry */}
-      {(isTech || isManager) && (
+      {(isTech || isApprover) && (
         <details className="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
           <summary className="cursor-pointer font-semibold">Add manual / missed time</summary>
           <form className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3" onSubmit={submitManual}>
-            <FormRow label="Date" required>
+            <FormRow label="Date work occurred" required>
               <input
                 type="date"
                 className="input input-bordered input-sm w-full"
@@ -523,7 +694,7 @@ export default function TimesheetsPage() {
                 required
               />
             </FormRow>
-            <FormRow label="Category" required>
+            <FormRow label="Activity type" required>
               <select
                 className="select select-bordered select-sm w-full"
                 value={manual.activity}
@@ -538,7 +709,7 @@ export default function TimesheetsPage() {
                 ))}
               </select>
             </FormRow>
-            <FormRow label="Work order">
+            <FormRow label="Work order (required for job time)">
               <select
                 className="select select-bordered select-sm w-full"
                 value={manual.workOrderId}
@@ -561,7 +732,7 @@ export default function TimesheetsPage() {
                 required
               />
             </FormRow>
-            <FormRow label="Reason (manual)" required>
+            <FormRow label="Reason for manual entry" required>
               <input
                 className="input input-bordered input-sm w-full"
                 value={manual.reason}
@@ -571,17 +742,14 @@ export default function TimesheetsPage() {
               />
             </FormRow>
             <div className="flex items-end">
-              <button
-                type="submit"
-                className="btn btn-primary btn-sm"
-                disabled={busyId === "manual"}
-              >
-                Submit for approval
+              <button type="submit" className="btn btn-primary btn-sm" disabled={busyId === "manual"}>
+                {manualWarn12 ? "Confirm long shift & submit" : "Submit for approval"}
               </button>
             </div>
           </form>
           <p className="mt-2 text-xs opacity-60">
-            Manual entries are Pending Approval. You cannot approve your own adjustments.
+            Manual entries auto-mark Pending Approval. Original values are stored. Technicians cannot
+            approve their own entries. Rates come from authorized profile/contract records.
           </p>
         </details>
       )}
@@ -593,7 +761,7 @@ export default function TimesheetsPage() {
       ) : entries.length === 0 ? (
         <EmptyState
           title="No time entries this week"
-          description="Clock in from a work order on My Day, or add a manual entry above."
+          description="Clock in from a work order on My Day, or add a manual entry above. Seed control demos load in compatibility mode when empty."
           action={
             isTech ? (
               <Link href="/technician" className="btn btn-primary btn-sm">
@@ -614,6 +782,7 @@ export default function TimesheetsPage() {
                 <th className="text-right">Hrs</th>
                 {showCost ? <th className="text-right">Cost</th> : null}
                 <th>Status</th>
+                <th>Billing</th>
                 <th>Flags</th>
                 <th />
               </tr>
@@ -622,24 +791,45 @@ export default function TimesheetsPage() {
               {entries.map((entry) => {
                 const weekH = weekByTech.get(entry.technician_id) ?? 0;
                 const flags = flagEntry(entry, entries, weekH);
+                const warn = isApprover ? managerApprovalWarnings(entry, entries) : [];
                 const cust =
-                  entry.customers?.name ||
-                  entry.work_orders?.customers?.name ||
-                  "—";
+                  entry.customers?.name || entry.work_orders?.customers?.name || "—";
                 const wo = entry.work_orders;
                 const hrs = formatHours(
-                  entry.approval_status === "active" && entry.clock_in_at
+                  (entry.approval_status === "active" ||
+                    entry.approval_status === "missing_clock_out") &&
+                    entry.clock_in_at
                     ? (Date.now() - parseISO(entry.clock_in_at).getTime()) / 3_600_000
                     : Number(entry.regular_hours) + Number(entry.overtime_hours),
                 );
                 return (
-                  <tr key={entry.id} className="align-top">
+                  <tr
+                    key={entry.id}
+                    id={`te-${entry.id}`}
+                    className={`align-top ${highlightId === entry.id ? "bg-warning/10" : ""} ${entry.is_void || entry.deleted_at ? "opacity-50" : ""}`}
+                  >
                     <td className="whitespace-nowrap text-xs">
                       <div className="font-medium">{entry.entry_date}</div>
                       <div className="opacity-60">
                         {shortIso(entry.clock_in_at)}
-                        {entry.clock_out_at ? ` → ${format(parseISO(entry.clock_out_at), "h:mm a")}` : " → …"}
+                        {entry.clock_out_at
+                          ? ` → ${format(parseISO(entry.clock_out_at), "h:mm a")}`
+                          : " → …"}
                       </div>
+                      {entry.original_clock_in_at || entry.edit_reason ? (
+                        <div className="mt-1 rounded border border-base-300 bg-base-200/50 p-1 text-[10px]">
+                          <div className="font-semibold">Original vs revised</div>
+                          <div>
+                            Orig: {shortIso(entry.original_clock_in_at ?? null)} →{" "}
+                            {shortIso(entry.original_clock_out_at ?? null)}
+                          </div>
+                          <div>
+                            Rev: {shortIso(entry.clock_in_at)} → {shortIso(entry.clock_out_at)}
+                          </div>
+                          {entry.edit_reason ? <div>Edit: {entry.edit_reason}</div> : null}
+                          {entry.reopen_reason ? <div>Reopen: {entry.reopen_reason}</div> : null}
+                        </div>
+                      ) : null}
                     </td>
                     {isManager ? (
                       <td className="text-xs">
@@ -656,16 +846,6 @@ export default function TimesheetsPage() {
                             {wo.work_order_number}
                           </Link>
                           <div className="opacity-80">{cust}</div>
-                          <div className="opacity-50">
-                            {wo.work_order_type ?? "Service"}
-                            {wo.equipment?.name ? ` · ${wo.equipment.name}` : ""}
-                          </div>
-                          <div className="truncate opacity-50">
-                            {entry.service_location ||
-                              [wo.customers?.service_address, wo.customers?.city]
-                                .filter(Boolean)
-                                .join(", ")}
-                          </div>
                         </>
                       ) : (
                         <span className="opacity-70">Non-job · {cust}</span>
@@ -680,6 +860,16 @@ export default function TimesheetsPage() {
                       ) : null}
                       {entry.rejection_reason ? (
                         <div className="text-error">Reject: {entry.rejection_reason}</div>
+                      ) : null}
+                      {entry.void_reason ? (
+                        <div className="text-error">Voided: {entry.void_reason}</div>
+                      ) : null}
+                      {warn.length ? (
+                        <ul className="mt-1 list-disc pl-3 text-warning">
+                          {warn.map((w) => (
+                            <li key={w}>{w}</li>
+                          ))}
+                        </ul>
                       ) : null}
                     </td>
                     <td>
@@ -704,16 +894,24 @@ export default function TimesheetsPage() {
                     ) : null}
                     <td>
                       <StatusBadge
-                        label={APPROVAL_LABELS[entry.approval_status]}
+                        label={APPROVAL_LABELS[entry.approval_status] ?? entry.approval_status}
                         tone={approvalTone(entry.approval_status)}
                       />
                     </td>
-                    <td className="text-[10px] leading-tight">
-                      {flags.missingClockOut ? (
+                    <td className="text-[10px]">
+                      {BILLING_STATUS_LABELS[entry.billing_status ?? "not_ready"] ??
+                        entry.billing_status ??
+                        "—"}
+                    </td>
+                    <td className="text-[10px] leading-tight space-y-0.5">
+                      {flags.missingClockOut || entry.approval_status === "missing_clock_out" ? (
                         <span className="badge badge-error badge-xs">Missing Clock-Out</span>
                       ) : null}
-                      {flags.longShift ? (
+                      {flags.longShift || entry.duration_flag_16h ? (
                         <span className="badge badge-warning badge-xs">16h+</span>
+                      ) : null}
+                      {entry.duration_flag_12h && !entry.duration_flag_16h ? (
+                        <span className="badge badge-warning badge-xs">12h+</span>
                       ) : null}
                       {flags.overlap ? (
                         <span className="badge badge-error badge-xs">Overlap</span>
@@ -721,12 +919,22 @@ export default function TimesheetsPage() {
                       {flags.noWorkOrder ? (
                         <span className="badge badge-warning badge-xs">No WO</span>
                       ) : null}
+                      {entry.unassigned_work_order ? (
+                        <span className="badge badge-warning badge-xs">Unassigned</span>
+                      ) : null}
+                      {entry.is_manual ? (
+                        <span className="badge badge-info badge-xs">Manual</span>
+                      ) : null}
+                      {entry.is_duplicate_suspect ? (
+                        <span className="badge badge-error badge-xs">Dup?</span>
+                      ) : null}
                     </td>
                     <td className="whitespace-nowrap">
                       <div className="flex flex-col gap-1">
-                        {isManager &&
-                        (entry.approval_status === "pending_approval" ||
-                          entry.approval_status === "complete") ? (
+                        {isApprover &&
+                        ["pending_approval", "complete", "submitted", "pending_correction"].includes(
+                          entry.approval_status,
+                        ) ? (
                           <>
                             <button
                               type="button"
@@ -770,47 +978,57 @@ export default function TimesheetsPage() {
                               disabled={busyId === entry.id}
                               onClick={() => {
                                 setRejectId(entry.id);
+                                setRejectMode("reject");
                                 setRejectReason("");
                               }}
                             >
                               Reject
                             </button>
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-outline"
+                              disabled={busyId === entry.id}
+                              onClick={() => {
+                                setRejectId(entry.id);
+                                setRejectMode("correction");
+                                setRejectReason("");
+                              }}
+                            >
+                              Request correction
+                            </button>
                           </>
                         ) : null}
-                        {isManager &&
+                        {isApprover &&
                         (entry.approval_status === "approved" ||
-                          entry.approval_status === "locked") ? (
+                          entry.approval_status === "locked") &&
+                        entry.billing_status !== "billed" ? (
                           <button
                             type="button"
                             className="btn btn-xs btn-ghost gap-1"
                             disabled={busyId === entry.id}
-                            onClick={() =>
-                              profile &&
-                              void run(
-                                entry.id,
-                                () => reopenEntry(supabase, profile, entry.id),
-                                "Reopened for edits.",
-                              )
-                            }
+                            onClick={() => {
+                              setReopenId(entry.id);
+                              setReopenReason("");
+                            }}
                           >
                             <Unlock className="h-3 w-3" />
                             Reopen
                           </button>
                         ) : null}
-                        {profile && canEditEntry(profile, entry) && entry.approval_status !== "active" ? (
+                        {isApprover &&
+                        profile &&
+                        !entry.is_void &&
+                        entry.billing_status !== "billed" ? (
                           <button
                             type="button"
                             className="btn btn-xs btn-ghost text-error"
                             disabled={busyId === entry.id}
-                            onClick={() =>
-                              void run(
-                                entry.id,
-                                () => softDeleteEntry(supabase, profile, entry.id),
-                                "Entry removed (soft delete).",
-                              )
-                            }
+                            onClick={() => {
+                              setVoidId(entry.id);
+                              setVoidReason("");
+                            }}
                           >
-                            Delete
+                            Void
                           </button>
                         ) : null}
                       </div>
@@ -826,14 +1044,16 @@ export default function TimesheetsPage() {
       {rejectId ? (
         <div className="modal modal-open">
           <div className="modal-box">
-            <h3 className="font-bold text-lg">Reject time entry</h3>
-            <p className="py-2 text-sm opacity-70">Technicians need a clear correction note.</p>
+            <h3 className="font-bold text-lg">
+              {rejectMode === "reject" ? "Reject time entry" : "Request correction"}
+            </h3>
+            <p className="py-2 text-sm opacity-70">A reason is required for the audit trail.</p>
             <textarea
               className="textarea textarea-bordered w-full"
               rows={3}
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Why this time is rejected…"
+              placeholder="Reason…"
             />
             <div className="modal-action">
               <button type="button" className="btn btn-ghost" onClick={() => setRejectId(null)}>
@@ -847,13 +1067,16 @@ export default function TimesheetsPage() {
                   if (!profile || !rejectId) return;
                   void run(
                     rejectId,
-                    () => rejectEntry(supabase, profile, rejectId, rejectReason),
-                    "Rejected.",
+                    () =>
+                      rejectMode === "reject"
+                        ? rejectEntry(supabase, profile, rejectId, rejectReason)
+                        : requestCorrection(supabase, profile, rejectId, rejectReason),
+                    rejectMode === "reject" ? "Rejected." : "Correction requested.",
                   ).then(() => setRejectId(null));
                 }}
               >
                 <XCircle className="h-4 w-4" />
-                Reject
+                Confirm
               </button>
             </div>
           </div>
@@ -866,10 +1089,99 @@ export default function TimesheetsPage() {
         </div>
       ) : null}
 
+      {reopenId ? (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg">Reopen approved / locked time</h3>
+            <p className="py-2 text-sm opacity-70">
+              Reopening requires manager authorization and a documented reason.
+            </p>
+            <textarea
+              className="textarea textarea-bordered w-full"
+              rows={3}
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              placeholder="Reopen reason…"
+            />
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost" onClick={() => setReopenId(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-warning"
+                disabled={!profile || busyId === reopenId}
+                onClick={() => {
+                  if (!profile || !reopenId) return;
+                  void run(
+                    reopenId,
+                    () => reopenEntry(supabase, profile, reopenId, reopenReason),
+                    "Reopened — status pending approval.",
+                  ).then(() => setReopenId(null));
+                }}
+              >
+                Reopen with reason
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="modal-backdrop"
+            aria-label="Close"
+            onClick={() => setReopenId(null)}
+          />
+        </div>
+      ) : null}
+
+      {voidId ? (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg">Void time entry (soft delete)</h3>
+            <p className="py-2 text-sm opacity-70">
+              Entries are never permanently deleted. Void reason and actor are recorded.
+            </p>
+            <textarea
+              className="textarea textarea-bordered w-full"
+              rows={3}
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              placeholder="Void reason…"
+            />
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost" onClick={() => setVoidId(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-error"
+                disabled={!profile || busyId === voidId}
+                onClick={() => {
+                  if (!profile || !voidId) return;
+                  void run(
+                    voidId,
+                    () => softDeleteEntry(supabase, profile, voidId, voidReason),
+                    "Entry voided.",
+                  ).then(() => setVoidId(null));
+                }}
+              >
+                Void entry
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="modal-backdrop"
+            aria-label="Close"
+            onClick={() => setVoidId(null)}
+          />
+        </div>
+      ) : null}
+
       <p className="text-xs opacity-55">
-        Data lives in Supabase <code>time_entries</code>. Approved/complete job hours mirror to{" "}
-        <code>technician_labor</code> for invoice prep without auto-creating invoices. Customers never
-        see pay rates or internal labor cost on this page.
+        Controls enforce segregation of duties, one active clock-in, overlap/duration rules, weekly
+        certification, billing status, and audit. Apply{" "}
+        <code>supabase/migrations/20260808_time_entry_internal_controls.sql</code> for DB triggers and
+        RLS.
       </p>
     </div>
   );

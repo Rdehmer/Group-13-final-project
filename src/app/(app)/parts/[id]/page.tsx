@@ -8,7 +8,7 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
-import type { Part, Profile, WorkOrderPart } from "@/lib/types";
+import type { Part, Profile, Vendor, WorkOrderPart } from "@/lib/types";
 
 type UsageRow = WorkOrderPart & {
   work_orders?: {
@@ -28,6 +28,7 @@ export default function PartDetailPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [part, setPart] = useState<Part | null>(null);
+  const [suppliers, setSuppliers] = useState<Pick<Vendor, "id" | "name">[]>([]);
   const [usage, setUsage] = useState<UsageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -43,7 +44,7 @@ export default function PartDetailPage() {
     unit_cost: "0",
     standard_customer_price: "0",
     warranty_eligible: false,
-    supplier: "",
+    vendor_id: "",
     is_active: true,
   });
 
@@ -52,19 +53,40 @@ export default function PartDetailPage() {
 
   async function load() {
     setLoading(true);
-    const [{ data }, { data: { user } }, { data: usageData }] = await Promise.all([
-      supabase.from("parts").select("*").eq("id", id).single(),
-      supabase.auth.getUser(),
-      supabase
-        .from("work_order_parts")
-        .select("*, work_orders(id, work_order_number, status, scheduled_date)")
-        .eq("part_id", id)
-        .order("date_used", { ascending: false })
-        .limit(20),
-    ]);
+    const [{ data }, { data: { user } }, { data: usageData }, { data: vendorRows }] =
+      await Promise.all([
+        supabase.from("parts").select("*").eq("id", id).single(),
+        supabase.auth.getUser(),
+        supabase
+          .from("work_order_parts")
+          .select("*, work_orders(id, work_order_number, status, scheduled_date)")
+          .eq("part_id", id)
+          .order("date_used", { ascending: false })
+          .limit(20),
+        supabase
+          .from("vendors")
+          .select("id, name")
+          .eq("is_active", true)
+          .eq("approval_status", "Approved")
+          .order("name"),
+      ]);
     const p = data as Part | null;
     setPart(p);
     setUsage((usageData as UsageRow[]) ?? []);
+    let supplierOptions = (vendorRows as Pick<Vendor, "id" | "name">[]) ?? [];
+    if (p?.vendor_id && !supplierOptions.some((v) => v.id === p.vendor_id)) {
+      const { data: linked } = await supabase
+        .from("vendors")
+        .select("id, name")
+        .eq("id", p.vendor_id)
+        .maybeSingle();
+      if (linked) {
+        supplierOptions = [...supplierOptions, linked as Pick<Vendor, "id" | "name">].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+      }
+    }
+    setSuppliers(supplierOptions);
     if (user) {
       const { data: profileData } = await supabase
         .from("profiles")
@@ -84,7 +106,7 @@ export default function PartDetailPage() {
         unit_cost: String(p.unit_cost),
         standard_customer_price: String(p.standard_customer_price),
         warranty_eligible: p.warranty_eligible,
-        supplier: p.supplier ?? "",
+        vendor_id: p.vendor_id ?? "",
         is_active: p.is_active,
       });
     }
@@ -104,6 +126,7 @@ export default function PartDetailPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const selectedVendor = suppliers.find((v) => v.id === form.vendor_id) ?? null;
     const payload = {
       part_number: form.part_number.trim(),
       name: form.name.trim(),
@@ -114,7 +137,8 @@ export default function PartDetailPage() {
       unit_cost: Number(form.unit_cost),
       standard_customer_price: Number(form.standard_customer_price),
       warranty_eligible: form.warranty_eligible,
-      supplier: form.supplier.trim() || null,
+      vendor_id: selectedVendor?.id ?? null,
+      supplier: selectedVendor?.name ?? null,
       is_active: form.is_active,
       updated_at: new Date().toISOString(),
     };
@@ -309,11 +333,22 @@ export default function PartDetailPage() {
 
           <FormRow label="Supplier">
             {isManager ? (
-              <input
-                className="input input-bordered w-full"
-                value={form.supplier}
-                onChange={(e) => setForm({ ...form, supplier: e.target.value })}
-              />
+              <select
+                className="select select-bordered w-full"
+                value={form.vendor_id}
+                onChange={(e) => setForm({ ...form, vendor_id: e.target.value })}
+              >
+                <option value="">No supplier</option>
+                {suppliers.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            ) : part.vendor_id ? (
+              <Link href={`/vendors/${part.vendor_id}`} className="link link-hover">
+                {part.supplier ?? "—"}
+              </Link>
             ) : (
               <span>{part.supplier ?? "—"}</span>
             )}
