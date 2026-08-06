@@ -203,6 +203,7 @@ export function defaultContractFormState(): ContractRequestFormState {
   };
 }
 
+/** Manager-created contracts — short descriptive title. */
 export function buildContractName(
   contractType: string,
   startDate: string,
@@ -214,18 +215,46 @@ export function buildContractName(
   return `${tierPrefix}${shortType} Request ${year}`;
 }
 
+/** Short unique id so same-day requests are distinguishable in lists. */
+export function makeRequestCode(): string {
+  return Math.random().toString(16).slice(2, 6).toUpperCase().padEnd(4, "0");
+}
+
+/**
+ * Customer portal submissions — obvious trackable name for demos and manager queues.
+ * Example: [Request] Northwind Cold Storage · Gold · 2026-08-05 · REQ-A3F2
+ */
+export function buildCustomerRequestContractName(input: {
+  customerName: string;
+  tierId?: ContractTierId;
+  startDate: string;
+  requestCode?: string;
+}): string {
+  const customer = input.customerName.trim() || "Customer";
+  const tier = input.tierId ? getContractTier(input.tierId).name : "Custom";
+  const date =
+    input.startDate.slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const code = (input.requestCode ?? makeRequestCode()).toUpperCase();
+  return `[Request] ${customer} · ${tier} · ${date} · REQ-${code}`;
+}
+
 type BuildSubmissionInput = {
   customerId: string;
+  customerName: string;
   userId: string | null;
   form: ContractRequestFormState;
   tierId?: ContractTierId;
 };
 
 export function buildContractSubmission(input: BuildSubmissionInput) {
-  const { customerId, userId, form, tierId } = input;
+  const { customerId, customerName, userId, form, tierId } = input;
   return {
     customer_id: customerId,
-    name: buildContractName(form.contract_type, form.start_date, tierId),
+    name: buildCustomerRequestContractName({
+      customerName,
+      tierId,
+      startDate: form.start_date,
+    }),
     contract_type: form.contract_type,
     start_date: form.start_date,
     end_date: form.end_date,
@@ -293,6 +322,9 @@ export function contractStatusMessage(status: string): string {
   }
   if (s === "active") {
     return "This agreement is active and coverage applies to listed equipment.";
+  }
+  if (s.includes("canceled") || s.includes("cancelled")) {
+    return "This request was not approved. Contact Ridley Equipment Services or submit a new request.";
   }
   if (s.includes("expired")) {
     return "This agreement has ended. Request a new contract to restore coverage.";
@@ -396,7 +428,19 @@ export function suggestTier(equipmentCount: number, hasActiveContract: boolean):
   return "bronze";
 }
 
-export function contractNamePreview(form: ContractRequestFormState, tierId: ContractTierId): string {
+export function contractNamePreview(
+  form: ContractRequestFormState,
+  tierId: ContractTierId,
+  customerName?: string,
+): string {
+  if (customerName?.trim()) {
+    return buildCustomerRequestContractName({
+      customerName,
+      tierId,
+      startDate: form.start_date,
+      requestCode: "····",
+    });
+  }
   return buildContractName(form.contract_type, form.start_date, tierId);
 }
 
@@ -491,6 +535,7 @@ export function buildContractPreview(
   form: ContractRequestFormState,
   tierId: ContractTierId,
   equipment: PreviewEquipment[],
+  customerName?: string,
 ): ContractRequestPreviewData {
   const tier = getContractTier(tierId);
   const selected = equipment.filter((eq) => form.equipment_ids.includes(eq.id));
@@ -500,7 +545,7 @@ export function buildContractPreview(
   return {
     tierName: tier.name,
     tierTagline: tier.tagline,
-    contractName: contractNamePreview(form, tierId),
+    contractName: contractNamePreview(form, tierId, customerName),
     contractType: form.contract_type,
     term: formatContractTerm(form.start_date, form.end_date),
     renewal: formatRenewalNote(form.renewal_option || null),

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Wrench, ShieldCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { ThemeSelector } from "@/components/ThemeSelector";
+import { DEMO_PASSWORD, DEMO_PERSONAS } from "@/lib/demo-personas";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -83,12 +83,9 @@ export default function LoginPage() {
       </section>
 
       <section className="flex flex-col justify-center p-6 sm:p-10">
-        <div className="mb-6 flex items-center justify-between lg:justify-end">
-          <div className="lg:hidden">
-            <h1 className="text-xl font-bold">Equipment Service Manager</h1>
-            <p className="text-sm opacity-70">Ridley Equipment Services</p>
-          </div>
-          <ThemeSelector compact />
+        <div className="mb-6 lg:hidden">
+          <h1 className="text-xl font-bold">Equipment Service Manager</h1>
+          <p className="text-sm opacity-70">Ridley Equipment Services</p>
         </div>
 
         <div className="mx-auto w-full max-w-md">
@@ -152,7 +149,7 @@ export default function LoginPage() {
                   className="input input-bordered w-full"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="DemoPass123!"
+                  placeholder={DEMO_PASSWORD}
                   required
                   minLength={8}
                 />
@@ -165,15 +162,9 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-6 rounded-box bg-base-100 p-4 text-sm shadow">
-            <p className="font-semibold">Demo accounts — click to fill (password: DemoPass123!)</p>
+            <p className="font-semibold">Demo accounts — click to fill (password: {DEMO_PASSWORD})</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {[
-                { email: "admin@ridley-demo.test", label: "Admin" },
-                { email: "manager@ridley-demo.test", label: "Manager" },
-                { email: "tech1@ridley-demo.test", label: "Technician" },
-                { email: "billing@ridley-demo.test", label: "Billing" },
-                { email: "customer1@ridley-demo.test", label: "Customer" },
-              ].map((acct) => (
+              {DEMO_PERSONAS.map((acct) => (
                 <button
                   key={acct.email}
                   type="button"
@@ -181,7 +172,7 @@ export default function LoginPage() {
                   onClick={() => {
                     setMode("login");
                     setEmail(acct.email);
-                    setPassword("DemoPass123!");
+                    setPassword(DEMO_PASSWORD);
                     setError(null);
                   }}
                 >

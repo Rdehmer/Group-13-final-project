@@ -21,6 +21,7 @@ import type { Equipment, Profile } from "@/lib/types";
 export default function RequestContractPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [customerName, setCustomerName] = useState("Customer");
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
   const [selectedTier, setSelectedTier] = useState<ContractTierId>("silver");
@@ -39,7 +40,7 @@ export default function RequestContractPage() {
         return;
       }
 
-      const [{ data: sc }, { data: eq }] = await Promise.all([
+      const [{ data: sc }, { data: eq }, { data: customer }] = await Promise.all([
         supabase
           .from("service_contracts")
           .select(`
@@ -51,7 +52,10 @@ export default function RequestContractPage() {
           .eq("customer_id", p.customer_id)
           .order("created_at", { ascending: false }),
         supabase.from("equipment").select("*").eq("customer_id", p.customer_id).order("name"),
+        supabase.from("customers").select("name").eq("id", p.customer_id).single(),
       ]);
+
+      setCustomerName((customer as { name?: string } | null)?.name?.trim() || "Customer");
 
       const equipmentList = (eq as Equipment[]) ?? [];
       setEquipment(equipmentList);
@@ -142,6 +146,7 @@ export default function RequestContractPage() {
             <ContractRequestForm
               supabase={supabase}
               customerId={profile.customer_id}
+              customerName={customerName}
               equipment={equipment}
               activeContracts={contracts}
               selectedTier={selectedTier}

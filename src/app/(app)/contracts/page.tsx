@@ -76,8 +76,11 @@ export default function ContractsPage() {
     column: "name" | "customer" | "type" | "price" | "status" | "end";
     direction: "asc" | "desc";
   }>({ column: "name", direction: "asc" });
+  const [approvePrices, setApprovePrices] = useState<Record<string, string>>({});
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
 
   useEffect(() => {
     setFilters((prev) => ({ ...prev, status: statusFromUrl }));
@@ -341,6 +344,90 @@ export default function ContractsPage() {
     });
   }
 
+  async function approveContract(contract: ContractRow) {
+    const raw = approvePrices[contract.id] ?? String(contract.contract_price || "");
+    const price = Number(raw);
+    if (!Number.isFinite(price) || price <= 0) {
+      setError("Enter a contract price greater than $0 before approving.");
+      return;
+    }
+    setError(null);
+    setActionBusyId(contract.id);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { error: updateError } = await supabase
+      .from("service_contracts")
+      .update({
+        status: "Active",
+        contract_price: price,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", contract.id);
+    if (updateError) {
+      setError(updateError.message);
+      setActionBusyId(null);
+      return;
+    }
+    setContracts((prev) =>
+      prev.map((c) =>
+        c.id === contract.id ? { ...c, status: "Active", contract_price: price } : c,
+      ),
+    );
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "contract_approved",
+      recordType: "contract",
+      recordId: contract.id,
+      previousValue: "Pending Approval",
+      newValue: `Active @ ${formatMoney(price)}`,
+    });
+    setActionBusyId(null);
+  }
+
+  async function rejectContract(contract: ContractRow) {
+    setError(null);
+    setActionBusyId(contract.id);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const note = [contract.notes, "Rejected by Ridley (customer request not approved)."]
+      .filter(Boolean)
+      .join("\n");
+    const { error: updateError } = await supabase
+      .from("service_contracts")
+      .update({
+        status: "Canceled",
+        notes: note,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", contract.id);
+    if (updateError) {
+      setError(updateError.message);
+      setActionBusyId(null);
+      return;
+    }
+    setContracts((prev) =>
+      prev.map((c) =>
+        c.id === contract.id ? { ...c, status: "Canceled", notes: note } : c,
+      ),
+    );
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "contract_rejected",
+      recordType: "contract",
+      recordId: contract.id,
+      previousValue: "Pending Approval",
+      newValue: "Canceled",
+    });
+    setActionBusyId(null);
+  }
+
+  const pendingRequests = useMemo(
+    () => contracts.filter((c) => c.status === "Pending Approval"),
+    [contracts],
+  );
+
   const activeCustomers = customers.filter((c) => c.status === "Active");
 
   return (
@@ -597,6 +684,83 @@ export default function ContractsPage() {
             </button>
           </form>
         </dialog>
+      ) : null}
+
+      {isManager && pendingRequests.length > 0 ? (
+        <div className="mb-6 card border border-warning/40 bg-base-100 shadow">
+          <div className="card-body gap-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="card-title text-base">Pending customer requests</h2>
+                <p className="text-sm opacity-70">
+                  Approve with a price to activate, or reject. Names starting with [Request] are portal submissions.
+                </p>
+              </div>
+              <Link
+                href="/contracts?status=Pending%20Approval"
+                className="btn btn-ghost btn-sm"
+              >
+                Filter table →
+              </Link>
+            </div>
+            {error ? <div className="alert alert-error text-sm">{error}</div> : null}
+            <ul className="space-y-3">
+              {pendingRequests.map((c) => (
+                <li
+                  key={c.id}
+                  className="rounded-box border border-base-300 bg-base-200/40 p-4"
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                    <div className="min-w-0">
+                      <Link
+                        href={`/contracts/${c.id}`}
+                        className="link link-primary font-medium break-words"
+                      >
+                        {c.name}
+                      </Link>
+                      <p className="mt-1 text-sm opacity-70">
+                        {c.customers?.name ?? "—"} · {c.contract_type} · starts {c.start_date}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="form-control">
+                        <span className="label-text text-xs">Price to approve</span>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          className="input input-bordered input-sm w-32"
+                          placeholder="0.00"
+                          value={approvePrices[c.id] ?? ""}
+                          onChange={(e) =>
+                            setApprovePrices((prev) => ({ ...prev, [c.id]: e.target.value }))
+                          }
+                          aria-label={`Approval price for ${c.name}`}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={actionBusyId === c.id}
+                        onClick={() => void approveContract(c)}
+                      >
+                        {actionBusyId === c.id ? "Working…" : "Approve"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-error btn-sm"
+                        disabled={actionBusyId === c.id}
+                        onClick={() => void rejectContract(c)}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
       ) : null}
 
       <div id="contract-list" className="card bg-base-100 shadow">

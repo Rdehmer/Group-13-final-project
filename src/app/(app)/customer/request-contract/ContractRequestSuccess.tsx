@@ -16,8 +16,15 @@ export function ContractRequestSuccess({ contractName }: Props) {
         <div>
           <h2 className="text-xl font-bold">Contract request submitted</h2>
           <p className="mt-2 text-sm opacity-70">
-            <span className="font-medium">{contractName}</span> is pending Ridley&apos;s review.
-            Pricing will be confirmed before activation.
+            Your request is pending Ridley&apos;s review. Pricing will be confirmed before activation.
+          </p>
+        </div>
+
+        <div className="rounded-box border border-primary/30 bg-primary/5 p-4 text-left">
+          <p className="text-xs font-medium uppercase tracking-wide opacity-60">Track this request as</p>
+          <p className="mt-1 break-words font-mono text-sm font-semibold">{contractName}</p>
+          <p className="mt-2 text-xs opacity-60">
+            Use this name to find it under My Contracts (Pending) and on the manager Contracts queue.
           </p>
         </div>
 

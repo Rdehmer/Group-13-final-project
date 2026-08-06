@@ -12,6 +12,12 @@ import type { Customer, Profile, ServiceContract } from "@/lib/types";
 
 type ContractDetail = ServiceContract & { customers?: { id: string; name: string } | null };
 
+type CoveredEquipment = {
+  id: string;
+  name: string;
+  location: string | null;
+};
+
 /**
  * This business faces outdated contract terms risk.
  * Our app reduces the risk by letting managers edit contract details and jump to the customer record.
@@ -21,9 +27,11 @@ export default function ContractDetailPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [contract, setContract] = useState<ContractDetail | null>(null);
+  const [equipment, setEquipment] = useState<CoveredEquipment[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -48,18 +56,32 @@ export default function ContractDetailPage() {
     notes: "",
   });
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
+  const isPending = contract?.status === "Pending Approval";
 
   async function load() {
     setLoading(true);
-    const [{ data }, { data: cust }, { data: { user } }] = await Promise.all([
+    const [{ data }, { data: cust }, { data: { user } }, { data: links }] = await Promise.all([
       supabase.from("service_contracts").select("*, customers(id, name)").eq("id", id).single(),
       supabase.from("customers").select("*").order("name"),
       supabase.auth.getUser(),
+      supabase
+        .from("contract_equipment")
+        .select("equipment ( id, name, location )")
+        .eq("contract_id", id),
     ]);
     const sc = data as ContractDetail | null;
     setContract(sc);
     setCustomers((cust as Customer[]) ?? []);
+    const covered = ((links as { equipment: CoveredEquipment | CoveredEquipment[] | null }[] | null) ?? [])
+      .flatMap((row) => {
+        const eq = row.equipment;
+        if (!eq) return [];
+        return Array.isArray(eq) ? eq : [eq];
+      })
+      .filter((eq): eq is CoveredEquipment => !!eq?.id);
+    setEquipment(covered);
     if (user) {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -146,6 +168,82 @@ export default function ContractDetailPage() {
     load();
   }
 
+  async function approveRequest() {
+    if (!isManager || !contract) return;
+    const price = Number(form.contract_price);
+    if (!Number.isFinite(price) || price <= 0) {
+      setError("Enter a contract price greater than $0 before approving.");
+      return;
+    }
+    setActionBusy(true);
+    setError(null);
+    setMessage(null);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { error: updateError } = await supabase
+      .from("service_contracts")
+      .update({
+        status: "Active",
+        contract_price: price,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (updateError) {
+      setError(updateError.message);
+      setActionBusy(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "contract_approved",
+      recordType: "contract",
+      recordId: id,
+      previousValue: "Pending Approval",
+      newValue: `Active @ ${formatMoney(price)}`,
+    });
+    setMessage("Request approved — contract is now Active.");
+    setActionBusy(false);
+    load();
+  }
+
+  async function rejectRequest() {
+    if (!isManager || !contract) return;
+    setActionBusy(true);
+    setError(null);
+    setMessage(null);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const note = [form.notes.trim(), "Rejected by Ridley (customer request not approved)."]
+      .filter(Boolean)
+      .join("\n");
+    const { error: updateError } = await supabase
+      .from("service_contracts")
+      .update({
+        status: "Canceled",
+        notes: note,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (updateError) {
+      setError(updateError.message);
+      setActionBusy(false);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: "contract_rejected",
+      recordType: "contract",
+      recordId: id,
+      previousValue: "Pending Approval",
+      newValue: "Canceled",
+    });
+    setMessage("Request rejected — contract marked Canceled.");
+    setActionBusy(false);
+    load();
+  }
+
   if (loading) {
     return <div className="p-8 text-center opacity-60">Loading…</div>;
   }
@@ -195,6 +293,49 @@ export default function ContractDetailPage() {
         <div className="card-body space-y-3">
           {error ? <div className="alert alert-error text-sm">{error}</div> : null}
           {message ? <div className="alert alert-success text-sm">{message}</div> : null}
+
+          {isManager && isPending ? (
+            <div className="rounded-box border border-warning/40 bg-warning/5 p-4">
+              <p className="font-medium">Customer request awaiting approval</p>
+              <p className="mt-1 text-sm opacity-70">
+                Set the annual/contract price below, then Approve to activate or Reject to cancel.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={actionBusy}
+                  onClick={() => void approveRequest()}
+                >
+                  {actionBusy ? "Working…" : "Approve request"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-error btn-sm"
+                  disabled={actionBusy}
+                  onClick={() => void rejectRequest()}
+                >
+                  Reject request
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="rounded-box border border-base-300 bg-base-200/40 p-4">
+            <p className="text-sm font-medium">Covered equipment</p>
+            {equipment.length === 0 ? (
+              <p className="mt-1 text-sm opacity-60">No equipment linked to this contract.</p>
+            ) : (
+              <ul className="mt-2 space-y-1 text-sm">
+                {equipment.map((eq) => (
+                  <li key={eq.id}>
+                    <span className="font-medium">{eq.name}</span>
+                    {eq.location ? <span className="opacity-60"> · {eq.location}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           {!isManager ? (
             <div className="flex flex-wrap gap-2">
