@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { formatMoney } from "@/lib/calculations";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import {
   EmergencyPurchaseReview,
@@ -208,7 +209,7 @@ export default function EmergencyPurchasesPage() {
           description="When a technician uses Parts → I bought a part, the store purchase, job, amount, and receipt appear here."
         />
       ) : (
-        <div className="overflow-x-auto rounded-box border border-base-300 bg-base-100 shadow">
+        <DualHorizontalScroll className="rounded-box border border-base-300 bg-base-100 shadow">
           <table className="table">
             <thead>
               <tr>
@@ -282,7 +283,7 @@ export default function EmergencyPurchasesPage() {
               })}
             </tbody>
           </table>
-        </div>
+        </DualHorizontalScroll>
       )}
 
       {reviewPurchase ? (

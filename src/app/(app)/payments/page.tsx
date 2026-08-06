@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import { daysPastDue, calendarMonthsForYear, formatMonthLabel, monthKeyFromDate } from "@/lib/billing";
@@ -232,7 +233,7 @@ export default function PaymentsPage() {
                 description="Open invoices in other aging buckets may still need attention."
               />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table">
                   <thead>
                     <tr>
@@ -283,7 +284,7 @@ export default function PaymentsPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>
@@ -374,7 +375,7 @@ export default function PaymentsPage() {
               }
             />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -432,7 +433,7 @@ export default function PaymentsPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

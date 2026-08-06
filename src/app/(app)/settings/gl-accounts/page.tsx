@@ -18,6 +18,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import {
   GL_ACCOUNT_TYPES,
@@ -365,7 +366,7 @@ export default function GlAccountsSettingsPage() {
             <EmptyState title="No accounts" description="Add an account or seed defaults." />
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -424,7 +425,7 @@ export default function GlAccountsSettingsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
 
@@ -439,7 +440,7 @@ export default function GlAccountsSettingsPage() {
         {defaults.length === 0 ? (
           <p className="p-6 text-sm opacity-50">No posting defaults loaded.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -479,7 +480,7 @@ export default function GlAccountsSettingsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
     </div>

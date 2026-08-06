@@ -92,7 +92,6 @@ const HREF_PERMISSION: { prefix: string; key: PermissionKey }[] = [
   { prefix: "/scheduling", key: "technician" },
   { prefix: "/time-off", key: "time_off" },
   { prefix: "/timesheets", key: "timesheets" },
-  { prefix: "/scheduling", key: "technician" },
   { prefix: "/dispatch", key: "dispatch" },
   { prefix: "/parts", key: "parts" },
   { prefix: "/vendors", key: "vendors" },
@@ -220,41 +219,62 @@ function navAllowed(item: NavItem, profile: Profile): boolean {
   if (profile.role === "vendor") {
     return item.roles.includes("vendor");
   }
+  // Section headers are labels only — visibility comes from children / role list.
+  if (item.section) {
+    return item.roles.includes(profile.role);
+  }
   // Honor NAV_ITEMS.roles so manager-only tabs stay off Admin / other staff.
   if (!item.roles.includes(profile.role)) return false;
   return profileCanAccessHref(profile, item.href);
 }
 
+function filterNavItem(item: NavItem, profile: Profile): NavItem | null {
+  if (profile.role === "customer") {
+    if (!item.roles.includes("customer")) return null;
+    if (!item.children?.length) return item;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  if (profile.role === "vendor") {
+    if (!item.roles.includes("vendor")) return null;
+    if (!item.children?.length) return item;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  if (item.section) {
+    if (!item.roles.includes(profile.role)) return null;
+    const kids = (item.children ?? [])
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  // Nested parent page (e.g. Settings) with sub-links
+  if (item.children?.length) {
+    if (!navAllowed(item, profile)) return null;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    return { ...item, children: kids };
+  }
+
+  return navAllowed(item, profile) ? item : null;
+}
+
 /** Sidebar items filtering by effective employee permissions. */
 export function filterNavForProfile(profile: Profile): NavItem[] {
-  return NAV_ITEMS.filter((item) => {
-    if (profile.role === "customer") {
-      return item.roles.includes("customer");
-    }
-    if (profile.role === "vendor") {
-      return item.roles.includes("vendor");
-    }
-    if (item.children?.length) {
-      const kids = item.children.filter((c) => navAllowed(c, profile));
-      if (kids.length || navAllowed(item, profile)) {
-        return true;
-      }
-      return false;
-    }
-    return navAllowed(item, profile);
-  }).map((item) => {
-    if (!item.children?.length) return item;
-    return {
-      ...item,
-      children: item.children.filter((c) =>
-        profile.role === "customer"
-          ? c.roles.includes("customer")
-          : profile.role === "vendor"
-            ? c.roles.includes("vendor")
-            : navAllowed(c, profile),
-      ),
-    };
-  });
+  return NAV_ITEMS.map((item) => filterNavItem(item, profile)).filter(
+    (item): item is NavItem => item != null,
+  );
 }
 
 export function staffRoles(): UserRole[] {

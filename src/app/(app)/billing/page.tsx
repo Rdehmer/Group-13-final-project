@@ -7,6 +7,7 @@ import { Search, FileText, ClipboardList, ChevronRight, Paperclip, Clipboard } f
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -601,7 +602,7 @@ export default function BillingPage() {
                 />
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -736,7 +737,7 @@ export default function BillingPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>

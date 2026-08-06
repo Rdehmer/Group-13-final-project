@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import {
   ACCOUNTING_POLICIES,
@@ -773,7 +774,7 @@ function ReportTable({
   footer?: React.ReactNode;
 }) {
   return (
-    <div className="overflow-x-auto">
+    <DualHorizontalScroll>
       <table className="table table-sm w-full">
         <thead>
           <tr className="border-b-2 border-base-content/20">
@@ -787,7 +788,7 @@ function ReportTable({
         <tbody>{children}</tbody>
         {footer ? <tfoot>{footer}</tfoot> : null}
       </table>
-    </div>
+    </DualHorizontalScroll>
   );
 }
 

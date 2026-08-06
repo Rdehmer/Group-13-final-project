@@ -37,6 +37,15 @@ export type PermissionKey =
 /** Explicit allow/deny overrides on top of the role template (true/false). */
 export type PermissionOverrides = Partial<Record<PermissionKey, boolean>>;
 
+export type Company = {
+  id: string;
+  name: string;
+  slug: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Profile = {
   id: string;
   email: string;
@@ -45,6 +54,8 @@ export type Profile = {
   customer_id: string | null;
   /** When role = vendor, scopes the login to this AP vendor. */
   vendor_id?: string | null;
+  /** Multi-tenant company; catalogs and branding are scoped here. */
+  company_id?: string | null;
   hourly_cost_rate: number | null;
   hourly_billing_rate: number | null;
   /** Optional staff fields (employee HR-lite / settings). */
@@ -64,6 +75,8 @@ export type Profile = {
 export type Customer = {
   id: string;
   name: string;
+  /** Owning service company (multi-tenant). */
+  company_id?: string | null;
   primary_contact_name: string | null;
   email: string | null;
   phone: string | null;

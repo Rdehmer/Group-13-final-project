@@ -19,6 +19,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
@@ -1337,7 +1338,7 @@ export default function JobDetailPage() {
                 {labor.length === 0 ? (
                   <EmptyState title="No labor logged" description="Technicians, managers, or billing can add hours here." />
                 ) : (
-                  <div className="overflow-x-auto">
+                  <DualHorizontalScroll>
                     <table className="table table-sm">
                       <thead>
                         <tr>
@@ -1473,7 +1474,7 @@ export default function JobDetailPage() {
                         </tr>
                       </tfoot>
                     </table>
-                  </div>
+                  </DualHorizontalScroll>
                 )}
               </div>
             </div>
@@ -1524,7 +1525,7 @@ export default function JobDetailPage() {
                 {parts.length === 0 ? (
                   <EmptyState title="No parts used" description="Parts used on this job bill to the customer invoice." />
                 ) : (
-                  <div className="overflow-x-auto">
+                  <DualHorizontalScroll>
                     <table className="table table-sm">
                       <thead>
                         <tr>
@@ -1655,7 +1656,7 @@ export default function JobDetailPage() {
                         </tr>
                       </tfoot>
                     </table>
-                  </div>
+                  </DualHorizontalScroll>
                 )}
               </div>
             </div>
@@ -1810,7 +1811,7 @@ export default function JobDetailPage() {
                     )}
                   </p>
                 </div>
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -1840,7 +1841,7 @@ export default function JobDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               </div>
             </div>
           ) : null}

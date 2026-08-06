@@ -78,7 +78,7 @@ function HomePrimaryAction({
         </span>
       </div>
       <div>
-        <p className="font-display text-xl font-semibold leading-tight">{title}</p>
+        <p className="font-display text-xl font-semibold leading-tight !text-white">{title}</p>
         <p className="mt-1 text-sm text-primary-content/80">{description}</p>
       </div>
     </GatedDashboardLink>

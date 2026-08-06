@@ -7,6 +7,7 @@ import { ArrowLeft, CreditCard, Send, FileEdit, Plus, Trash2, Save } from "lucid
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { StatusBadge, statusTone } from "@/components/ui";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { formatMoney } from "@/lib/calculations";
 import { formatMonthlyPremium } from "@/lib/contract-pricing";
 import {
@@ -889,7 +890,7 @@ export default function InvoiceDetailPage() {
             ) : null}
           </div>
 
-          <div className="overflow-x-auto rounded-box border border-base-300">
+          <DualHorizontalScroll className="rounded-box border border-base-300">
             {canEdit ? (
               <table className="table table-sm">
                 <thead>
@@ -1014,7 +1015,7 @@ export default function InvoiceDetailPage() {
                 </tbody>
               </table>
             )}
-          </div>
+          </DualHorizontalScroll>
 
           {canEdit ? (
             <p className="mt-2 text-xs opacity-60">
@@ -1109,7 +1110,7 @@ export default function InvoiceDetailPage() {
         {payments.length > 0 ? (
           <div className="border-t border-base-300 px-6 py-4 sm:px-8">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide opacity-70">Payments</h2>
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table table-sm">
                 <thead>
                   <tr>
@@ -1130,7 +1131,7 @@ export default function InvoiceDetailPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           </div>
         ) : null}
       </article>

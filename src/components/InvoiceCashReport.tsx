@@ -14,6 +14,7 @@ import {
   startOfYear,
 } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatCard, EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
 import type { Invoice, Payment, WorkOrder } from "@/lib/types";
@@ -819,7 +820,7 @@ export function InvoiceCashReport() {
               description="Complete work orders to recognize revenue, or widen the date range."
             />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -940,7 +941,7 @@ export function InvoiceCashReport() {
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>
@@ -954,7 +955,7 @@ export function InvoiceCashReport() {
           {recognizedInvoicesFiltered.length === 0 ? (
             <EmptyState title="No recognized invoices" description="Invoices will appear here." />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1066,7 +1067,7 @@ export function InvoiceCashReport() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>
@@ -1078,7 +1079,7 @@ export function InvoiceCashReport() {
           {paymentsFiltered.length === 0 ? (
             <EmptyState title="No payments" description="Recorded payments will appear here." />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1181,7 +1182,7 @@ export function InvoiceCashReport() {
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>
@@ -1203,7 +1204,7 @@ export function InvoiceCashReport() {
           {openArRows.length === 0 ? (
             <EmptyState title="No open AR" description="Unpaid invoices will appear here." />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1324,7 +1325,7 @@ export function InvoiceCashReport() {
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

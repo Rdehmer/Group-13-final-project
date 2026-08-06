@@ -22,6 +22,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
 import type {
@@ -553,7 +554,7 @@ export default function TimesheetsPage() {
             {exceptions.length === 0 ? (
               <p className="text-sm opacity-60">No exceptions detected for this week.</p>
             ) : (
-              <div className="overflow-x-auto max-h-72">
+              <DualHorizontalScroll contentClassName="max-h-72 overflow-y-auto">
                 <table className="table table-xs">
                   <thead>
                     <tr>
@@ -586,7 +587,7 @@ export default function TimesheetsPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </section>
         </>
@@ -771,7 +772,7 @@ export default function TimesheetsPage() {
           }
         />
       ) : (
-        <div className="overflow-x-auto rounded-box border border-base-300 bg-base-100 shadow-sm">
+        <DualHorizontalScroll className="rounded-box border border-base-300 bg-base-100 shadow-sm">
           <table className="table table-sm">
             <thead>
               <tr className="bg-base-200/60 text-xs uppercase">
@@ -1038,7 +1039,7 @@ export default function TimesheetsPage() {
               })}
             </tbody>
           </table>
-        </div>
+        </DualHorizontalScroll>
       )}
 
       {rejectId ? (

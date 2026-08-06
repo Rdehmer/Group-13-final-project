@@ -22,6 +22,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -539,7 +540,7 @@ export default function BatchDetailPage() {
         {invoices.length === 0 ? (
           <p className="p-6 text-sm opacity-50">No invoices in this batch.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -596,7 +597,7 @@ export default function BatchDetailPage() {
                 </tr>
               </tfoot>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
 
@@ -608,7 +609,7 @@ export default function BatchDetailPage() {
         {payments.length === 0 ? (
           <p className="p-6 text-sm opacity-50">No payments in this batch.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -669,7 +670,7 @@ export default function BatchDetailPage() {
                 </tr>
               </tfoot>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
     </div>

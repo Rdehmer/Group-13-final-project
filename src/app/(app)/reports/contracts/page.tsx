@@ -15,6 +15,7 @@ import {
 } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
 import {
@@ -589,7 +590,7 @@ export default function ReportsPage() {
       sort.column === col ? (sort.direction === "asc" ? " ↑" : " ↓") : "";
 
     return (
-      <div className="overflow-x-auto">
+      <DualHorizontalScroll>
         <table className="table">
           <thead>
             <tr>
@@ -739,7 +740,7 @@ export default function ReportsPage() {
             </tfoot>
           ) : null}
         </table>
-      </div>
+      </DualHorizontalScroll>
     );
   }
 

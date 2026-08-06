@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CheckCircle2, Download, Lock, RefreshCw, Scale, Unlock } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import { buildCloseChecklist, monthEndPackCsv } from "@/lib/accounting/close";
@@ -579,7 +580,7 @@ export default function AccountingClosePage() {
               description="Post batches and month-end entries to build the trial balance."
             />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table table-sm">
                 <thead>
                   <tr>
@@ -605,7 +606,7 @@ export default function AccountingClosePage() {
                   </tr>
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
 
           <h3 className="pt-2 text-sm font-semibold">Contract asset rollforward</h3>

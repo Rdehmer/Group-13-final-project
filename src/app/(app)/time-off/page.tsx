@@ -5,6 +5,7 @@ import { format, parseISO } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Profile, TimeOffRequest } from "@/lib/types";
 import { formatTimeOffLabel } from "@/lib/time-off";
@@ -253,7 +254,7 @@ export default function TimeOffRequestsPage() {
                 <EmptyState title="No pending requests" description="Technicians have no leave waiting for approval." />
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table">
                   <thead>
                     <tr>
@@ -297,7 +298,7 @@ export default function TimeOffRequestsPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </section>
@@ -322,7 +323,7 @@ export default function TimeOffRequestsPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -358,7 +359,7 @@ export default function TimeOffRequestsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </section>

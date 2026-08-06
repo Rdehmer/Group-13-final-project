@@ -7,6 +7,7 @@ import { format, isBefore, parseISO, startOfDay } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Customer, Equipment, Profile, WorkOrder } from "@/lib/types";
 import { WORK_ORDER_TYPES } from "@/lib/work-order-types";
@@ -772,7 +773,7 @@ export default function WorkOrdersPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -948,7 +949,7 @@ export default function WorkOrdersPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

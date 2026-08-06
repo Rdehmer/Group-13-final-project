@@ -26,6 +26,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -504,7 +505,7 @@ export default function BatchesPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -584,7 +585,7 @@ export default function BatchesPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </section>
       ) : null}
@@ -648,7 +649,7 @@ export default function BatchesPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto max-h-[28rem]">
+            <DualHorizontalScroll contentClassName="max-h-[28rem] overflow-y-auto">
               <table className="table table-sm">
                 <thead className="sticky top-0 bg-base-100">
                   <tr>
@@ -690,7 +691,7 @@ export default function BatchesPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </section>
       ) : null}
@@ -756,7 +757,7 @@ export default function BatchesPage() {
                 <EmptyState title="No unbatched payments" description="New payments appear here until deposited." />
               </div>
             ) : (
-              <div className="overflow-x-auto max-h-[24rem]">
+              <DualHorizontalScroll contentClassName="max-h-[24rem] overflow-y-auto">
                 <table className="table table-sm">
                   <thead className="sticky top-0 bg-base-100">
                     <tr>
@@ -798,7 +799,7 @@ export default function BatchesPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </section>
         </div>

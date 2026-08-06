@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import type { Profile, Vendor, VendorBill } from "@/lib/types";
@@ -318,7 +319,7 @@ export default function ApAgingPage() {
           description="Choose another bucket or clear the filter."
         />
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-base-300 bg-base-100">
+        <DualHorizontalScroll className="rounded-xl border border-base-300 bg-base-100">
           <table className="table table-sm">
             <thead>
               <tr>
@@ -388,7 +389,7 @@ export default function ApAgingPage() {
               </tr>
             </tfoot>
           </table>
-        </div>
+        </DualHorizontalScroll>
       )}
 
       {drill ? (
@@ -401,7 +402,7 @@ export default function ApAgingPage() {
             {drillBills.length === 0 ? (
               <p className="mt-4 text-sm opacity-60">No open bills in this bucket.</p>
             ) : (
-              <div className="mt-4 overflow-x-auto">
+              <DualHorizontalScroll className="mt-4">
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -428,7 +429,7 @@ export default function ApAgingPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
             <div className="modal-action">
               <button type="button" className="btn btn-ghost" onClick={() => setDrill(null)}>
