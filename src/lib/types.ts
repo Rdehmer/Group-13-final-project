@@ -392,6 +392,22 @@ export type CompanySettings = {
   updated_at: string;
 };
 
+/** PTO / blocked schedule days for a technician. */
+export type TimeOffRequest = {
+  id: string;
+  technician_id: string;
+  start_date: string;
+  end_date: string;
+  reason: string | null;
+  status: "Pending" | "Approved" | "Denied" | "Canceled";
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  created_at: string;
+  updated_at: string;
+  technician?: { id: string; full_name: string | null; email: string } | null;
+};
+
 export const ROLE_LABELS: Record<UserRole, string> = {
   administrator: "Administrator",
   service_manager: "Service Manager",
