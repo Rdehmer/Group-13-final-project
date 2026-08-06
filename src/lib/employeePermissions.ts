@@ -34,6 +34,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   settings: "Company Settings",
   settings_gl: "GL Accounts",
   settings_employees: "Employee Data",
+  settings_contract_plans: "Contract Plans",
 };
 
 export const PERMISSION_GROUPS: PermissionGroup[] = [
@@ -60,7 +61,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
   {
     id: "admin",
     label: "Administration",
-    keys: ["users", "settings", "settings_gl", "settings_employees"],
+    keys: ["users", "settings", "settings_gl", "settings_employees", "settings_contract_plans"],
   },
 ];
 
@@ -70,6 +71,7 @@ export const ALL_PERMISSION_KEYS = Object.keys(PERMISSION_LABELS) as PermissionK
 const HREF_PERMISSION: { prefix: string; key: PermissionKey }[] = [
   { prefix: "/settings/gl-accounts", key: "settings_gl" },
   { prefix: "/settings/employees", key: "settings_employees" },
+  { prefix: "/settings/contract-plans", key: "settings_contract_plans" },
   { prefix: "/settings", key: "settings" },
   { prefix: "/reports/invoice-cash", key: "invoice_cash" },
   { prefix: "/reports", key: "reports" },

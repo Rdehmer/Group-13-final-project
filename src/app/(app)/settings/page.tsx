@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BookOpen, Users } from "lucide-react";
+import { BookOpen, ClipboardList, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -55,6 +55,9 @@ export default function SettingsPage() {
             </Link>
             <Link href="/settings/gl-accounts" className="btn btn-outline btn-sm gap-1">
               <BookOpen className="h-4 w-4" /> GL Accounts
+            </Link>
+            <Link href="/settings/contract-plans" className="btn btn-outline btn-sm gap-1">
+              <ClipboardList className="h-4 w-4" /> Contract Plans
             </Link>
           </div>
         }

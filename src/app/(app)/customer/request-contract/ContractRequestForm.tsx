@@ -26,6 +26,7 @@ import {
 } from "@/lib/contracts";
 import { FormRow } from "@/components/PageHeader";
 import type { Equipment } from "@/lib/types";
+import { sumEquipmentAssetValue } from "@/lib/contract-plans";
 import { ContractRequestPreview } from "./ContractRequestPreview";
 
 type Props = {
@@ -35,6 +36,7 @@ type Props = {
   equipment: Equipment[];
   activeContracts: CustomerContract[];
   selectedTier: ContractTierId;
+  selectedPackId: string;
   onSuccess: (contract: { id: string; name: string }) => void;
   onEquipmentAdded?: (equipment: Equipment) => void;
 };
@@ -49,12 +51,13 @@ export function ContractRequestForm({
   equipment,
   activeContracts,
   selectedTier,
+  selectedPackId,
   onSuccess,
   onEquipmentAdded,
 }: Props) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ContractRequestFormState>(() =>
-    applyTierToFormState(selectedTier, defaultContractFormState()),
+    applyTierToFormState(selectedTier, defaultContractFormState(), selectedPackId),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,20 +65,27 @@ export function ContractRequestForm({
   const [customizeCoverage, setCustomizeCoverage] = useState(false);
   const submitIntentRef = useRef(false);
   const tierRef = useRef(selectedTier);
+  const packRef = useRef(selectedPackId);
 
   useEffect(() => {
-    if (tierRef.current === selectedTier) return;
+    if (tierRef.current === selectedTier && packRef.current === selectedPackId) return;
     tierRef.current = selectedTier;
-    setForm((prev) => applyTierToFormState(selectedTier, prev));
-  }, [selectedTier]);
+    packRef.current = selectedPackId;
+    setForm((prev) => applyTierToFormState(selectedTier, prev, selectedPackId));
+  }, [selectedTier, selectedPackId]);
 
   useEffect(() => {
-    saveContractDraft(customerId, { form, tierId: selectedTier, step });
-  }, [customerId, form, selectedTier, step]);
+    saveContractDraft(customerId, {
+      form,
+      tierId: selectedTier,
+      packId: selectedPackId,
+      step,
+    });
+  }, [customerId, form, selectedTier, selectedPackId, step]);
 
   const preview = useMemo(
-    () => buildContractPreview(form, selectedTier, equipment, customerName),
-    [form, selectedTier, equipment, customerName],
+    () => buildContractPreview(form, selectedTier, equipment, customerName, selectedPackId),
+    [form, selectedTier, equipment, customerName, selectedPackId],
   );
 
   const equipmentNames = useMemo(
@@ -160,12 +170,15 @@ export function ContractRequestForm({
     setError(null);
 
     const { data: { user } } = await supabase.auth.getUser();
+    const selectedEquipment = equipment.filter((eq) => form.equipment_ids.includes(eq.id));
     const payload = buildContractSubmission({
       customerId,
       customerName,
       userId: user?.id ?? null,
       form,
       tierId: selectedTier,
+      packId: selectedPackId,
+      assetValue: sumEquipmentAssetValue(selectedEquipment) || 100_000,
     });
 
     const { data: contract, error: insertError } = await supabase

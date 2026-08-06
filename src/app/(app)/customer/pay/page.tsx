@@ -39,6 +39,7 @@ type StripeSession = {
   publishableKey: string;
   paymentIntentId: string;
   amount: number;
+  demo?: boolean;
 };
 
 type StripeElementsInstance = {
@@ -251,6 +252,7 @@ function PayPortalInner() {
   const [memo, setMemo] = useState("");
 
   const [stripeConfigured, setStripeConfigured] = useState<boolean | null>(null);
+  const [stripeDemo, setStripeDemo] = useState(false);
   const [stripeSession, setStripeSession] = useState<StripeSession | null>(null);
 
   const load = useCallback(async () => {
@@ -285,9 +287,9 @@ function PayPortalInner() {
         .order("payment_date", { ascending: false })
         .limit(50),
       supabase.from("customers").select("name").eq("id", p.customer_id).maybeSingle(),
-      Promise.resolve({
-        configured: Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY),
-      }),
+      fetch("/api/stripe/config")
+        .then((r) => r.json())
+        .catch(() => ({ configured: false, demo: false })),
     ]);
 
     const open = (inv as OpenInvoice[]) ?? [];
@@ -295,6 +297,7 @@ function PayPortalInner() {
     setHistory((pay as Payment[]) ?? []);
     setCustomerName(cust?.name ?? p.full_name ?? "Account");
     setStripeConfigured(Boolean(configRes?.configured));
+    setStripeDemo(Boolean(configRes?.demo));
 
     setSelected((prev) => {
       if (preselectInvoice && open.some((i) => i.id === preselectInvoice)) {
@@ -453,6 +456,7 @@ function PayPortalInner() {
         publishableKey: data.publishableKey,
         paymentIntentId: data.paymentIntentId,
         amount: data.amount,
+        demo: Boolean(data.demo),
       });
     } catch {
       setError("Could not reach the payment server.");
@@ -527,7 +531,9 @@ function PayPortalInner() {
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-emerald-700/20 bg-emerald-700 px-4 py-3 text-emerald-50 shadow-sm">
         <Lock className="h-4 w-4 shrink-0 opacity-90" />
         <p className="text-sm font-medium">
-          Powered by Stripe · Card & bank payments (PCI-compliant)
+          {stripeDemo
+            ? "Demo checkout · Payments are simulated locally (no Stripe keys)"
+            : "Powered by Stripe · Card & bank payments (PCI-compliant)"}
         </p>
         <span className="ml-auto text-xs opacity-80">Ridley Equipment Services</span>
       </div>
@@ -744,15 +750,48 @@ function PayPortalInner() {
 
           <div className="space-y-6 p-6">
             {stripeSession ? (
-              <PayPageStripeForm
-                clientSecret={stripeSession.clientSecret}
-                publishableKey={stripeSession.publishableKey}
-                amount={stripeSession.amount}
-                paymentIntentId={stripeSession.paymentIntentId}
-                onSuccess={(id) => void finalizeStripePayment(id)}
-                onError={(msg) => setError(msg)}
-                onCancel={() => setStripeSession(null)}
-              />
+              stripeSession.demo ? (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-50 px-4 py-3 text-sm dark:bg-amber-950/30">
+                    <p className="font-semibold">Demo checkout</p>
+                    <p className="mt-1 opacity-80">
+                      No Stripe keys are configured. Confirm to simulate a successful card payment of{" "}
+                      <span className="font-medium tabular-nums">{formatMoney(stripeSession.amount)}</span>.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-success btn-lg w-full gap-2"
+                    disabled={busy}
+                    onClick={() => void finalizeStripePayment(stripeSession.paymentIntentId)}
+                  >
+                    {busy ? (
+                      <span className="loading loading-spinner loading-sm" />
+                    ) : (
+                      <CreditCard className="h-5 w-5" />
+                    )}
+                    Confirm Demo Payment
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm w-full"
+                    disabled={busy}
+                    onClick={() => setStripeSession(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <PayPageStripeForm
+                  clientSecret={stripeSession.clientSecret}
+                  publishableKey={stripeSession.publishableKey}
+                  amount={stripeSession.amount}
+                  paymentIntentId={stripeSession.paymentIntentId}
+                  onSuccess={(id) => void finalizeStripePayment(id)}
+                  onError={(msg) => setError(msg)}
+                  onCancel={() => setStripeSession(null)}
+                />
+              )
             ) : (
               <>
                 {selectedInvoices.length === 1 ? (
