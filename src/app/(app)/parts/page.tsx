@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -6,6 +6,7 @@ import { Download, Minus, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
 import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
@@ -395,72 +396,47 @@ export default function PartsPage() {
     setLowStockOnly(false);
   }
 
+  const sortKeyForColumn: Record<FilterColumn, SortKey> = {
+    part_number: "part_number",
+    name: "name",
+    category: "category",
+    supplier: "supplier",
+    qty: "quantity_on_hand",
+    reorder: "reorder_level",
+    cost: "unit_cost",
+    price: "standard_customer_price",
+    margin: "margin",
+    status: "status",
+  };
+
   function onColumnFilterChange(column: FilterColumn, value: string) {
-    const sortKeyForColumn: Record<FilterColumn, SortKey> = {
-      part_number: "part_number",
-      name: "name",
-      category: "category",
-      supplier: "supplier",
-      qty: "quantity_on_hand",
-      reorder: "reorder_level",
-      cost: "unit_cost",
-      price: "standard_customer_price",
-      margin: "margin",
-      status: "status",
-    };
-    if (value === "__sort_asc") {
-      setSort({ key: sortKeyForColumn[column], direction: "asc" });
-      return;
-    }
-    if (value === "__sort_desc") {
-      setSort({ key: sortKeyForColumn[column], direction: "desc" });
+    if (
+      applyColumnSortValue(value, (direction) =>
+        setSort({ key: sortKeyForColumn[column], direction }),
+      )
+    ) {
       return;
     }
     setFilters((prev) => ({ ...prev, [column]: value }));
   }
 
-  function ColumnFilterSelect({
-    column,
-    label,
-    options,
-  }: {
-    column: FilterColumn;
-    label: string;
-    options: string[];
-  }) {
-    const sortKeyForColumn: Record<FilterColumn, SortKey> = {
-      part_number: "part_number",
-      name: "name",
-      category: "category",
-      supplier: "supplier",
-      qty: "quantity_on_hand",
-      reorder: "reorder_level",
-      cost: "unit_cost",
-      price: "standard_customer_price",
-      margin: "margin",
-      status: "status",
-    };
-    const sortingThis = sort.key === sortKeyForColumn[column];
+  function partsColumnFilter(
+    column: FilterColumn,
+    label: string,
+    options: string[],
+    sortMode: "text" | "numeric" | "date" = "text",
+  ) {
     return (
-      <select
-        className="select select-bordered select-xs w-full min-w-0"
+      <ColumnFilterSelect
+        label={label}
         value={filters[column]}
-        onChange={(e) => onColumnFilterChange(column, e.target.value)}
-        aria-label={`Filter or sort ${label}`}
-      >
-        <option value="">All</option>
-        <option value="__sort_asc">
-          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
-        </option>
-        <option value="__sort_desc">
-          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
-        </option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
+        options={options}
+        sortMode={sortMode}
+        activeSort={
+          sort.key === sortKeyForColumn[column] ? { direction: sort.direction } : null
+        }
+        onChange={(v) => onColumnFilterChange(column, v)}
+      />
     );
   }
 
@@ -1225,67 +1201,35 @@ export default function PartsPage() {
                     <tr className="bg-base-200/50">
                       <th />
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="part_number"
-                          label="part number"
-                          options={filterOptions.part_number}
-                        />
+                        {partsColumnFilter("part_number", "part number", filterOptions.part_number)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="name"
-                          label="name"
-                          options={filterOptions.name}
-                        />
+                        {partsColumnFilter("name", "name", filterOptions.name)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="category"
-                          label="category"
-                          options={filterOptions.category}
-                        />
+                        {partsColumnFilter("category", "category", filterOptions.category)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="supplier"
-                          label="supplier"
-                          options={filterOptions.supplier}
-                        />
+                        {partsColumnFilter("supplier", "supplier", filterOptions.supplier)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect column="qty" label="quantity" options={filterOptions.qty} />
+                        {partsColumnFilter("qty", "quantity", filterOptions.qty, "numeric")}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="reorder"
-                          label="reorder"
-                          options={filterOptions.reorder}
-                        />
+                        {partsColumnFilter("reorder", "reorder", filterOptions.reorder, "numeric")}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect column="cost" label="cost" options={filterOptions.cost} />
+                        {partsColumnFilter("cost", "cost", filterOptions.cost, "numeric")}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="price"
-                          label="price"
-                          options={filterOptions.price}
-                        />
+                        {partsColumnFilter("price", "price", filterOptions.price, "numeric")}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="margin"
-                          label="margin"
-                          options={filterOptions.margin}
-                        />
+                        {partsColumnFilter("margin", "margin", filterOptions.margin, "numeric")}
                       </th>
                       <th className="font-normal">
                         <div className="flex gap-1">
-                          <ColumnFilterSelect
-                            column="status"
-                            label="status"
-                            options={filterOptions.status}
-                          />
+                          {partsColumnFilter("status", "status", filterOptions.status)}
                           {hasActiveFilters ? (
                             <button
                               type="button"

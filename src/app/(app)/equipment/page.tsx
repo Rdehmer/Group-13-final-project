@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusHoverEditor } from "@/components/StatusHoverEditor";
+import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import {
@@ -84,9 +85,13 @@ type FilterKey =
   | "location"
   | "contract"
   | "warranty"
-  | "compliance";
+  | "compliance"
+  | "install"
+  | "age"
+  | "lastService"
+  | "cost";
 
-type SortKey = FilterKey | "install" | "age" | "lastService" | "cost";
+type SortKey = FilterKey;
 
 const emptyEquipmentForm = {
   customer_id: "",
@@ -122,6 +127,10 @@ const emptyFilters: Record<FilterKey, string> = {
   contract: "",
   warranty: "",
   compliance: "",
+  install: "",
+  age: "",
+  lastService: "",
+  cost: "",
 };
 
 const STATUS_OPTIONS: Equipment["operating_status"][] = [
@@ -409,9 +418,20 @@ function EquipmentPageInner() {
         ),
       ),
       warranty: uniqueSorted(equipment.map((e) => warrantyAging(e))),
-      compliance: uniqueSorted(equipment.map((e) => serviceCompliance(e.next_scheduled_service_date))),
+      compliance: uniqueSorted(
+        equipment.map((e) => serviceCompliance(e.next_scheduled_service_date)),
+      ),
+      install: uniqueSorted(equipment.map((e) => e.installation_date ?? "")),
+      age: uniqueSorted(
+        equipment
+          .map((e) => equipmentAgeYears(e.installation_date))
+          .filter((n): n is number => n != null)
+          .map((n) => String(n)),
+      ),
+      lastService: uniqueSorted(equipment.map((e) => e.last_service_date ?? "")),
+      cost: uniqueSorted(equipment.map((e) => formatMoney(costFor(e.id).totalCost))),
     };
-  }, [equipment]);
+  }, [equipment, costByEquipment]);
 
   const filteredEquipment = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -446,6 +466,13 @@ function EquipmentPageInner() {
       ) {
         return false;
       }
+      if (filters.install && (eq.installation_date ?? "") !== filters.install) return false;
+      if (filters.age) {
+        const age = equipmentAgeYears(eq.installation_date);
+        if (String(age ?? "") !== filters.age) return false;
+      }
+      if (filters.lastService && (eq.last_service_date ?? "") !== filters.lastService) return false;
+      if (filters.cost && formatMoney(costFor(eq.id).totalCost) !== filters.cost) return false;
       return true;
     });
 
@@ -519,47 +546,27 @@ function EquipmentPageInner() {
   }
 
   function onColumnFilterChange(column: FilterKey, value: string) {
-    if (value === "__sort_asc") {
-      setSort({ column, direction: "asc" });
-      return;
-    }
-    if (value === "__sort_desc") {
-      setSort({ column, direction: "desc" });
+    if (applyColumnSortValue(value, (direction) => setSort({ column, direction }))) {
       return;
     }
     setFilters((prev) => ({ ...prev, [column]: value }));
   }
 
-  function ColumnFilterSelect({
-    column,
-    label,
-    options,
-  }: {
-    column: FilterKey;
-    label: string;
-    options: string[];
-  }) {
-    const sortingThis = sort.column === column;
+  function equipmentColumnFilter(
+    column: FilterKey,
+    label: string,
+    options: string[],
+    sortMode: "text" | "numeric" | "date" = "text",
+  ) {
     return (
-      <select
-        className="select select-bordered select-xs w-full min-w-0"
+      <ColumnFilterSelect
+        label={label}
         value={filters[column]}
-        onChange={(e) => onColumnFilterChange(column, e.target.value)}
-        aria-label={`Filter or sort ${label}`}
-      >
-        <option value="">All</option>
-        <option value="__sort_asc">
-          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
-        </option>
-        <option value="__sort_desc">
-          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
-        </option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
+        options={options}
+        sortMode={sortMode}
+        activeSort={sort.column === column ? { direction: sort.direction } : null}
+        onChange={(v) => onColumnFilterChange(column, v)}
+      />
     );
   }
 
@@ -1373,135 +1380,60 @@ function EquipmentPageInner() {
                     <tr className="bg-base-200/50">
                       <th />
                       <th className="font-normal">
-                        <ColumnFilterSelect column="name" label="name" options={filterOptions.name} />
+                        {equipmentColumnFilter("name", "name", filterOptions.name)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="customer"
-                          label="customer"
-                          options={filterOptions.customer}
-                        />
+                        {equipmentColumnFilter("customer", "customer", filterOptions.customer)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="serial"
-                          label="serial"
-                          options={filterOptions.serial}
-                        />
+                        {equipmentColumnFilter("serial", "serial", filterOptions.serial)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="manufacturer"
-                          label="manufacturer"
-                          options={filterOptions.manufacturer}
-                        />
+                        {equipmentColumnFilter(
+                          "manufacturer",
+                          "manufacturer",
+                          filterOptions.manufacturer,
+                        )}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="model"
-                          label="model"
-                          options={filterOptions.model}
-                        />
+                        {equipmentColumnFilter("model", "model", filterOptions.model)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="category"
-                          label="category"
-                          options={filterOptions.category}
-                        />
+                        {equipmentColumnFilter("category", "category", filterOptions.category)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="status"
-                          label="status"
-                          options={filterOptions.status}
-                        />
+                        {equipmentColumnFilter("status", "status", filterOptions.status)}
                       </th>
                       <th className="font-normal">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
-                          onClick={() =>
-                            setSort({
-                              column: "install",
-                              direction:
-                                sort.column === "install" && sort.direction === "asc"
-                                  ? "desc"
-                                  : "asc",
-                            })
-                          }
-                        >
-                          Sort
-                        </button>
+                        {equipmentColumnFilter("install", "install", filterOptions.install, "date")}
                       </th>
                       <th className="font-normal">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
-                          onClick={() =>
-                            setSort({
-                              column: "age",
-                              direction:
-                                sort.column === "age" && sort.direction === "asc" ? "desc" : "asc",
-                            })
-                          }
-                        >
-                          Sort
-                        </button>
+                        {equipmentColumnFilter("age", "age", filterOptions.age, "numeric")}
                       </th>
                       <th className="font-normal">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
-                          onClick={() =>
-                            setSort({
-                              column: "lastService",
-                              direction:
-                                sort.column === "lastService" && sort.direction === "asc"
-                                  ? "desc"
-                                  : "asc",
-                            })
-                          }
-                        >
-                          Sort
-                        </button>
+                        {equipmentColumnFilter(
+                          "lastService",
+                          "last service",
+                          filterOptions.lastService,
+                          "date",
+                        )}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="warranty"
-                          label="warranty"
-                          options={filterOptions.warranty}
-                        />
+                        {equipmentColumnFilter("warranty", "warranty", filterOptions.warranty)}
                       </th>
                       <th className="font-normal">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
-                          onClick={() =>
-                            setSort({
-                              column: "cost",
-                              direction:
-                                sort.column === "cost" && sort.direction === "asc" ? "desc" : "asc",
-                            })
-                          }
-                        >
-                          Sort
-                        </button>
+                        {equipmentColumnFilter("cost", "cost YTD", filterOptions.cost, "numeric")}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="compliance"
-                          label="service compliance"
-                          options={filterOptions.compliance}
-                        />
+                        {equipmentColumnFilter(
+                          "compliance",
+                          "service compliance",
+                          filterOptions.compliance,
+                        )}
                       </th>
                       <th className="font-normal">
                         <div className="flex gap-1">
-                          <ColumnFilterSelect
-                            column="contract"
-                            label="contract"
-                            options={filterOptions.contract}
-                          />
+                          {equipmentColumnFilter("contract", "contract", filterOptions.contract)}
                           {hasActiveFilters ? (
                             <button
                               type="button"

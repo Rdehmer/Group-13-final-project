@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
+import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import type {
@@ -114,11 +115,27 @@ export default function ContractsPage() {
     customer: "",
     type: typeFromUrl,
     price: "",
+    monthly: "",
+    directCost: "",
+    margin: "",
+    deductible: "",
+    feeStatus: "",
     status: statusFromUrl,
     end: "",
   });
   const [sort, setSort] = useState<{
-    column: "name" | "customer" | "type" | "price" | "status" | "end";
+    column:
+      | "name"
+      | "customer"
+      | "type"
+      | "price"
+      | "monthly"
+      | "directCost"
+      | "margin"
+      | "deductible"
+      | "feeStatus"
+      | "status"
+      | "end";
     direction: "asc" | "desc";
   }>({ column: "name", direction: "asc" });
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
@@ -181,131 +198,6 @@ export default function ContractsPage() {
     load();
   }, []);
 
-  const filterOptions = useMemo(() => {
-    const uniqueSorted = (values: string[]) =>
-      Array.from(new Set(values.filter((v) => v.trim() !== ""))).sort((a, b) =>
-        a.localeCompare(b, undefined, { sensitivity: "base" }),
-      );
-
-    return {
-      name: uniqueSorted(contracts.map((c) => c.name)),
-      customer: uniqueSorted(contracts.map((c) => c.customers?.name ?? "")),
-      type: uniqueSorted(contracts.map((c) => c.contract_type)),
-      price: uniqueSorted(contracts.map((c) => formatMoney(c.contract_price))),
-      status: uniqueSorted([
-        ...contracts.map((c) => c.status),
-        ...CONTRACT_STATUSES,
-      ]),
-      end: uniqueSorted(contracts.map((c) => c.end_date)),
-    };
-  }, [contracts]);
-
-  const filteredContracts = useMemo(() => {
-    const rows = contracts.filter((c) => {
-      if (filters.name && c.name !== filters.name) return false;
-      if (filters.customer && (c.customers?.name ?? "") !== filters.customer) return false;
-      if (filters.type && c.contract_type !== filters.type) return false;
-      if (filters.price && formatMoney(c.contract_price) !== filters.price) return false;
-      if (filters.status && c.status !== filters.status) return false;
-      if (filters.end && c.end_date !== filters.end) return false;
-      if (!contractMatchesPlanFilters(c.notes, planIndustry, planTier)) return false;
-      return true;
-    });
-
-    const valueFor = (c: ContractRow) => {
-      switch (sort.column) {
-        case "customer":
-          return c.customers?.name ?? "";
-        case "type":
-          return c.contract_type;
-        case "price":
-          return String(c.contract_price).padStart(16, "0");
-        case "status":
-          return c.status;
-        case "end":
-          return c.end_date;
-        case "name":
-        default:
-          return c.name;
-      }
-    };
-
-    return [...rows].sort((a, b) => {
-      if (sort.column === "price") {
-        const cmp = Number(a.contract_price) - Number(b.contract_price);
-        return sort.direction === "asc" ? cmp : -cmp;
-      }
-      const cmp = valueFor(a).localeCompare(valueFor(b), undefined, { sensitivity: "base" });
-      return sort.direction === "asc" ? cmp : -cmp;
-    });
-  }, [contracts, filters, sort, planIndustry, planTier]);
-
-  const hasActiveFilters =
-    Object.values(filters).some((v) => v.trim() !== "") ||
-    planIndustry !== "all" ||
-    planTier !== "all";
-
-  function clearFilters() {
-    setFilters({ name: "", customer: "", type: "", price: "", status: "", end: "" });
-    setPlanIndustry("all");
-    setPlanTier("all");
-    if (searchParams.toString()) {
-      router.replace(pathname);
-    }
-  }
-
-  function onColumnFilterChange(column: keyof typeof filters, value: string) {
-    if (value === "__sort_asc") {
-      setSort({ column, direction: "asc" });
-      return;
-    }
-    if (value === "__sort_desc") {
-      setSort({ column, direction: "desc" });
-      return;
-    }
-    setFilters((prev) => ({ ...prev, [column]: value }));
-    if (column === "status") {
-      const params = new URLSearchParams(searchParams.toString());
-      if (value) params.set("status", value);
-      else params.delete("status");
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname);
-    }
-  }
-
-  function ColumnFilterSelect({
-    column,
-    label,
-    options,
-  }: {
-    column: keyof typeof filters;
-    label: string;
-    options: string[];
-  }) {
-    const sortingThis = sort.column === column;
-    return (
-      <select
-        className="select select-bordered select-xs w-full min-w-0"
-        value={filters[column]}
-        onChange={(e) => onColumnFilterChange(column, e.target.value)}
-        aria-label={`Filter or sort ${label}`}
-      >
-        <option value="">All</option>
-        <option value="__sort_asc">
-          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
-        </option>
-        <option value="__sort_desc">
-          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
-        </option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
   const monthRange = useMemo(() => currentMonthRange(new Date()), []);
   const monthLabel = periodLabel(monthRange);
 
@@ -329,6 +221,182 @@ export default function ContractsPage() {
   const directCost = activeMonthSummary.directCost;
   const profit = activeMonthSummary.profit;
   const margin = activeMonthSummary.margin;
+
+  const filterOptions = useMemo(() => {
+    const uniqueSorted = (values: string[]) =>
+      Array.from(new Set(values.filter((v) => v.trim() !== ""))).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" }),
+      );
+
+    return {
+      name: uniqueSorted(contracts.map((c) => c.name)),
+      customer: uniqueSorted(contracts.map((c) => c.customers?.name ?? "")),
+      type: uniqueSorted(contracts.map((c) => c.contract_type)),
+      price: uniqueSorted(contracts.map((c) => formatMoney(c.contract_price))),
+      monthly: uniqueSorted(contracts.map((c) => formatMoney(resolvedMonthlyAmount(c)))),
+      directCost: uniqueSorted(
+        contracts.map((c) => formatMoney(economicsByContract.get(c.id)?.directCost ?? 0)),
+      ),
+      margin: uniqueSorted(
+        contracts.map((c) => formatPct(economicsByContract.get(c.id)?.margin ?? null)),
+      ),
+      deductible: uniqueSorted(contracts.map((c) => formatMoney(resolvedDeductible(c)))),
+      feeStatus: uniqueSorted(
+        contracts.map((c) => {
+          const s = getContractPaymentStanding(c, standingInvoices);
+          return s.id === "not_monthly" ? "—" : s.label;
+        }),
+      ),
+      status: uniqueSorted([
+        ...contracts.map((c) => c.status),
+        ...CONTRACT_STATUSES,
+      ]),
+      end: uniqueSorted(contracts.map((c) => c.end_date)),
+    };
+  }, [contracts, economicsByContract, standingInvoices]);
+
+  const filteredContracts = useMemo(() => {
+    const rows = contracts.filter((c) => {
+      const econ = economicsByContract.get(c.id);
+      const standing = getContractPaymentStanding(c, standingInvoices);
+      const feeLabel = standing.id === "not_monthly" ? "—" : standing.label;
+      if (filters.name && c.name !== filters.name) return false;
+      if (filters.customer && (c.customers?.name ?? "") !== filters.customer) return false;
+      if (filters.type && c.contract_type !== filters.type) return false;
+      if (filters.price && formatMoney(c.contract_price) !== filters.price) return false;
+      if (filters.monthly && formatMoney(resolvedMonthlyAmount(c)) !== filters.monthly) return false;
+      if (filters.directCost && formatMoney(econ?.directCost ?? 0) !== filters.directCost) {
+        return false;
+      }
+      if (filters.margin && formatPct(econ?.margin ?? null) !== filters.margin) return false;
+      if (filters.deductible && formatMoney(resolvedDeductible(c)) !== filters.deductible) {
+        return false;
+      }
+      if (filters.feeStatus && feeLabel !== filters.feeStatus) return false;
+      if (filters.status && c.status !== filters.status) return false;
+      if (filters.end && c.end_date !== filters.end) return false;
+      if (!contractMatchesPlanFilters(c.notes, planIndustry, planTier)) return false;
+      return true;
+    });
+
+    const numericColumns = new Set(["price", "monthly", "directCost", "margin", "deductible"]);
+
+    const numericValue = (c: ContractRow): number => {
+      const econ = economicsByContract.get(c.id);
+      switch (sort.column) {
+        case "price":
+          return Number(c.contract_price) || 0;
+        case "monthly":
+          return resolvedMonthlyAmount(c);
+        case "directCost":
+          return econ?.directCost ?? 0;
+        case "margin":
+          return econ?.margin ?? -999;
+        case "deductible":
+          return resolvedDeductible(c);
+        default:
+          return 0;
+      }
+    };
+
+    const textValue = (c: ContractRow): string => {
+      const standing = getContractPaymentStanding(c, standingInvoices);
+      switch (sort.column) {
+        case "customer":
+          return c.customers?.name ?? "";
+        case "type":
+          return c.contract_type;
+        case "feeStatus":
+          return standing.id === "not_monthly" ? "—" : standing.label;
+        case "status":
+          return c.status;
+        case "end":
+          return c.end_date;
+        case "name":
+        default:
+          return c.name;
+      }
+    };
+
+    return [...rows].sort((a, b) => {
+      if (numericColumns.has(sort.column)) {
+        const cmp = numericValue(a) - numericValue(b);
+        return sort.direction === "asc" ? cmp : -cmp;
+      }
+      const cmp = textValue(a).localeCompare(textValue(b), undefined, { sensitivity: "base" });
+      return sort.direction === "asc" ? cmp : -cmp;
+    });
+  }, [
+    contracts,
+    filters,
+    sort,
+    planIndustry,
+    planTier,
+    economicsByContract,
+    standingInvoices,
+  ]);
+
+  const hasActiveFilters =
+    Object.values(filters).some((v) => v.trim() !== "") ||
+    planIndustry !== "all" ||
+    planTier !== "all";
+
+  function clearFilters() {
+    setFilters({
+      name: "",
+      customer: "",
+      type: "",
+      price: "",
+      monthly: "",
+      directCost: "",
+      margin: "",
+      deductible: "",
+      feeStatus: "",
+      status: "",
+      end: "",
+    });
+    setPlanIndustry("all");
+    setPlanTier("all");
+    if (searchParams.toString()) {
+      router.replace(pathname);
+    }
+  }
+
+  function onColumnFilterChange(column: keyof typeof filters, value: string) {
+    if (
+      applyColumnSortValue(value, (direction) =>
+        setSort({ column, direction }),
+      )
+    ) {
+      return;
+    }
+    setFilters((prev) => ({ ...prev, [column]: value }));
+    if (column === "status") {
+      const params = new URLSearchParams(searchParams.toString());
+      if (value) params.set("status", value);
+      else params.delete("status");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    }
+  }
+
+  function contractColumnFilter(
+    column: keyof typeof filters,
+    label: string,
+    options: string[],
+    sortMode: "text" | "numeric" | "date" = "text",
+  ) {
+    return (
+      <ColumnFilterSelect
+        label={label}
+        value={filters[column]}
+        options={options}
+        sortMode={sortMode}
+        activeSort={sort.column === column ? { direction: sort.direction } : null}
+        onChange={(v) => onColumnFilterChange(column, v)}
+      />
+    );
+  }
 
   async function onCreateCustomer(e?: React.FormEvent | React.MouseEvent) {
     e?.preventDefault();
@@ -1058,36 +1126,48 @@ export default function ContractsPage() {
                   {isManager ? (
                     <tr className="bg-base-200/50">
                       <th className="font-normal">
-                        <ColumnFilterSelect column="name" label="name" options={filterOptions.name} />
+                        {contractColumnFilter("name", "name", filterOptions.name)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="customer"
-                          label="customer"
-                          options={filterOptions.customer}
-                        />
+                        {contractColumnFilter("customer", "customer", filterOptions.customer)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect column="type" label="type" options={filterOptions.type} />
+                        {contractColumnFilter("type", "type", filterOptions.type)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect column="price" label="price" options={filterOptions.price} />
+                        {contractColumnFilter("price", "annual", filterOptions.price, "numeric")}
                       </th>
-                      <th />
-                      <th />
-                      <th />
-                      <th />
-                      <th />
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="status"
-                          label="status"
-                          options={filterOptions.status}
-                        />
+                        {contractColumnFilter("monthly", "monthly fee", filterOptions.monthly, "numeric")}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter(
+                          "directCost",
+                          "direct cost",
+                          filterOptions.directCost,
+                          "numeric",
+                        )}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter("margin", "margin", filterOptions.margin, "numeric")}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter(
+                          "deductible",
+                          "deductible",
+                          filterOptions.deductible,
+                          "numeric",
+                        )}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter("feeStatus", "fee status", filterOptions.feeStatus)}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter("status", "status", filterOptions.status)}
                       </th>
                       <th className="font-normal">
                         <div className="flex gap-1">
-                          <ColumnFilterSelect column="end" label="end date" options={filterOptions.end} />
+                          {contractColumnFilter("end", "end date", filterOptions.end, "date")}
                           {hasActiveFilters ? (
                             <button
                               type="button"
