@@ -26,6 +26,7 @@ import {
   canApproveVendors,
   canDeleteVendor,
   canEditVendorMaster,
+  canRecordVendorPayment,
   canUseServiceVendor,
   isServiceVendorSchemaError,
   serviceVendorAllowedRoles,
@@ -293,7 +294,16 @@ export default function ServiceVendorDetailPage() {
       .select("*")
       .single();
     if (insertError || !bill) {
-      setError(insertError?.message ?? "Could not save bill.");
+      const msg = insertError?.message ?? "Could not save bill.";
+      const duplicate =
+        /duplicate|unique|service_vendor_bills_vendor_bill_number/i.test(msg);
+      setError(
+        duplicate
+          ? `Bill # ${billForm.bill_number.trim()} already exists for this provider.`
+          : /policy|row-level security|approved|active/i.test(msg)
+            ? "Provider must be approved and active before entering bills."
+            : msg,
+      );
       setBusy(false);
       return;
     }
@@ -311,7 +321,10 @@ export default function ServiceVendorDetailPage() {
   }
 
   async function markBillPaid(bill: ServiceVendorBill) {
-    if (!profile) return;
+    if (!profile || !canRecordVendorPayment(profile.role)) {
+      setError("Only managers and administrators can mark service bills paid.");
+      return;
+    }
     const balance = billBalance(bill);
     if (balance <= 0) return;
     setBusy(true);
@@ -376,6 +389,7 @@ export default function ServiceVendorDetailPage() {
   const approval = vendor.approval_status ?? "Approved";
   const isManager = canApproveVendors(profile.role);
   const canEditMaster = canEditVendorMaster(profile.role);
+  const canPay = canRecordVendorPayment(profile.role);
   const usable = canUseServiceVendor(vendor);
 
   return (
@@ -638,6 +652,11 @@ export default function ServiceVendorDetailPage() {
           <section className="card bg-base-100 shadow">
             <div className="card-body">
               <h2 className="card-title text-base">Service bills</h2>
+              {!canPay ? (
+                <p className="text-xs opacity-60">
+                  Billing can enter bills. Managers or administrators mark them paid.
+                </p>
+              ) : null}
               {bills.length === 0 ? (
                 <p className="text-sm opacity-60">No service bills yet.</p>
               ) : (
@@ -664,7 +683,7 @@ export default function ServiceVendorDetailPage() {
                             <StatusBadge label={b.status} tone={statusTone(b.status)} />
                           </td>
                           <td className="text-right">
-                            {billBalance(b) > 0 ? (
+                            {canPay && billBalance(b) > 0 ? (
                               <button
                                 type="button"
                                 className="btn btn-primary btn-xs"
