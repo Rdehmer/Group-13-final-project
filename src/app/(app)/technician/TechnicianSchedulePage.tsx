@@ -78,6 +78,8 @@ import { statusAfterPlacingOnSchedule } from "@/lib/work-order-status";
 import {
   approvedTimeOffOnDay,
   formatTimeOffLabel,
+  isApprovedTimeOff,
+  loadScheduleTimeOff,
   technicianOnApprovedTimeOff,
   type TimeOffRange,
 } from "@/lib/time-off";
@@ -209,6 +211,7 @@ export default function TechnicianSchedulePage() {
   const [closeoutMessage, setCloseoutMessage] = useState<string | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
   const [timeOffRanges, setTimeOffRanges] = useState<TimeOffRange[]>([]);
+  const [timeOffLoadError, setTimeOffLoadError] = useState<string | null>(null);
   const [scheduleForm, setScheduleForm] = useState({
     scheduled_date: "",
     startHour: "9",
@@ -241,9 +244,12 @@ export default function TechnicianSchedulePage() {
       setDayViewHeight(
         Math.min(DAY_VIEW_HEIGHT_MAX, Math.max(DAY_VIEW_HEIGHT_MIN, prefs.dayViewHeight)),
       );
+    } else if (isManager) {
+      // Tall enough first paint so day bubbles match the expanded manager schedule look.
+      setDayViewHeight(360);
     }
     setPrefsHydrated(true);
-  }, []);
+  }, [isManager]);
 
   useEffect(() => {
     if (!prefsHydrated) return;
@@ -341,24 +347,18 @@ export default function TechnicianSchedulePage() {
   );
 
   const loadTimeOff = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("time_off_requests")
-      .select("id, technician_id, start_date, end_date, status, reason")
-      .eq("status", "Approved");
-    if (error) {
-      setTimeOffRanges([]);
-      return;
-    }
-    setTimeOffRanges((data as TimeOffRange[]) ?? []);
+    // Same source of truth as Time Off Requests tab (join + client-side approved filter).
+    const { rows, error } = await loadScheduleTimeOff(supabase);
+    setTimeOffRanges(rows);
+    setTimeOffLoadError(error);
   }, [supabase]);
 
   const reloadAll = useCallback(async () => {
-    if (profile) {
-      await Promise.all([
-        loadWorkOrders(profile.id, profile.role, technicians),
-        loadTimeOff(),
-      ]);
-    }
+    // Always refresh leave + work orders when possible (don't wait for profile for leave).
+    await Promise.all([
+      profile ? loadWorkOrders(profile.id, profile.role, technicians) : Promise.resolve(),
+      loadTimeOff(),
+    ]);
   }, [loadWorkOrders, loadTimeOff, profile, technicians]);
 
   const loadInventory = useCallback(async () => {
@@ -396,8 +396,8 @@ export default function TechnicianSchedulePage() {
         .from("profiles")
         .select("*")
         .eq("role", "technician")
-        .eq("is_active", true)
         .order("full_name");
+      // Include inactive techs so approved leave still shows with names after deactivation.
       const roster = (techData as Profile[]) ?? [];
       if (!cancelled) setTechnicians(roster);
       if (p) await loadWorkOrders(p.id, p.role, roster);
@@ -448,9 +448,12 @@ export default function TechnicianSchedulePage() {
 
   useEffect(() => {
     const channel = supabase
-      .channel("technician-schedule-work-orders")
+      .channel("technician-schedule-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "work_orders" }, () => {
         void reloadAll();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "time_off_requests" }, () => {
+        void loadTimeOff();
       })
       .subscribe();
 
@@ -472,7 +475,7 @@ export default function TechnicianSchedulePage() {
       window.removeEventListener("focus", onFocus);
       void supabase.removeChannel(channel);
     };
-  }, [supabase, reloadAll]);
+  }, [supabase, reloadAll, loadTimeOff]);
 
   const timedOrders = useMemo(
     () => markConflicts(workOrders.map(withDerivedTimes)),
@@ -494,6 +497,111 @@ export default function TechnicianSchedulePage() {
     if (categoryFilter === "all") return filteredByTech;
     return filteredByTech.filter((wo) => wo.category === categoryFilter);
   }, [filteredByTech, categoryFilter]);
+
+  /** Specific tech (or “My schedule”) currently focused in the filter. */
+  const focusedTechId = useMemo(() => {
+    if (techView === "mine" && profile?.id) return profile.id;
+    if (techView !== "all" && techView !== "mine") {
+      // Drop stale localStorage tech ids that no longer exist in the roster.
+      if (technicians.length > 0 && !technicians.some((t) => t.id === techView)) return null;
+      return techView;
+    }
+    return null;
+  }, [techView, profile?.id, technicians]);
+
+  const focusedTechLabel = useMemo(() => {
+    if (!focusedTechId) return null;
+    const t = technicians.find((x) => x.id === focusedTechId);
+    if (t) return profileLabel(t);
+    const fromLeave = timeOffRanges.find((r) => r.technician_id === focusedTechId)?.technician_name;
+    return fromLeave?.trim() || "Selected technician";
+  }, [focusedTechId, technicians, timeOffRanges]);
+
+  function leaveTechLabel(r: TimeOffRange): string {
+    return (
+      r.technician_name?.trim() ||
+      technicians.find((t) => t.id === r.technician_id)?.full_name?.trim() ||
+      r.technician_id.slice(0, 8)
+    );
+  }
+
+  /** Approved PTO ranges for the focused technician only. */
+  const focusedTechTimeOff = useMemo(() => {
+    if (!focusedTechId) return [] as TimeOffRange[];
+    return timeOffRanges.filter(
+      (r) => r.technician_id === focusedTechId && isApprovedTimeOff(r.status),
+    );
+  }, [timeOffRanges, focusedTechId]);
+
+  /** All loaded approved leave (for calendar paint + banner). */
+  const allApprovedLeave = useMemo(
+    () => timeOffRanges.filter((r) => isApprovedTimeOff(r.status)),
+    [timeOffRanges],
+  );
+
+  /** True when no approved leave day falls in the month currently on screen. */
+  const leaveOutsideMonth = useMemo(() => {
+    if (allApprovedLeave.length === 0) return false;
+    const monthStart = format(startOfMonth(monthCursor), "yyyy-MM-dd");
+    const monthEnd = format(endOfMonth(monthCursor), "yyyy-MM-dd");
+    return !allApprovedLeave.some(
+      (r) => r.start_date <= monthEnd && r.end_date >= monthStart,
+    );
+  }, [allApprovedLeave, monthCursor]);
+
+  /** When a tech is selected with PTO outside this month, auto-jump once to their leave. */
+  useEffect(() => {
+    if (!focusedTechId || focusedTechTimeOff.length === 0) return;
+    const monthStart = format(startOfMonth(monthCursor), "yyyy-MM-dd");
+    const monthEnd = format(endOfMonth(monthCursor), "yyyy-MM-dd");
+    const visible = focusedTechTimeOff.some(
+      (r) => r.start_date <= monthEnd && r.end_date >= monthStart,
+    );
+    if (visible) return;
+    const first = focusedTechTimeOff
+      .slice()
+      .sort((a, b) => a.start_date.localeCompare(b.start_date))[0];
+    if (!first?.start_date) return;
+    try {
+      const day = startOfDay(parseISO(first.start_date));
+      if (Number.isNaN(day.getTime())) return;
+      setMonthCursor(startOfMonth(day));
+      setSelectedDay(day);
+    } catch {
+      /* ignore bad dates */
+    }
+    // Only re-run when the focused tech or their leave set changes — not every month click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedTechId, focusedTechTimeOff]);
+
+  const dayKey = format(selectedDay, "yyyy-MM-dd");
+  const focusedDayIsBlocked = Boolean(
+    focusedTechId && technicianOnApprovedTimeOff(timeOffRanges, focusedTechId, dayKey),
+  );
+
+  function techIdForScheduleBlock(woId?: string | null, assignedOverride?: string | null): string | null {
+    if (focusedTechId) return focusedTechId;
+    if (assignedOverride) return assignedOverride;
+    if (woId) {
+      return timedOrders.find((w) => w.id === woId)?.assigned_technician_id ?? null;
+    }
+    return null;
+  }
+
+  /** Day is closed for scheduling for the focused tech (or the WO’s assigned tech when no filter). */
+  function isPtoBlockedDay(dayIso: string, woId?: string | null, assignedOverride?: string | null): boolean {
+    const techId = techIdForScheduleBlock(woId, assignedOverride);
+    if (!techId) return false;
+    return technicianOnApprovedTimeOff(timeOffRanges, techId, dayIso);
+  }
+
+  function ptoBlockMessage(dayIso: string, techId: string | null): string {
+    const name =
+      (techId && technicians.find((t) => t.id === techId)?.full_name) ||
+      focusedTechLabel ||
+      "This technician";
+    return `${name} has approved time off on ${dayIso}. That day is blocked — pick another date.`;
+  }
 
   const unscheduledOrders = useMemo(
     () => timedOrders.filter((wo) => !wo.scheduled_date),
@@ -560,7 +668,6 @@ export default function TechnicianSchedulePage() {
     return map;
   }, [filteredOrders]);
 
-  const dayKey = format(selectedDay, "yyyy-MM-dd");
   const dayOrders = ordersByDayKey.get(dayKey) ?? [];
   const selected = timedOrders.find((w) => w.id === selectedId) ?? null;
 
@@ -668,12 +775,60 @@ export default function TechnicianSchedulePage() {
 
   function parseDragPayload(e: React.DragEvent): DragPayload | null {
     try {
-      const raw = e.dataTransfer.getData("text/plain");
+      const raw =
+        e.dataTransfer.getData("application/json") ||
+        e.dataTransfer.getData("text/plain") ||
+        e.dataTransfer.getData("text");
       if (!raw) return null;
-      return JSON.parse(raw) as DragPayload;
+      const parsed = JSON.parse(raw) as DragPayload;
+      if (!parsed?.id || typeof parsed.durationMinutes !== "number") return null;
+      return {
+        id: parsed.id,
+        durationMinutes: Math.max(15, Math.round(parsed.durationMinutes) || 120),
+      };
     } catch {
       return null;
     }
+  }
+
+  function handleDragStart(e: React.DragEvent, wo: TimedWo) {
+    if (!isManager) {
+      e.preventDefault();
+      return;
+    }
+    const durationMinutes = Math.max(15, wo.endMinutes - wo.startMinutes || 120);
+    const payload: DragPayload = { id: wo.id, durationMinutes };
+    const json = JSON.stringify(payload);
+    e.dataTransfer.setData("application/json", json);
+    e.dataTransfer.setData("text/plain", json);
+    e.dataTransfer.effectAllowed = "move";
+    // Keep a compact drag preview so the list chip stays readable under the pointer.
+    if (e.currentTarget instanceof HTMLElement) {
+      e.dataTransfer.setDragImage(e.currentTarget, 20, 12);
+    }
+  }
+
+  function allowScheduleDrop(e: React.DragEvent, dayIso?: string) {
+    if (!isManager) return;
+    const day = dayIso ?? dayKey;
+    // Only refuse hover-drop when a tech is selected and that day is their PTO.
+    if (focusedTechId && isPtoBlockedDay(day)) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  function allowMonthCellDrop(e: React.DragEvent, day: Date) {
+    if (!isManager) return;
+    const dayIso = format(day, "yyyy-MM-dd");
+    if (focusedTechId && isPtoBlockedDay(dayIso)) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
   }
 
   function applyLocalScheduleUpdate(
@@ -860,27 +1015,56 @@ export default function TechnicianSchedulePage() {
 
   async function handleTimelineDrop(e: React.DragEvent) {
     e.preventDefault();
+    e.stopPropagation();
     if (!isManager) return;
     const payload = parseDragPayload(e);
     if (!payload || !timelineDropRef.current) return;
 
-    const rect = timelineDropRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const minutesFromStart = Math.round(((x / HOUR_WIDTH) * 60) / 5) * 5;
-    const newStart = dayTimeline.rangeStartMin + Math.max(0, minutesFromStart);
-    const newEnd = newStart + payload.durationMinutes;
-    const hours = Math.round(((newEnd - newStart) / 60) * 100) / 100;
+    const assignTechId = techIdForScheduleBlock(payload.id);
+    if (isPtoBlockedDay(dayKey, payload.id, assignTechId)) {
+      setScheduleError(ptoBlockMessage(dayKey, assignTechId));
+      return;
+    }
 
-    const patch = {
+    const rect = timelineDropRef.current.getBoundingClientRect();
+    const x = Math.max(0, e.clientX - rect.left);
+    const rangeSpan = Math.max(60, dayTimeline.rangeEndMin - dayTimeline.rangeStartMin);
+    const minutesFromStart =
+      Math.round(((x / Math.max(rect.width, 1)) * rangeSpan) / 5) * 5;
+    const newStart = Math.min(
+      dayTimeline.rangeEndMin - 15,
+      dayTimeline.rangeStartMin + Math.max(0, minutesFromStart),
+    );
+    const duration = payload.durationMinutes || 120;
+    const newEnd = Math.min(24 * 60, newStart + duration);
+    const hours = Math.max(0.25, Math.round(((newEnd - newStart) / 60) * 100) / 100);
+
+    const patch: {
+      scheduled_date: string;
+      scheduled_start_time: string;
+      scheduled_end_time: string;
+      estimated_labor_hours: number;
+      assigned_technician_id?: string | null;
+    } = {
       scheduled_date: dayKey,
       scheduled_start_time: formatTimeForDb(newStart),
       scheduled_end_time: formatTimeForDb(newEnd),
       estimated_labor_hours: hours,
     };
+    if (focusedTechId) {
+      patch.assigned_technician_id = focusedTechId;
+    }
 
     applyLocalScheduleUpdate(payload.id, patch);
+    setSelectedDay(startOfDay(parseISO(dayKey)));
+    selectWorkOrder(payload.id);
     setBusy(true);
-    await persistScheduleUpdate(payload.id, patch);
+    setScheduleError(null);
+    const ok = await persistScheduleUpdate(payload.id, patch);
+    if (!ok) {
+      setScheduleError("Could not drop-schedule that work order. Try the schedule form instead.");
+      await reloadAll();
+    }
     await reloadAll();
     setBusy(false);
   }
@@ -892,28 +1076,54 @@ export default function TechnicianSchedulePage() {
     const payload = parseDragPayload(e);
     if (!payload) return;
 
-    const wo = timedOrders.find((w) => w.id === payload.id);
-    if (!wo) return;
-
     const targetDate = format(targetDay, "yyyy-MM-dd");
-    const patch = {
+    const assignTechId = techIdForScheduleBlock(payload.id);
+    if (isPtoBlockedDay(targetDate, payload.id, assignTechId)) {
+      setScheduleError(ptoBlockMessage(targetDate, assignTechId));
+      return;
+    }
+
+    const wo = timedOrders.find((w) => w.id === payload.id);
+    // Keep existing clock times when rescheduling; default 9–11 AM for first-time scheduling.
+    const startMin = wo?.scheduled_start_time
+      ? wo.startMinutes
+      : wo && wo.scheduled_date
+        ? wo.startMinutes
+        : 9 * 60;
+    const endMin = wo?.scheduled_date
+      ? Math.max(wo.endMinutes, startMin + 15)
+      : startMin + (payload.durationMinutes || 120);
+    const hours = Math.max(0.25, Math.round(((endMin - startMin) / 60) * 100) / 100);
+
+    const patch: {
+      scheduled_date: string;
+      scheduled_start_time: string;
+      scheduled_end_time: string;
+      estimated_labor_hours: number;
+      assigned_technician_id?: string | null;
+    } = {
       scheduled_date: targetDate,
-      scheduled_start_time: wo.scheduled_start_time ?? formatTimeForDb(wo.startMinutes),
-      scheduled_end_time: formatTimeForDb(wo.endMinutes),
-      estimated_labor_hours: wo.estimated_labor_hours ?? payload.durationMinutes / 60,
+      scheduled_start_time: formatTimeForDb(startMin),
+      scheduled_end_time: formatTimeForDb(endMin),
+      estimated_labor_hours: hours,
     };
+    if (focusedTechId) {
+      patch.assigned_technician_id = focusedTechId;
+    }
 
     applyLocalScheduleUpdate(payload.id, patch);
+    setSelectedDay(startOfDay(targetDay));
+    setMonthCursor(startOfMonth(targetDay));
+    selectWorkOrder(payload.id);
     setBusy(true);
-    await persistScheduleUpdate(payload.id, patch);
+    setScheduleError(null);
+    const ok = await persistScheduleUpdate(payload.id, patch);
+    if (!ok) {
+      setScheduleError("Could not drop-schedule that work order. Try the schedule form instead.");
+      await reloadAll();
+    }
     await reloadAll();
     setBusy(false);
-  }
-
-  function handleDragStart(e: React.DragEvent, wo: TimedWo) {
-    const durationMinutes = wo.endMinutes - wo.startMinutes;
-    e.dataTransfer.setData("text/plain", JSON.stringify({ id: wo.id, durationMinutes }));
-    e.dataTransfer.effectAllowed = "move";
   }
 
   async function woAction(action: "arrival" | "start" | "pause" | "ready") {
@@ -1002,13 +1212,11 @@ export default function TechnicianSchedulePage() {
       const techNameLabel =
         technicians.find((t) => t.id === scheduleForm.assigned_technician_id)?.full_name ||
         "This technician";
-      const ok = window.confirm(
-        `${techNameLabel} has approved time off on ${scheduleForm.scheduled_date}. Schedule the job anyway?`,
+      setScheduleError(
+        `${techNameLabel} has approved time off on ${scheduleForm.scheduled_date}. That day is blocked — choose another date or technician.`,
       );
-      if (!ok) {
-        setBusy(false);
-        return;
-      }
+      setBusy(false);
+      return;
     }
 
     const hours = Math.round(((endMin - startMin) / 60) * 100) / 100;
@@ -1129,14 +1337,27 @@ export default function TechnicianSchedulePage() {
 
   async function placeToday(woId: string) {
     if (!isManager) return;
-    setBusy(true);
     const today = format(new Date(), "yyyy-MM-dd");
-    const patch = {
+    const assignTechId = techIdForScheduleBlock(woId);
+    if (isPtoBlockedDay(today, woId, assignTechId)) {
+      setScheduleError(ptoBlockMessage(today, assignTechId));
+      return;
+    }
+    setBusy(true);
+    setScheduleError(null);
+    const patch: {
+      scheduled_date: string;
+      scheduled_start_time: string;
+      scheduled_end_time: string;
+      estimated_labor_hours: number;
+      assigned_technician_id?: string | null;
+    } = {
       scheduled_date: today,
       scheduled_start_time: formatTimeForDb(9 * 60),
       scheduled_end_time: formatTimeForDb(11 * 60),
       estimated_labor_hours: 2,
     };
+    if (focusedTechId) patch.assigned_technician_id = focusedTechId;
     applyLocalScheduleUpdate(woId, patch);
     await persistScheduleUpdate(woId, patch);
     await reloadAll();
@@ -1146,6 +1367,7 @@ export default function TechnicianSchedulePage() {
   async function applyBulkSchedule() {
     if (!isManager || bulkSelected.size === 0) return;
     setBusy(true);
+    setScheduleError(null);
     for (const id of bulkSelected) {
       const patch: {
         scheduled_date?: string;
@@ -1155,6 +1377,12 @@ export default function TechnicianSchedulePage() {
         assigned_technician_id?: string | null;
       } = { assigned_technician_id: bulkForm.assigned_technician_id || null };
       if (bulkForm.scheduled_date) {
+        const assignTech =
+          bulkForm.assigned_technician_id || techIdForScheduleBlock(id);
+        if (isPtoBlockedDay(bulkForm.scheduled_date, id, assignTech)) {
+          setScheduleError(ptoBlockMessage(bulkForm.scheduled_date, assignTech));
+          continue;
+        }
         const wo = timedOrders.find((w) => w.id === id);
         patch.scheduled_date = bulkForm.scheduled_date;
         patch.scheduled_start_time = wo?.scheduled_start_time ?? formatTimeForDb(9 * 60);
@@ -1279,10 +1507,7 @@ export default function TechnicianSchedulePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Technician Schedule"
-        description="Month and day calendars for scheduled work, plus job execution tools"
-      />
+      <PageHeader title="Technician Schedule" />
 
       {/* Work order list + filters */}
       <section className="card bg-base-100 shadow print:hidden">
@@ -1365,6 +1590,108 @@ export default function TechnicianSchedulePage() {
               </select>
             ) : null}
           </div>
+
+          {focusedTechId ? (
+            <div className="rounded-box border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+              <p className="font-semibold">
+                Viewing {focusedTechLabel}
+                {focusedTechTimeOff.length > 0 ? (
+                  <span className="badge badge-warning badge-sm ml-2">
+                    {focusedTechTimeOff.length} approved leave
+                    {focusedTechTimeOff.length === 1 ? "" : "s"}
+                  </span>
+                ) : (
+                  <span className="badge badge-ghost badge-sm ml-2">No approved PTO</span>
+                )}
+              </p>
+              {focusedTechTimeOff.length > 0 ? (
+                <ul className="mt-1 list-inside list-disc text-xs opacity-90">
+                  {focusedTechTimeOff.map((r) => (
+                    <li key={r.id}>
+                      {formatTimeOffLabel(r.start_date, r.end_date)}
+                      {r.reason ? ` — ${r.reason}` : ""} · days blocked for drops
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs opacity-70">
+                  No approved leave for this tech yet.
+                  {allApprovedLeave.length > 0
+                    ? ` ${allApprovedLeave.length} other approved leave(s) exist — switch tech or pick All techs.`
+                    : " If you approved leave under Time Off Requests, click Refresh leave below."}
+                </p>
+              )}
+              {focusedTechTimeOff.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-warning btn-xs mt-2"
+                  onClick={() => {
+                    const first = focusedTechTimeOff
+                      .slice()
+                      .sort((a, b) => a.start_date.localeCompare(b.start_date))[0];
+                    if (!first?.start_date) return;
+                    const day = startOfDay(parseISO(first.start_date));
+                    setMonthCursor(startOfMonth(day));
+                    setSelectedDay(day);
+                  }}
+                >
+                  Jump to PTO on calendar
+                </button>
+              ) : null}
+            </div>
+          ) : allApprovedLeave.length > 0 ? (
+            <div className="rounded-box border border-warning/30 bg-warning/5 px-3 py-2 text-sm">
+              <p className="font-semibold">
+                Approved time off on calendar
+                <span className="badge badge-warning badge-sm ml-2">{allApprovedLeave.length}</span>
+              </p>
+              <ul className="mt-1 list-inside list-disc text-xs opacity-90">
+                {allApprovedLeave.slice(0, 8).map((r) => (
+                  <li key={r.id}>
+                    {leaveTechLabel(r)}: {formatTimeOffLabel(r.start_date, r.end_date)}
+                    {r.reason ? ` — ${r.reason}` : ""}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs opacity-70">
+                Yellow hatch = approved leave. Select a technician to block drops on their PTO days.
+              </p>
+              {leaveOutsideMonth ? (
+                <button
+                  type="button"
+                  className="btn btn-warning btn-xs mt-2"
+                  onClick={() => {
+                    const first = allApprovedLeave
+                      .slice()
+                      .sort((a, b) => a.start_date.localeCompare(b.start_date))[0];
+                    if (!first?.start_date) return;
+                    const day = startOfDay(parseISO(first.start_date));
+                    setMonthCursor(startOfMonth(day));
+                    setSelectedDay(day);
+                  }}
+                >
+                  Jump to first PTO month
+                </button>
+              ) : null}
+            </div>
+          ) : !timeOffLoadError ? (
+            <div className="rounded-box border border-base-300 bg-base-200/40 px-3 py-2 text-xs opacity-80">
+              No approved leave loaded for the calendar. If Time Off Requests shows Approved rows, use{" "}
+              <button type="button" className="link link-primary" onClick={() => void loadTimeOff()}>
+                Refresh leave
+              </button>
+              .
+            </div>
+          ) : null}
+
+          {timeOffLoadError ? (
+            <div className="alert alert-warning text-sm">
+              Could not load time off for the schedule: {timeOffLoadError}{" "}
+              <button type="button" className="btn btn-xs" onClick={() => void loadTimeOff()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
 
           {/* Density — technicians only; managers stay on comfortable */}
           {!isServiceManager ? (
@@ -1452,6 +1779,9 @@ export default function TechnicianSchedulePage() {
             <div className="space-y-3">
               <p className="text-xs opacity-60">
                 Click a work order to highlight it on the calendars; click again to clear.
+                {isManager
+                  ? " Drag a work order onto the month or day calendar to schedule or reschedule it."
+                  : ""}
                 {bulkMode ? " Bulk mode: toggle multiple selections." : ""} Showing{" "}
                 {Math.min(visibleCount, filteredOrders.length)} of {filteredOrders.length}.
               </p>
@@ -1469,10 +1799,19 @@ export default function TechnicianSchedulePage() {
                           <button
                             type="button"
                             onClick={() => selectWorkOrder(wo.id)}
+                            draggable={isManager && !bulkMode}
+                            onDragStart={(e) => handleDragStart(e, wo)}
                             className={`rounded-box border px-3 py-1.5 text-left text-sm transition ${style.chip} ${
                               active ? `ring-2 ring-offset-2 ${style.ring}` : "opacity-90 hover:opacity-100"
-                            } ${wo.hasConflict ? "outline outline-2 outline-error outline-offset-1" : ""}`}
+                            } ${wo.hasConflict ? "outline outline-2 outline-error outline-offset-1" : ""} ${
+                              isManager && !bulkMode ? "cursor-grab active:cursor-grabbing" : ""
+                            }`}
                             aria-pressed={active}
+                            title={
+                              isManager && !bulkMode
+                                ? "Drag to the month or day calendar to schedule"
+                                : undefined
+                            }
                           >
                             {bulkMode ? (
                               <span className="mr-1 inline-block h-3 w-3 rounded border border-current align-middle" aria-hidden />
@@ -1480,6 +1819,13 @@ export default function TechnicianSchedulePage() {
                             <span className="font-semibold">{wo.work_order_number}</span>
                             <span className="mx-1 opacity-70">·</span>
                             <span className="opacity-90">{customerName(wo)}</span>
+                            {wo.scheduled_date ? (
+                              <span className="ml-1 opacity-70">
+                                · {wo.scheduled_date.slice(0, 10)} {wo.startLabel}
+                              </span>
+                            ) : (
+                              <span className="ml-1 opacity-70">· Unscheduled</span>
+                            )}
                           </button>
                         </li>
                       );
@@ -1529,12 +1875,24 @@ export default function TechnicianSchedulePage() {
                 </h2>
                 <ul className="mt-2 space-y-2">
                   {unscheduledOrders.slice(0, 8).map((wo) => (
-                    <li key={wo.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <li
+                      key={wo.id}
+                      className={`flex flex-wrap items-center justify-between gap-2 text-sm ${
+                        isManager ? "cursor-grab rounded-lg border border-dashed border-base-300 px-2 py-1.5 active:cursor-grabbing" : ""
+                      }`}
+                      draggable={isManager}
+                      onDragStart={(e) => handleDragStart(e, wo)}
+                      title={isManager ? "Drag onto the month or day calendar" : undefined}
+                    >
                       {isServiceManager ? (
                         <Link
                           href={`/work-orders/${wo.id}`}
                           className="link link-hover link-primary font-medium"
-                          onClick={() => selectWorkOrder(wo.id)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            selectWorkOrder(wo.id);
+                          }}
+                          draggable={false}
                         >
                           {wo.work_order_number}
                         </Link>
@@ -1543,6 +1901,7 @@ export default function TechnicianSchedulePage() {
                           type="button"
                           className="link link-hover link-primary"
                           onClick={() => selectWorkOrder(wo.id)}
+                          draggable={false}
                         >
                           {wo.work_order_number}
                         </button>
@@ -1553,6 +1912,7 @@ export default function TechnicianSchedulePage() {
                         className="btn btn-outline btn-xs"
                         onClick={() => void placeToday(wo.id)}
                         disabled={busy}
+                        draggable={false}
                       >
                         Place today 9 AM–11 AM
                       </button>
@@ -1772,7 +2132,23 @@ export default function TechnicianSchedulePage() {
               <p className="text-sm">{dayOrders.length} work order(s)</p>
             </div>
 
-            <div className="relative overflow-x-auto rounded-box border border-base-300">
+            <div
+              className={`relative overflow-x-auto rounded-box border ${
+                focusedDayIsBlocked ? "border-error/50 bg-error/5" : "border-base-300"
+              }`}
+              onDragOver={(e) => allowScheduleDrop(e, dayKey)}
+              onDrop={(e) => void handleTimelineDrop(e)}
+            >
+              {focusedDayIsBlocked ? (
+                <div
+                  className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-error/10"
+                  aria-hidden
+                >
+                  <span className="rounded-box border border-error/40 bg-base-100 px-3 py-2 text-sm font-semibold text-error shadow">
+                    PTO — day blocked for {focusedTechLabel}
+                  </span>
+                </div>
+              ) : null}
               <div className="relative" style={{ width: dayTimeline.timelineWidth + 8, minWidth: "100%" }}>
                 <div className="relative h-8 border-b border-base-300 bg-base-200/40">
                   {dayTimeline.hours.map((h) => (
@@ -1797,12 +2173,7 @@ export default function TechnicianSchedulePage() {
                     width: dayTimeline.timelineWidth,
                     minHeight: DAY_VIEW_HEIGHT_MIN,
                   }}
-                  onDragOver={(e) => {
-                    if (isManager) {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                    }
-                  }}
+                  onDragOver={(e) => allowScheduleDrop(e, dayKey)}
                   onDrop={(e) => void handleTimelineDrop(e)}
                 >
                   {dayTimeline.hours.map((h) => (
@@ -1900,13 +2271,13 @@ export default function TechnicianSchedulePage() {
                     setDayViewHeight(DAY_VIEW_HEIGHT_MAX);
                   }
                 }}
-                className="group flex h-4 cursor-ns-resize select-none items-center justify-center border-t border-base-300 bg-base-200/50 print:hidden hover:bg-primary/15 active:bg-primary/25"
+                className="group flex h-5 cursor-ns-resize select-none items-center justify-center border-t-2 border-primary/30 bg-primary/10 print:hidden hover:bg-primary/20 active:bg-primary/30"
                 title="Drag up or down to resize the day calendar"
               >
-                <span className="h-1 w-10 rounded-full bg-base-content/25 group-hover:bg-primary/60" aria-hidden />
+                <span className="h-1.5 w-14 rounded-full bg-primary/50 group-hover:bg-primary" aria-hidden />
               </div>
             </div>
-            <p className="mt-1 text-center text-[10px] opacity-50 print:hidden">
+            <p className="mt-1 text-center text-[11px] opacity-70 print:hidden">
               Drag the bar below the day calendar up or down to resize · {Math.round(dayViewHeight)}px
             </p>
           </div>
@@ -1949,10 +2320,17 @@ export default function TechnicianSchedulePage() {
               {monthCells.map((day) => {
                 const key = format(day, "yyyy-MM-dd");
                 const list = ordersByDayKey.get(key) ?? [];
-                const offList = approvedTimeOffOnDay(timeOffRanges, key);
+                const offList = focusedTechId
+                  ? approvedTimeOffOnDay(timeOffRanges, key, focusedTechId)
+                  : approvedTimeOffOnDay(timeOffRanges, key);
+                const hasPto = offList.length > 0;
+                const ptoBlocked = Boolean(focusedTechId && hasPto);
                 const inMonth = isSameMonth(day, monthCursor);
                 const isSelectedDay = isSameDay(day, selectedDay);
-                const emptyDay = list.length === 0;
+                const emptyDay = list.length === 0 && !hasPto;
+                const leaveNames = offList
+                  .map((r) => leaveTechLabel(r).split(" ")[0])
+                  .filter(Boolean);
                 return (
                   <div
                     key={key}
@@ -1965,45 +2343,65 @@ export default function TechnicianSchedulePage() {
                         openDay(day);
                       }
                     }}
-                    onDragOver={(e) => {
-                      if (isManager) {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = "move";
-                      }
-                    }}
+                    onDragOver={(e) => allowMonthCellDrop(e, day)}
                     onDrop={(e) => void handleMonthCellDrop(e, day)}
-                    className={`relative min-h-[6.5rem] cursor-pointer overflow-hidden rounded-box border p-1 text-left transition hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
-                      inMonth ? "border-base-300" : "border-transparent opacity-50"
-                    } ${isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""} ${
-                      emptyDay
+                    className={`relative min-h-[6.5rem] overflow-hidden rounded-box border p-1 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
+                      ptoBlocked
+                        ? "cursor-not-allowed border-error/50"
+                        : hasPto
+                          ? "cursor-pointer border-warning/50 hover:border-warning"
+                          : "cursor-pointer hover:border-primary"
+                    } ${inMonth || hasPto ? "border-base-300" : "border-transparent opacity-50"} ${
+                      isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""
+                    } ${
+                      hasPto
                         ? ""
-                        : inMonth
-                          ? "bg-base-100"
-                          : "bg-base-200/40"
-                    } ${!emptyDay && isToday(day) ? "bg-base-200/80" : ""} ${
-                      offList.length > 0 && !emptyDay ? "bg-warning/10 border-warning/40" : ""
-                    } ${offList.length > 0 && emptyDay ? "border-warning/50" : ""}`}
+                        : emptyDay
+                          ? ""
+                          : inMonth
+                            ? "bg-base-100"
+                            : "bg-base-200/40"
+                    } ${!emptyDay && !hasPto && isToday(day) ? "bg-base-200/80" : ""}`}
                     style={
-                      emptyDay
+                      hasPto
                         ? {
-                            // White / grey diagonal hatch for days with nothing scheduled
-                            backgroundColor: inMonth ? "#ffffff" : "rgba(243,244,246,0.7)",
-                            backgroundImage:
-                              "repeating-linear-gradient(-45deg, #ffffff 0px, #ffffff 5px, #e5e7eb 5px, #e5e7eb 10px)",
+                            backgroundColor: ptoBlocked
+                              ? inMonth
+                                ? "#fef2f2"
+                                : "rgba(254,226,226,0.6)"
+                              : inMonth
+                                ? "#fffbeb"
+                                : "rgba(254,243,199,0.7)",
+                            backgroundImage: ptoBlocked
+                              ? "repeating-linear-gradient(-45deg, #fecaca 0px, #fecaca 6px, #fee2e2 6px, #fee2e2 12px)"
+                              : "repeating-linear-gradient(-45deg, #fde68a 0px, #fde68a 6px, #fef3c7 6px, #fef3c7 12px)",
                           }
-                        : undefined
+                        : emptyDay
+                          ? {
+                              backgroundColor: inMonth ? "#ffffff" : "rgba(243,244,246,0.7)",
+                              backgroundImage:
+                                "repeating-linear-gradient(-45deg, #ffffff 0px, #ffffff 5px, #e5e7eb 5px, #e5e7eb 10px)",
+                            }
+                          : undefined
                     }
                     aria-label={`${format(day, "MMMM d, yyyy")}: ${list.length} work orders${
-                      offList.length ? `, ${offList.length} on time off` : ""
-                    }. ${isManager ? "Drop a work order here to schedule." : ""} Click to open day details.`}
+                      hasPto
+                        ? ptoBlocked
+                          ? `. Blocked — approved PTO for ${focusedTechLabel}.`
+                          : `. Approved PTO: ${leaveNames.join(", ")}.`
+                        : ""
+                    }. ${isManager && !ptoBlocked ? "Drop a work order here to schedule." : ""} Click to open day details.`}
                   >
                     <div className="relative z-[1] mb-1 flex items-center justify-between px-0.5">
                       <span className={`text-xs font-semibold ${isToday(day) ? "text-primary" : ""}`}>
                         {format(day, "d")}
                       </span>
                       <span className="flex items-center gap-0.5">
-                        {offList.length > 0 ? (
-                          <span className="badge badge-warning badge-xs" title="Approved time off">
+                        {hasPto ? (
+                          <span
+                            className={`badge badge-xs ${ptoBlocked ? "badge-error" : "badge-warning"}`}
+                            title={leaveNames.join(", ")}
+                          >
                             PTO
                           </span>
                         ) : null}
@@ -2012,6 +2410,19 @@ export default function TechnicianSchedulePage() {
                         ) : null}
                       </span>
                     </div>
+                    {hasPto ? (
+                      <p
+                        className={`relative z-[1] px-0.5 text-[10px] font-semibold leading-tight ${
+                          ptoBlocked ? "text-error" : "text-amber-900"
+                        }`}
+                      >
+                        {ptoBlocked
+                          ? "Off · blocked"
+                          : leaveNames.length
+                            ? `Off · ${leaveNames.slice(0, 2).join(", ")}`
+                            : "Time off"}
+                      </p>
+                    ) : null}
                     <div className="relative z-[1] flex flex-col gap-0.5">
                       {list.slice(0, 3).map((wo) => {
                         const style = CATEGORY_STYLES[wo.category];
@@ -2020,10 +2431,19 @@ export default function TechnicianSchedulePage() {
                           <button
                             key={wo.id}
                             type="button"
+                            draggable={isManager && !ptoBlocked}
+                            onDragStart={(e) => {
+                              e.stopPropagation();
+                              handleDragStart(e, wo);
+                            }}
                             className={`truncate rounded px-1 py-0.5 text-left text-[10px] leading-tight ${style.chip} ${
                               active ? `ring-2 ring-offset-1 ${style.ring}` : ""
-                            } ${wo.hasConflict ? "outline outline-1 outline-error" : ""}`}
-                            title={`${wo.work_order_number} · ${wo.startLabel} · ${techName(wo)}`}
+                            } ${wo.hasConflict ? "outline outline-1 outline-error" : ""} ${
+                              isManager && !ptoBlocked ? "cursor-grab active:cursor-grabbing" : ""
+                            }`}
+                            title={`${wo.work_order_number} · ${wo.startLabel} · ${techName(wo)}${
+                              isManager && !ptoBlocked ? " — drag to another day to reschedule" : ""
+                            }`}
                             onClick={(e) => {
                               e.stopPropagation();
                               selectWorkOrder(wo.id);
@@ -2057,20 +2477,33 @@ export default function TechnicianSchedulePage() {
               {dayOrders.length} work order{dayOrders.length === 1 ? "" : "s"} scheduled
             </p>
             {(() => {
-              const dayKey = format(selectedDay, "yyyy-MM-dd");
-              const off = approvedTimeOffOnDay(timeOffRanges, dayKey);
+              const modalDayKey = format(selectedDay, "yyyy-MM-dd");
+              const off = focusedTechId
+                ? approvedTimeOffOnDay(timeOffRanges, modalDayKey, focusedTechId)
+                : approvedTimeOffOnDay(timeOffRanges, modalDayKey);
               if (off.length === 0) return null;
               return (
-                <div className="mt-3 rounded-box border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
-                  <p className="font-semibold">Approved time off</p>
+                <div
+                  className={`mt-3 rounded-box border px-3 py-2 text-sm ${
+                    focusedTechId
+                      ? "border-error/40 bg-error/10"
+                      : "border-warning/40 bg-warning/10"
+                  }`}
+                >
+                  <p className="font-semibold">
+                    {focusedTechId
+                      ? `Approved PTO — drops blocked for ${focusedTechLabel}`
+                      : "Approved time off"}
+                  </p>
                   <ul className="mt-1 list-inside list-disc opacity-80">
                     {off.map((r) => {
-                      const name =
-                        technicians.find((t) => t.id === r.technician_id)?.full_name ||
-                        r.technician_id.slice(0, 8);
+                      const name = leaveTechLabel(r);
                       return (
                         <li key={r.id}>
-                          {name}: {formatTimeOffLabel(r.start_date, r.end_date)}
+                          {focusedTechId
+                            ? formatTimeOffLabel(r.start_date, r.end_date)
+                            : `${name}: ${formatTimeOffLabel(r.start_date, r.end_date)}`}
+                          {r.reason ? ` — ${r.reason}` : ""}
                         </li>
                       );
                     })}
