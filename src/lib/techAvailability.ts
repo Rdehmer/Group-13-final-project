@@ -84,12 +84,87 @@ function normalizeTime(t: string): string {
 
 function displayTime(t: string): string {
   const raw = String(t).trim();
-  if (raw.length >= 5) return raw.slice(0, 5);
-  return raw;
+  const hhmm = raw.length >= 5 ? raw.slice(0, 5) : raw;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+  if (!match) return raw;
+  const hours = Number(match[1]);
+  const minutes = match[2];
+  if (!Number.isFinite(hours) || hours < 0 || hours > 23) return hhmm;
+  const period = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${hour12}:${minutes} ${period}`;
 }
 
 export function formatShiftClock(start: string, end: string): string {
-  return `${displayTime(start)}–${displayTime(end)}`;
+  return `${displayTime(start)} – ${displayTime(end)}`;
+}
+
+function timeToMinutes(t: string): number | null {
+  const raw = String(t).trim();
+  const hhmm = raw.length >= 5 ? raw.slice(0, 5) : raw;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/** All preferred windows for a weekday, earliest start first. */
+export function availabilityWindowsForDay(
+  rows: TechnicianAvailability[],
+  technicianId: string,
+  dayOfWeek: number,
+): TechnicianAvailability[] {
+  return rows
+    .filter((r) => r.technician_id === technicianId && r.day_of_week === dayOfWeek)
+    .slice()
+    .sort((a, b) => {
+      const am = timeToMinutes(a.start_time) ?? 0;
+      const bm = timeToMinutes(b.start_time) ?? 0;
+      return am - bm;
+    });
+}
+
+/** First window for a day (legacy helpers / shift prefills). */
+export function availabilityForDay(
+  rows: TechnicianAvailability[],
+  technicianId: string,
+  dayOfWeek: number,
+): TechnicianAvailability | null {
+  return availabilityWindowsForDay(rows, technicianId, dayOfWeek)[0] ?? null;
+}
+
+/** Display one or two preferred windows, e.g. "8:00 AM – 12:00 PM · 3:00 PM – 7:00 PM". */
+export function formatAvailabilityClocks(windows: TechnicianAvailability[]): string {
+  const usable = windows.filter((w) => w.is_available);
+  if (usable.length === 0) return "";
+  return usable.map((w) => formatShiftClock(w.start_time, w.end_time)).join(" · ");
+}
+
+export type AvailabilityWindowInput = { start_time: string; end_time: string };
+
+export function validateAvailabilityWindows(
+  windows: AvailabilityWindowInput[],
+): string | null {
+  if (windows.length < 1 || windows.length > 2) {
+    return "Add one or two time windows.";
+  }
+  for (let i = 0; i < windows.length; i++) {
+    const start = timeToMinutes(windows[i]!.start_time);
+    const end = timeToMinutes(windows[i]!.end_time);
+    if (start == null || end == null) return "Enter valid start and end times.";
+    if (end <= start) return `Window ${i + 1}: end time must be after start time.`;
+  }
+  if (windows.length === 2) {
+    const firstEnd = timeToMinutes(windows[0]!.end_time)!;
+    const secondStart = timeToMinutes(windows[1]!.start_time)!;
+    if (secondStart < firstEnd) {
+      return "Second window must start at or after the first window ends.";
+    }
+  }
+  return null;
 }
 
 /** Week starting Sunday (retail-style). */
@@ -183,7 +258,11 @@ export async function listAvailability(
     return { data: all, error: null, local: true };
   }
 
-  let q = supabase.from("technician_availability").select("*").order("day_of_week");
+  let q = supabase
+    .from("technician_availability")
+    .select("*")
+    .order("day_of_week")
+    .order("start_time");
   if (technicianIds?.length) q = q.in("technician_id", technicianIds);
   const { data, error } = await q;
   if (error) {
@@ -201,98 +280,102 @@ export async function saveDayAvailability(
   input: {
     technician_id: string;
     day_of_week: number;
-    start_time: string;
-    end_time: string;
     is_available: boolean;
     note?: string | null;
-    id?: string | null;
+    /** One or two preferred windows when available. Ignored shape when unavailable (placeholder kept). */
+    windows?: AvailabilityWindowInput[];
+    /** @deprecated Prefer `windows`. Single-window convenience for templates. */
+    start_time?: string;
+    end_time?: string;
   },
-): Promise<{ data: TechnicianAvailability | null; error: string | null }> {
+): Promise<{ data: TechnicianAvailability[]; error: string | null }> {
   const now = new Date().toISOString();
-  const start_time = normalizeTime(input.start_time);
-  const end_time = normalizeTime(input.end_time);
   const mode = await detectScheduleStorage(supabase);
+
+  let windows: AvailabilityWindowInput[];
+  if (!input.is_available) {
+    windows = [
+      {
+        start_time: input.start_time ?? input.windows?.[0]?.start_time ?? "08:00",
+        end_time: input.end_time ?? input.windows?.[0]?.end_time ?? "17:00",
+      },
+    ];
+  } else if (input.windows?.length) {
+    windows = input.windows;
+  } else if (input.start_time && input.end_time) {
+    windows = [{ start_time: input.start_time, end_time: input.end_time }];
+  } else {
+    return { data: [], error: "Add at least one time window." };
+  }
+
+  if (input.is_available) {
+    const invalid = validateAvailabilityWindows(windows);
+    if (invalid) return { data: [], error: invalid };
+  }
+
+  const normalized = windows.map((w) => ({
+    start_time: normalizeTime(w.start_time),
+    end_time: normalizeTime(w.end_time),
+  }));
 
   if (mode === "local") {
     const all = readJson<TechnicianAvailability[]>(KEY_AVAIL, []);
-    const idx = all.findIndex(
-      (r) =>
-        r.technician_id === input.technician_id &&
-        r.day_of_week === input.day_of_week &&
-        (input.id ? r.id === input.id : true),
-    );
-    // replace all windows for that day for simplicity when no id
     const withoutDay = all.filter(
       (r) =>
         !(r.technician_id === input.technician_id && r.day_of_week === input.day_of_week),
     );
-    const row: TechnicianAvailability = {
-      id: input.id && idx >= 0 ? all[idx]!.id : newId(),
+    const rows: TechnicianAvailability[] = normalized.map((w) => ({
+      id: newId(),
       technician_id: input.technician_id,
       day_of_week: input.day_of_week,
-      start_time,
-      end_time,
+      start_time: w.start_time,
+      end_time: w.end_time,
       is_available: input.is_available,
       note: input.note ?? null,
-      created_at: idx >= 0 ? all[idx]!.created_at : now,
+      created_at: now,
       updated_at: now,
-    };
-    writeJson(KEY_AVAIL, [...withoutDay, row]);
-    return { data: row, error: null };
+    }));
+    writeJson(KEY_AVAIL, [...withoutDay, ...rows]);
+    return { data: rows, error: null };
   }
 
-  // One primary window per day: update existing or insert
-  const { data: existing } = await supabase
+  // Replace all windows for this weekday (supports split shifts via multiple rows).
+  const { error: deleteError } = await supabase
     .from("technician_availability")
-    .select("id")
+    .delete()
     .eq("technician_id", input.technician_id)
-    .eq("day_of_week", input.day_of_week)
-    .limit(1)
-    .maybeSingle();
+    .eq("day_of_week", input.day_of_week);
 
-  if (existing?.id) {
-    const { data, error } = await supabase
-      .from("technician_availability")
-      .update({
-        start_time,
-        end_time,
-        is_available: input.is_available,
-        note: input.note ?? null,
-        updated_at: now,
-      })
-      .eq("id", existing.id)
-      .select()
-      .single();
-    if (error) {
-      if (isSchemaMissing(error.message)) {
-        storageMode = "local";
-        return saveDayAvailability(supabase, input);
-      }
-      return { data: null, error: error.message };
+  if (deleteError) {
+    if (isSchemaMissing(deleteError.message)) {
+      storageMode = "local";
+      return saveDayAvailability(supabase, input);
     }
-    return { data: data as TechnicianAvailability, error: null };
+    return { data: [], error: deleteError.message };
   }
 
   const { data, error } = await supabase
     .from("technician_availability")
-    .insert({
-      technician_id: input.technician_id,
-      day_of_week: input.day_of_week,
-      start_time,
-      end_time,
-      is_available: input.is_available,
-      note: input.note ?? null,
-    })
-    .select()
-    .single();
+    .insert(
+      normalized.map((w) => ({
+        technician_id: input.technician_id,
+        day_of_week: input.day_of_week,
+        start_time: w.start_time,
+        end_time: w.end_time,
+        is_available: input.is_available,
+        note: input.note ?? null,
+      })),
+    )
+    .select();
+
   if (error) {
     if (isSchemaMissing(error.message)) {
       storageMode = "local";
       return saveDayAvailability(supabase, input);
     }
-    return { data: null, error: error.message };
+    return { data: [], error: error.message };
   }
-  return { data: data as TechnicianAvailability, error: null };
+  return { data: (data as TechnicianAvailability[]) ?? [], error: null };
 }
 
 export async function seedDefaultAvailabilityIfEmpty(
@@ -452,16 +535,6 @@ export async function cancelShift(
     return cancelShift(supabase, id);
   }
   return { error: error?.message ?? null };
-}
-
-export function availabilityForDay(
-  rows: TechnicianAvailability[],
-  technicianId: string,
-  dayOfWeek: number,
-): TechnicianAvailability | null {
-  return (
-    rows.find((r) => r.technician_id === technicianId && r.day_of_week === dayOfWeek) ?? null
-  );
 }
 
 export function shiftsForCell(
