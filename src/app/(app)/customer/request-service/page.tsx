@@ -149,7 +149,7 @@ function buildRequestedService(
   const option = SERVICE_OPTIONS.find((o) => o.kind === form.service_kind);
   const parts = [
     oneOffOutsideContract
-      ? `Billing: ${CONTRACT_START_DATE_ONE_OFF_TITLE} — outside contract coverage (standard rates apply)`
+      ? `Billing: ${CONTRACT_START_DATE_ONE_OFF_TITLE} — time & materials at standard rates (outside contract coverage)`
       : null,
     option ? `Request type: ${option.title}` : null,
     equipmentName ? `Equipment: ${equipmentName}` : "Equipment: General / unspecified",
@@ -482,7 +482,7 @@ function RequestServicePageInner() {
               <div role="status" className="alert alert-info text-sm">
                 <span>
                   This request will be submitted as a <strong>{CONTRACT_START_DATE_ONE_OFF_TITLE}</strong> outside your
-                  contract coverage. Standard rates apply.
+                  contract coverage. It will be billed time &amp; materials at standard rates.
                 </span>
               </div>
             ) : null}

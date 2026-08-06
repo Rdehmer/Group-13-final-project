@@ -10,6 +10,8 @@ import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import type { Customer, Profile, ServiceContract } from "@/lib/types";
 import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
+import { ContractPricingSummary } from "@/components/ContractPricingSummary";
+import { monthlyPremiumFromContract, formatMonthlyPremium } from "@/lib/contract-pricing";
 import {
   parsePlanSnapshotFromNotes,
   resolvePackIdFromSnapshot,
@@ -533,25 +535,39 @@ export default function ContractDetailPage() {
             )}
           </FormRow>
 
-          <FormRow label="Annual price">
+          <FormRow label="Annual contract value">
             {isManager ? (
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                className="input input-bordered w-full"
-                value={form.contract_price}
-                onChange={(e) => {
-                  const price = e.target.value;
-                  const monthly =
-                    /monthly\s*recurring/i.test(form.billing_method) && Number(price) > 0
-                      ? String(monthlyFromAnnual(Number(price)))
-                      : form.monthly_amount;
-                  setForm({ ...form, contract_price: price, monthly_amount: monthly });
-                }}
-              />
+              <div className="space-y-1">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input-bordered w-full"
+                  value={form.contract_price}
+                  onChange={(e) => {
+                    const price = e.target.value;
+                    const monthly =
+                      /monthly\s*recurring/i.test(form.billing_method) && Number(price) > 0
+                        ? String(monthlyFromAnnual(Number(price)))
+                        : form.monthly_amount;
+                    setForm({ ...form, contract_price: price, monthly_amount: monthly });
+                  }}
+                />
+                {Number(form.contract_price) > 0 ? (
+                  <p className="text-xs opacity-60">
+                    ≈ {formatMonthlyPremium(monthlyPremiumFromContract({ ...contract, contract_price: Number(form.contract_price) }))}
+                  </p>
+                ) : null}
+              </div>
             ) : (
-              <span>{formatMoney(contract.contract_price)}</span>
+              <span>
+                {formatMoney(contract.contract_price)}
+                {contract.contract_price > 0 ? (
+                  <span className="ml-2 text-sm opacity-60">
+                    ({formatMonthlyPremium(monthlyPremiumFromContract(contract))})
+                  </span>
+                ) : null}
+              </span>
             )}
           </FormRow>
 
@@ -585,6 +601,12 @@ export default function ContractDetailPage() {
             )}
           </FormRow>
 
+          {contract.contract_price > 0 ? (
+            <div className="rounded-box border border-base-300 p-4">
+              <ContractPricingSummary variant="contract" contract={contract} compact />
+            </div>
+          ) : null}
+
           {(() => {
             const standing = getContractPaymentStanding(contract, standingInvoices);
             if (standing.id === "not_monthly") return null;
@@ -600,6 +622,7 @@ export default function ContractDetailPage() {
               </div>
             );
           })()}
+
 
           <div className="grid gap-3 sm:grid-cols-2">
             <FormRow label="Start date">

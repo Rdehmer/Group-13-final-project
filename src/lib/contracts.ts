@@ -7,7 +7,9 @@ import {
   listCatalogDrivenTiers,
   mergePlanSnapshotIntoNotes,
   resolvePlan,
+  buildPricingExtrasLine,
 } from "@/lib/contract-plans";
+import { premiumForFeeOption, type ServiceFeeOption } from "@/lib/contract-pricing";
 
 export const CONTRACT_TYPES = [
   "Preventive Maintenance",
@@ -150,7 +152,8 @@ export const CONTRACT_TIERS: ContractTier[] = [
       "No included parts — billed separately",
       "Standard (best effort) emergency response",
       "Semi-annual inspections and basic tune-ups",
-      "Corrective work billed time and materials",
+      "Covered repairs within plan caps",
+      "$100 or $125 service fee per dispatch (your choice at signup)",
       "Business-hours scheduling only",
       "Customer approval required before non-PM dispatch",
     ],
@@ -162,7 +165,7 @@ export const CONTRACT_TIERS: ContractTier[] = [
       included_labor_hours: "4",
       included_replacement_parts: "0",
       emergency_response_commitment: "Standard (best effort)",
-      billing_method: "Per-Service Charge",
+      billing_method: "Monthly Recurring Charge",
       payment_terms: "Net 30",
       approval_requirements: "Customer approval required before non-PM dispatch",
     },
@@ -279,10 +282,12 @@ type BuildSubmissionInput = {
   packId?: string;
   /** Covered asset value for plan band snapshot (defaults Mid-ish $100k). */
   assetValue?: number;
+  serviceFeeOption?: ServiceFeeOption;
 };
 
 export function buildContractSubmission(input: BuildSubmissionInput) {
   const { customerId, customerName, userId, form, tierId, packId } = input;
+  const serviceFeeOption = input.serviceFeeOption ?? 125;
   const assetValue =
     input.assetValue != null && Number.isFinite(input.assetValue) && input.assetValue > 0
       ? input.assetValue
@@ -300,20 +305,10 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
         band: resolved.band,
         assetValue: resolved.assetValue,
       });
-      const extrasLine =
-        Object.keys(resolved.thresholds.extras).length > 0
-          ? `[Extras: ${Object.entries(resolved.thresholds.extras)
-              .map(([k, v]) => `${k}=${String(v)}`)
-              .join("; ")}]`
-          : "";
-      notes = mergePlanSnapshotIntoNotes(
-        notes,
-        extrasLine ? `${tag}\n${extrasLine}` : tag,
-      );
-      // RLS requires contract_price = 0 on customer insert; still store suggested monthly + deductible.
-      const annual = Number(resolved.thresholds.annual_price) || 0;
+      const extrasLine = buildPricingExtrasLine(resolved.thresholds, serviceFeeOption, packId);
+      notes = mergePlanSnapshotIntoNotes(notes, `${tag}\n${extrasLine}`);
       if (/monthly\s*recurring/i.test(resolved.thresholds.billing_method)) {
-        monthlyAmount = Math.round((annual / 12) * 100) / 100;
+        monthlyAmount = premiumForFeeOption(resolved.thresholds, serviceFeeOption);
       }
       const d = resolved.thresholds.extras.deductible;
       const dn = typeof d === "number" ? d : Number(d);
@@ -663,6 +658,7 @@ export type ContractDraft = {
   tierId: ContractTierId;
   step: number;
   packId?: string;
+  serviceFeeOption?: ServiceFeeOption;
 };
 
 export function saveContractDraft(customerId: string, data: ContractDraft) {

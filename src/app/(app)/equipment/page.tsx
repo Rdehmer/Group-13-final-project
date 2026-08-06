@@ -216,7 +216,8 @@ function EquipmentPageInner() {
   const [attachContractId, setAttachContractId] = useState("");
   const [attaching, setAttaching] = useState(false);
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
 
   async function loadCostRollups(): Promise<Record<string, EquipmentCostRollup>> {
     const yearStart = yearStartIso();
@@ -324,7 +325,9 @@ function EquipmentPageInner() {
       setProfile(nextProfile);
     }
 
-    const manager = nextProfile?.role === "service_manager";
+    const manager =
+      nextProfile?.role === "administrator" ||
+      nextProfile?.role === "service_manager";
 
     const [{ data: eq }, { data: cust }, { data: links }] = await Promise.all([
       supabase.from("equipment").select("*, customers(id, name)").order("name"),

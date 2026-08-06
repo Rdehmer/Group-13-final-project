@@ -17,6 +17,11 @@ import {
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { formatMoney } from "@/lib/calculations";
 import {
+  CAP_PROFILE_LABEL,
+  getIndustryCapProfile,
+  resolveCoverageCaps,
+} from "@/lib/contract-cap-profiles";
+import {
   clonePack,
   createBlankPack,
   formatBandRange,
@@ -252,6 +257,12 @@ export default function ContractPlansSettingsPage() {
                       onChange={(e) => onRenamePack(e.target.value)}
                     />
                   </FormRow>
+                  <div className="pb-1">
+                    <span className="text-xs uppercase tracking-wide opacity-60">Cap profile</span>
+                    <p className="text-sm font-medium">
+                      {CAP_PROFILE_LABEL[getIndustryCapProfile(pack.id)]}
+                    </p>
+                  </div>
                   <FormRow label="Description">
                     <input
                       className="input input-bordered w-full min-w-[16rem]"
@@ -319,7 +330,15 @@ export default function ContractPlansSettingsPage() {
                   </>
                 ) : null}
 
-                {band ? <BandEditor band={band} onBounds={patchBand} onThresholds={patchThresholds} /> : null}
+                {band ? (
+                  <BandEditor
+                    band={band}
+                    packId={packId}
+                    tierId={tierId}
+                    onBounds={patchBand}
+                    onThresholds={patchThresholds}
+                  />
+                ) : null}
               </div>
             </div>
           ) : (
@@ -333,10 +352,14 @@ export default function ContractPlansSettingsPage() {
 
 function BandEditor({
   band,
+  packId,
+  tierId,
   onBounds,
   onThresholds,
 }: {
   band: AssetValueBand;
+  packId: string;
+  tierId: ServiceLevelId;
   onBounds: (b: {
     label?: string;
     min_asset_value?: number;
@@ -346,6 +369,9 @@ function BandEditor({
 }) {
   const t = band.thresholds;
   const [extrasText, setExtrasText] = useState(extrasToText(t.extras));
+  const derivedCaps = resolveCoverageCaps(tierId, band.id, packId);
+  const displayPerEq = Number(t.extras.per_equipment_cap) || derivedCaps.perEquipment;
+  const displayAgg = Number(t.extras.aggregate_coverage_cap) || derivedCaps.aggregate;
 
   useEffect(() => {
     setExtrasText(extrasToText(band.thresholds.extras));
@@ -354,7 +380,7 @@ function BandEditor({
   return (
     <div className="space-y-4 rounded-box border border-base-300 bg-base-200/30 p-4">
       <p className="font-semibold">
-        {band.label} band · from {formatMoney(t.annual_price)}/yr
+        {band.label} band · {formatMoney(t.monthly_premium_at_125_fee ?? Math.round(t.annual_price / 12))}/mo @ $125 visit
         {t.extras.max_units_covered != null ? (
           <span className="font-normal opacity-70">
             {" "}
@@ -362,9 +388,13 @@ function BandEditor({
           </span>
         ) : null}
       </p>
+      <p className="text-sm opacity-80">
+        Coverage caps (derived): {formatMoney(displayPerEq)}/equipment · {formatMoney(displayAgg)}/yr aggregate
+      </p>
       <p className="text-xs opacity-60">
-        Edit <code className="text-xs">max_units_covered</code> in extras below to change the unit
-        cap for this band.
+        Override <code className="text-xs">aggregate_coverage_cap</code> or{" "}
+        <code className="text-xs">per_equipment_cap</code> in extras below to replace profile defaults.
+        Edit <code className="text-xs">max_units_covered</code> to change the unit cap for this band.
       </p>
       <div className="grid gap-3 sm:grid-cols-3">
         <FormRow label="Band label">
@@ -399,7 +429,38 @@ function BandEditor({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <FormRow label="Annual price">
+        <FormRow label="Monthly premium @ $125/visit">
+          <input
+            type="number"
+            min={0}
+            step={0.01}
+            className="input input-bordered w-full"
+            value={t.monthly_premium_at_125_fee ?? Math.round(t.annual_price / 12)}
+            onChange={(e) => {
+              const monthly125 = Number(e.target.value) || 0;
+              const tradeoff = Number(t.extras.premium_tradeoff_per_month) || 25;
+              onThresholds({
+                monthly_premium_at_125_fee: monthly125,
+                monthly_premium_at_100_fee: monthly125 + tradeoff,
+                annual_price: monthly125 * 12,
+              });
+            }}
+          />
+        </FormRow>
+        <FormRow label="Monthly premium @ $100/visit">
+          <input
+            type="number"
+            min={0}
+            step={0.01}
+            className="input input-bordered w-full"
+            value={t.monthly_premium_at_100_fee ?? Math.round(t.annual_price / 12) + 25}
+            onChange={(e) => {
+              const monthly100 = Number(e.target.value) || 0;
+              onThresholds({ monthly_premium_at_100_fee: monthly100 });
+            }}
+          />
+        </FormRow>
+        <FormRow label="Annual price (derived)">
           <input
             type="number"
             min={0}

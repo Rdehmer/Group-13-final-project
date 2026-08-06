@@ -1,15 +1,21 @@
 "use client";
 
 /**
- * Technician Parts hub — catalog browse, restock, emergency buy.
+ * Technician Parts hub — catalog browse, restock, emergency buy, reimbursements.
  */
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { format, parseISO } from "date-fns";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
 import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
+import {
+  EmergencyPurchaseReview,
+  type EmergencyPurchaseReviewRow,
+} from "@/components/EmergencyPurchaseReview";
+import { formatMoney } from "@/lib/calculations";
 import type { Part, Profile, TechPartOrderRequest, WorkOrder } from "@/lib/types";
 
 type PurchaseOrderRow = TechPartOrderRequest & {
@@ -19,15 +25,26 @@ type PurchaseOrderRow = TechPartOrderRequest & {
 type JobOption = Pick<WorkOrder, "id" | "work_order_number" | "problem_description">;
 
 type StockFilter = "all" | "in_stock" | "low" | "out";
+type ReimburseFilter = "all" | "submitted" | "reimbursed";
 
 function isLowStock(part: Part) {
   return part.quantity_on_hand > 0 && part.quantity_on_hand <= part.reorder_level;
+}
+
+function formatWhen(iso: string | null | undefined) {
+  if (!iso) return "—";
+  try {
+    return format(parseISO(iso), "MMM d, yyyy");
+  } catch {
+    return iso;
+  }
 }
 
 export function TechnicianPartsHub({
   profile,
   parts,
   purchaseOrders,
+  emergencyPurchases,
   jobs,
   success,
   error,
@@ -37,6 +54,7 @@ export function TechnicianPartsHub({
   profile: Profile;
   parts: Part[];
   purchaseOrders: PurchaseOrderRow[];
+  emergencyPurchases: EmergencyPurchaseReviewRow[];
   jobs: JobOption[];
   success: string | null;
   error: string | null;
@@ -46,8 +64,10 @@ export function TechnicianPartsHub({
   const [search, setSearch] = useState("");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [category, setCategory] = useState("all");
+  const [reimburseFilter, setReimburseFilter] = useState<ReimburseFilter>("all");
   const [showPurchaseOrder, setShowPurchaseOrder] = useState(false);
   const [showEmergencyPurchase, setShowEmergencyPurchase] = useState(false);
+  const [reviewPurchase, setReviewPurchase] = useState<EmergencyPurchaseReviewRow | null>(null);
   const [localSuccess, setLocalSuccess] = useState<string | null>(null);
 
   const activeParts = useMemo(() => parts.filter((p) => p.is_active), [parts]);
@@ -66,6 +86,16 @@ export function TechnicianPartsHub({
     const out = activeParts.filter((p) => p.quantity_on_hand <= 0).length;
     return { total: activeParts.length, inStock, low, out };
   }, [activeParts]);
+
+  const pendingReimbursements = useMemo(
+    () => emergencyPurchases.filter((p) => p.status === "submitted"),
+    [emergencyPurchases],
+  );
+
+  const visiblePurchases = useMemo(() => {
+    if (reimburseFilter === "all") return emergencyPurchases;
+    return emergencyPurchases.filter((p) => p.status === reimburseFilter);
+  }, [emergencyPurchases, reimburseFilter]);
 
   const listed = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -159,6 +189,110 @@ export function TechnicianPartsHub({
           <span>{error}</span>
         </div>
       ) : null}
+
+      {pendingReimbursements.length > 0 ? (
+        <div className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <p className="font-semibold">
+            {pendingReimbursements.length} pending reimbursement
+            {pendingReimbursements.length === 1 ? "" : "s"}
+          </p>
+          <p className="opacity-70">
+            Waiting on manager approval for store purchases you logged.
+          </p>
+          <button
+            type="button"
+            className="btn btn-warning btn-xs mt-2"
+            onClick={() => setReimburseFilter("submitted")}
+          >
+            Show pending
+          </button>
+        </div>
+      ) : null}
+
+      <section className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 font-bold">
+            My reimbursements
+            {pendingReimbursements.length > 0 ? (
+              <span className="badge badge-warning badge-sm">{pendingReimbursements.length}</span>
+            ) : null}
+          </h2>
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Reimbursement filter">
+            {(
+              [
+                ["all", "All"],
+                ["submitted", "Pending"],
+                ["reimbursed", "Accepted"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={`btn btn-xs min-h-8 ${reimburseFilter === id ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => setReimburseFilter(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {visiblePurchases.length === 0 ? (
+          <p className="text-sm opacity-60">
+            {reimburseFilter === "submitted"
+              ? "No pending reimbursements."
+              : reimburseFilter === "reimbursed"
+                ? "No accepted reimbursements yet."
+                : "When you log “I bought a part”, purchases show here until and after the manager reimburses them."}
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {visiblePurchases.map((purchase) => {
+              const partLabel =
+                purchase.parts?.part_number != null
+                  ? `${purchase.parts.part_number} — ${purchase.parts.name ?? purchase.part_name}`
+                  : purchase.part_name;
+              const wo = purchase.work_orders;
+              return (
+                <li
+                  key={purchase.id}
+                  className="flex flex-col gap-2 rounded-xl border border-base-300 bg-base-200/50 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold leading-snug">{partLabel}</p>
+                    <p className="text-sm opacity-70">
+                      Qty {purchase.quantity} · {formatMoney(purchase.amount_paid)} ·{" "}
+                      {purchase.store_name}
+                    </p>
+                    <p className="text-xs opacity-55">
+                      {formatWhen(purchase.purchased_at)}
+                      {wo ? ` · ${wo.work_order_number}` : ""}
+                      {purchase.status === "reimbursed" && purchase.reimbursed_at
+                        ? ` · Accepted ${formatWhen(purchase.reimbursed_at)}`
+                        : ""}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge
+                      label={
+                        purchase.status === "reimbursed" ? "Accepted" : "Pending reimbursement"
+                      }
+                      tone={purchase.status === "reimbursed" ? "success" : "warning"}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs min-h-9"
+                      onClick={() => setReviewPurchase(purchase)}
+                    >
+                      Review
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       {stats.low > 0 ? (
         <div className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
@@ -354,9 +488,17 @@ export function TechnicianPartsHub({
           onClose={() => setShowEmergencyPurchase(false)}
           onSubmitted={async () => {
             setShowEmergencyPurchase(false);
-            setLocalSuccess("Emergency purchase logged");
+            setLocalSuccess("Emergency purchase logged — pending reimbursement");
             await onReloadTechData();
           }}
+        />
+      ) : null}
+
+      {reviewPurchase ? (
+        <EmergencyPurchaseReview
+          purchase={reviewPurchase}
+          hideTechnician
+          onClose={() => setReviewPurchase(null)}
         />
       ) : null}
     </div>

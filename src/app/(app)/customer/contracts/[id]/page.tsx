@@ -25,7 +25,6 @@ import {
   formatStandingDetail,
   getContractPaymentStanding,
   resolvedDeductible,
-  resolvedMonthlyAmount,
   standingBadgeClass,
 } from "@/lib/contract-billing";
 
@@ -168,7 +167,6 @@ export default function CustomerContractDetailPage() {
   const typeHelp = CONTRACT_TYPE_HELP[contract.contract_type];
   const isActive = contract.status.toLowerCase() === "active" || contract.status.toLowerCase() === "renewed";
   const standing = getContractPaymentStanding(contract, standingInvoices);
-  const monthly = resolvedMonthlyAmount(contract);
   const deductible = resolvedDeductible(contract);
 
   return (
@@ -231,8 +229,8 @@ export default function CustomerContractDetailPage() {
         </dl>
       </SectionCard>
 
-      <SectionCard title="Your coverage">
-        <ContractCoveragePanel contract={contract} compact />
+      <SectionCard title="Coverage & pricing">
+        <ContractCoveragePanel contract={contract} />
       </SectionCard>
 
       <SectionCard title="Covered equipment">
@@ -252,53 +250,26 @@ export default function CustomerContractDetailPage() {
         )}
       </SectionCard>
 
-      <SectionCard title="Billing">
-        <dl className="grid gap-2 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="opacity-70">Billing method</dt>
-            <dd className="font-medium">{contract.billing_method}</dd>
-          </div>
-          {contract.payment_terms ? (
-            <div>
-              <dt className="opacity-70">Payment terms</dt>
-              <dd className="font-medium">{contract.payment_terms}</dd>
-            </div>
-          ) : null}
-          {contract.contract_price > 0 ? (
-            <div>
-              <dt className="opacity-70">Annual contract price</dt>
-              <dd className="font-medium">{formatMoney(contract.contract_price)}</dd>
-            </div>
-          ) : null}
-          {monthly > 0 ? (
-            <div>
-              <dt className="opacity-70">Monthly fee</dt>
-              <dd className="font-medium">{formatMoney(monthly)}</dd>
-            </div>
-          ) : null}
-          {deductible > 0 ? (
-            <div>
-              <dt className="opacity-70">Deductible</dt>
-              <dd className="font-medium">{formatMoney(deductible)}</dd>
-            </div>
-          ) : null}
-        </dl>
-        {standing.id !== "not_monthly" ? (
-          <div className="mt-3 rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
+      {standing.id !== "not_monthly" ? (
+        <SectionCard title="Payment status">
+          <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span className={`badge badge-sm ${standingBadgeClass(standing.id)}`}>
                 {standing.label}
               </span>
               <span className="opacity-70">{formatStandingDetail(standing)}</span>
             </div>
+            {deductible > 0 ? (
+              <p className="mt-2 text-sm opacity-70">Deductible: {formatMoney(deductible)}</p>
+            ) : null}
             {standing.id === "payment_due" || standing.id === "past_due" ? (
               <Link href="/customer/pay" className="btn btn-primary btn-sm mt-3">
                 Pay now
               </Link>
             ) : null}
           </div>
-        ) : null}
-      </SectionCard>
+        </SectionCard>
+      ) : null}
 
       {(contract.warranty_terms ||
         contract.cancellation_terms ||

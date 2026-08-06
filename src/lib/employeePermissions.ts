@@ -22,8 +22,11 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   work_orders: "Work Orders",
   technician: "Technician Schedule",
   time_off: "Time Off Requests",
+  timesheets: "Timesheets & Payroll Sign-off",
   dispatch: "Dispatch Board",
   parts: "Parts / Inventory",
+  emergency_purchases: "Reimbursements",
+  inbox: "Inbox (customer messages)",
   billing: "Billing / Invoices",
   payments: "Payments",
   batches: "Accounting Batches",
@@ -49,8 +52,11 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       "work_orders",
       "technician",
       "time_off",
+      "timesheets",
       "dispatch",
       "parts",
+      "emergency_purchases",
+      "inbox",
     ],
   },
   {
@@ -82,8 +88,12 @@ const HREF_PERMISSION: { prefix: string; key: PermissionKey }[] = [
   { prefix: "/work-orders", key: "work_orders" },
   { prefix: "/technician", key: "technician" },
   { prefix: "/time-off", key: "time_off" },
+  { prefix: "/timesheets", key: "timesheets" },
+  { prefix: "/scheduling", key: "technician" },
   { prefix: "/dispatch", key: "dispatch" },
   { prefix: "/parts", key: "parts" },
+  { prefix: "/emergency-purchases", key: "emergency_purchases" },
+  { prefix: "/inbox", key: "inbox" },
   { prefix: "/billing", key: "billing" },
   { prefix: "/payments", key: "payments" },
   { prefix: "/batches", key: "batches" },
@@ -102,12 +112,15 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "work_orders",
     "technician",
     "time_off",
+    "timesheets",
     "dispatch",
     "parts",
+    "emergency_purchases",
+    "inbox",
     "reports",
     "invoice_cash",
   ],
-  technician: ["technician", "time_off", "dispatch", "parts"],
+  technician: ["technician", "time_off", "timesheets", "dispatch", "parts"],
   billing: [
     "customers",
     "work_orders",
@@ -117,6 +130,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "batches",
     "period_close",
     "reports",
+    "timesheets",
   ],
   customer: [],
 };
@@ -187,6 +201,8 @@ function navAllowed(item: NavItem, profile: Profile): boolean {
   if (profile.role === "customer") {
     return item.roles.includes("customer");
   }
+  // Honor NAV_ITEMS.roles so manager-only tabs stay off Admin / other staff.
+  if (!item.roles.includes(profile.role)) return false;
   return profileCanAccessHref(profile, item.href);
 }
 
@@ -198,12 +214,12 @@ export function filterNavForProfile(profile: Profile): NavItem[] {
     }
     if (item.children?.length) {
       const kids = item.children.filter((c) => navAllowed(c, profile));
-      if (kids.length || profileCanAccessHref(profile, item.href)) {
+      if (kids.length || navAllowed(item, profile)) {
         return true;
       }
       return false;
     }
-    return profileCanAccessHref(profile, item.href);
+    return navAllowed(item, profile);
   }).map((item) => {
     if (!item.children?.length) return item;
     return {
@@ -211,7 +227,7 @@ export function filterNavForProfile(profile: Profile): NavItem[] {
       children: item.children.filter((c) =>
         profile.role === "customer"
           ? c.roles.includes("customer")
-          : profileCanAccessHref(profile, c.href),
+          : navAllowed(c, profile),
       ),
     };
   });
