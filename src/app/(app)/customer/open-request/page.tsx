@@ -31,7 +31,7 @@ function OpenRequestPageInner() {
     Record<string, WorkOrderStatusActivity[]>
   >({});
   const [loading, setLoading] = useState(true);
-  const highlightRef = useRef<HTMLElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const scrolledToHighlight = useRef(false);
 
   useEffect(() => {

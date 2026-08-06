@@ -43,7 +43,7 @@ function CustomerContractsPageInner() {
         ? "pending"
         : "all",
   );
-  const highlightRef = useRef<HTMLElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const scrolledToHighlight = useRef(false);
 
   useEffect(() => {
