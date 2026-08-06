@@ -1,6 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { MessageSquarePlus } from "lucide-react";
 import { INBOX_CATEGORIES, type InboxCategory, type WorkOrderOption } from "./inbox-types";
 
@@ -25,16 +26,18 @@ function Field({
   label,
   required,
   hint,
+  className,
   children,
 }: {
   id: string;
   label: string;
   required?: boolean;
   hint?: string;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-2">
+    <div className={["space-y-2", className].filter(Boolean).join(" ")}>
       <label htmlFor={id} className="block text-sm font-medium text-base-content">
         {label}
         {required ? <span className="text-error"> *</span> : null}
@@ -60,15 +63,49 @@ export function NewMessageModal({
   onClose,
   onSubmit,
 }: Props) {
-  if (!open) return null;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onCloseRef.current();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, busy]);
+
+  if (!open || !mounted) return null;
 
   const canSend = subject.trim().length > 0 && body.trim().length > 0;
-  const messageRows = Math.max(10, body.split("\n").length + 1);
 
-  return (
-    <dialog className="modal modal-open" aria-labelledby="new-message-title">
-      <div className="modal-box flex max-h-[92vh] w-full max-w-4xl flex-col border border-base-300 p-0 shadow-xl">
-        <div className="border-b border-base-200 px-6 py-5 sm:px-8">
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[200] grid place-items-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-message-title"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default"
+        aria-label="Close dialog"
+        onClick={() => {
+          if (!busy) onClose();
+        }}
+      />
+      <div className="customer-inbox-message-modal relative z-10 flex flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-xl">
+        <div className="shrink-0 border-b border-base-200 px-6 py-5">
           <div className="flex items-start gap-3">
             <div className="rounded-box bg-primary/10 p-2.5 text-primary">
               <MessageSquarePlus className="h-5 w-5" aria-hidden />
@@ -77,7 +114,7 @@ export function NewMessageModal({
               <h3 id="new-message-title" className="text-xl font-semibold tracking-tight">
                 New message
               </h3>
-              <p className="mt-1 max-w-prose text-sm leading-relaxed opacity-70">
+              <p className="mt-1 text-sm leading-relaxed opacity-70">
                 Send a message to Ridley Equipment Services. We typically respond within one business
                 day.
               </p>
@@ -85,7 +122,7 @@ export function NewMessageModal({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-6 sm:px-8">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-6 py-5">
           <Field id="inbox-new-subject" label="Subject" required>
             <input
               id="inbox-new-subject"
@@ -97,7 +134,7 @@ export function NewMessageModal({
             />
           </Field>
 
-          <div className="grid gap-6 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field id="inbox-new-category" label="Category">
               <select
                 id="inbox-new-category"
@@ -140,6 +177,7 @@ export function NewMessageModal({
             id="inbox-new-body"
             label="Message"
             required
+            className="flex min-h-0 flex-1 flex-col"
             hint={
               body.trim().startsWith("Hi Ridley team,")
                 ? "Draft started for you — edit before sending."
@@ -148,8 +186,7 @@ export function NewMessageModal({
           >
             <textarea
               id="inbox-new-body"
-              className="textarea textarea-bordered min-h-[18rem] w-full resize-y text-base leading-relaxed"
-              rows={messageRows}
+              className="textarea textarea-bordered min-h-[12rem] flex-1 w-full resize-none overflow-y-auto text-base leading-relaxed"
               value={body}
               onChange={(e) => onBodyChange(e.target.value)}
               placeholder="Describe your question or what you need from our team…"
@@ -157,7 +194,7 @@ export function NewMessageModal({
           </Field>
         </div>
 
-        <div className="flex flex-col-reverse gap-3 border-t border-base-200 px-6 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-8">
+        <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-base-200 px-6 py-4 sm:flex-row sm:items-center sm:justify-end">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
@@ -171,11 +208,7 @@ export function NewMessageModal({
           </button>
         </div>
       </div>
-      <form method="dialog" className="modal-backdrop">
-        <button type="button" onClick={onClose}>
-          close
-        </button>
-      </form>
-    </dialog>
+    </div>,
+    document.body,
   );
 }

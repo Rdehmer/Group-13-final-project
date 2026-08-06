@@ -95,7 +95,7 @@ export function HomeLanding() {
         <section className="home-hero relative overflow-hidden px-4 py-16 sm:px-6 sm:py-24 lg:py-28">
           <div className="home-landing-rise relative mx-auto flex max-w-6xl flex-col items-start">
             <EquipmentIQLogo variant="hero" onDark />
-            <h1 className="mt-8 max-w-2xl text-left text-2xl font-semibold leading-snug text-white sm:text-3xl lg:text-4xl">
+            <h1 className="mt-8 max-w-2xl text-left text-2xl font-semibold leading-snug !text-white sm:text-3xl lg:text-4xl">
               Commercial equipment service, from request to invoice
             </h1>
             <p className="mt-5 max-w-xl text-left text-base leading-relaxed text-white/75 sm:text-lg">

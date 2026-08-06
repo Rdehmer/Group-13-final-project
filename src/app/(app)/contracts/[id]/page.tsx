@@ -38,6 +38,7 @@ import {
   periodLabel,
   TECH_HOURLY_COST,
 } from "@/lib/contract-monthly-economics";
+import { stripRequestPrefixFromContractName } from "@/lib/contracts";
 
 type ContractDetail = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -196,9 +197,13 @@ export default function ContractDetailPage() {
         : /monthly\s*recurring/i.test(form.billing_method)
           ? monthlyFromAnnual(annual)
           : 0;
+    const contractName =
+      form.status === "Active" || form.status === "Renewed"
+        ? stripRequestPrefixFromContractName(form.name.trim())
+        : form.name.trim();
     const payload = {
       customer_id: form.customer_id,
-      name: form.name.trim(),
+      name: contractName,
       contract_type: form.contract_type,
       start_date: form.start_date,
       end_date: form.end_date,
@@ -274,10 +279,12 @@ export default function ContractDetailPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const activatedName = stripRequestPrefixFromContractName(form.name.trim() || contract.name);
     const { error: updateError } = await supabase
       .from("service_contracts")
       .update({
         status: "Active",
+        name: activatedName,
         contract_price: price,
         monthly_amount: monthly,
         deductible,

@@ -4,6 +4,13 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+export const CUSTOMER_INBOX_UNREAD_EVENT = "customer-inbox-unread-changed";
+
+export function notifyCustomerInboxUnreadChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(CUSTOMER_INBOX_UNREAD_EVENT));
+}
+
 export type InboxUnreadThread = {
   id: string;
   last_message_at: string;
@@ -46,5 +53,7 @@ export async function markInboxThreadRead(
     .eq("id", threadId);
   if (error) {
     console.error("markInboxThreadRead", error.message);
+    return;
   }
+  notifyCustomerInboxUnreadChanged();
 }

@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { notifyCustomerInboxUnreadChanged } from "@/lib/customer-inbox";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/ui";
 import type { Profile } from "@/lib/types";
@@ -167,6 +167,7 @@ export default function ManagerInboxPage() {
 
     setMessages((prev) => [...prev, data as InboxMessage]);
     setReply("");
+    notifyCustomerInboxUnreadChanged();
     try {
       const readAt = await markInboxThreadReadByStaff(
         supabase,
