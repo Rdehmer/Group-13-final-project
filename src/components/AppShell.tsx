@@ -40,6 +40,11 @@ function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
   return { ...item, label, ...(children ? { children } : {}) };
 }
 
+function closeMobileDrawer() {
+  const toggle = document.getElementById("app-drawer") as HTMLInputElement | null;
+  if (toggle) toggle.checked = false;
+}
+
 function GatedNavLink({
   item,
   pathname,
@@ -53,6 +58,7 @@ function GatedNavLink({
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
+  const router = useRouter();
   const active = item.href === CUSTOMER_HOME
     ? pathname === CUSTOMER_HOME
     : isPathActive(pathname, item.href);
@@ -72,7 +78,16 @@ function GatedNavLink({
   }
 
   return (
-    <Link href={item.href} className={gatedNavClassName(false, active, className)}>
+    <Link
+      href={item.href}
+      className={gatedNavClassName(false, active, className)}
+      onClick={(event) => {
+        // DaisyUI drawer overlay can swallow default Link navigation on some viewports.
+        event.preventDefault();
+        closeMobileDrawer();
+        router.push(item.href);
+      }}
+    >
       {item.label}
     </Link>
   );
@@ -206,8 +221,12 @@ export function AppShell({
       </div>
 
       <aside className="drawer-side z-40">
-        <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
-        <nav className="menu min-h-full w-72 gap-0.5 border-r border-base-300/70 bg-base-100 p-4 text-base-content">
+        <label
+          htmlFor="app-drawer"
+          className="drawer-overlay lg:pointer-events-none"
+          aria-label="Close menu"
+        />
+        <nav className="relative z-10 menu min-h-full w-72 gap-0.5 border-r border-base-300/70 bg-base-100 p-4 text-base-content">
           <div className="mb-5 flex items-center gap-3 rounded-2xl bg-primary/10 px-3 py-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-content shadow-sm">
               <Wrench className="h-5 w-5" />
