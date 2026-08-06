@@ -89,6 +89,11 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["administrator", "service_manager", "technician", "billing"],
       },
       {
+        href: "/timesheets/billing-report",
+        label: "Timesheet Report",
+        roles: ["administrator", "service_manager", "technician", "billing"],
+      },
+      {
         href: "/time-off",
         label: "Time Off Requests",
         roles: ["administrator", "service_manager", "technician"],
