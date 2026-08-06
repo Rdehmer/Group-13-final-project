@@ -430,6 +430,11 @@ export default function ReportsPage() {
 
   function selectHighlight(column: HighlightColumn) {
     setHighlight((prev) => (prev === column ? null : column));
+    window.setTimeout(() => {
+      document
+        .getElementById("contract-profitability")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }
 
   function cellClass(column: HighlightColumn) {
@@ -951,28 +956,60 @@ export default function ReportsPage() {
         <>
           <div className="mb-2 text-sm font-medium opacity-70">Invoice & cash summary</div>
           <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="stat rounded-box bg-base-100 shadow">
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Recognized Revenue</div>
               <div className="stat-value text-2xl">{formatMoney(recognizedRevenue)}</div>
-            </div>
-            <div className="stat rounded-box bg-base-100 shadow">
+            </button>
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Cash Collected</div>
               <div className="stat-value text-2xl">{formatMoney(collected)}</div>
-            </div>
-            <div className="stat rounded-box bg-base-100 shadow">
+            </button>
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Open AR</div>
               <div className="stat-value text-2xl">{formatMoney(openAr)}</div>
-            </div>
-            <div className="stat rounded-box bg-base-100 shadow">
+            </button>
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Invoice Est. Gross Margin</div>
               <div className="stat-value text-2xl">{formatPct(invoiceMargin)}</div>
               <div className="stat-desc">Profit {formatMoney(invoiceProfit)}</div>
-            </div>
+            </button>
           </div>
         </>
       ) : null}
 
-      <div id="contract-profitability" className="card bg-base-100 shadow">
+      <div id="contract-profitability" className="card scroll-mt-4 bg-base-100 shadow">
         <div className="card-body">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="card-title text-base">

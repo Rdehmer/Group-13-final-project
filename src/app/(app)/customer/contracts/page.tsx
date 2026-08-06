@@ -199,18 +199,27 @@ function CustomerContractsPageInner() {
               label="Active agreements"
               value={activeContracts.length}
               hint={`${coveredEquipmentCount} piece${coveredEquipmentCount === 1 ? "" : "s"} of equipment covered`}
+              onClick={() => setFilter("active")}
+              active={filter === "active"}
+              scrollTarget="customer-contracts-list"
             />
             <StatCard
               label="Pending approval"
               value={pendingContracts.length}
               hint={pendingContracts.length > 0 ? "Ridley is reviewing" : "No requests waiting"}
               danger={pendingContracts.length > 0}
+              onClick={() => setFilter("pending")}
+              active={filter === "pending"}
+              scrollTarget="customer-contracts-list"
             />
             <StatCard
               label="Expiring soon"
               value={expiringSoonCount}
               hint="Within 60 days"
               danger={expiringSoonCount > 0}
+              onClick={() => setFilter("active")}
+              active={filter === "active"}
+              scrollTarget="customer-contracts-list"
             />
             <StatCard
               label="Monthly fees"
@@ -229,10 +238,15 @@ function CustomerContractsPageInner() {
                       : "You're current on monthly fees"
               }
               danger={feeSummary.pastDue + feeSummary.paymentDue > 0}
+              scrollTarget="customer-contracts-list"
             />
           </div>
 
-          <div role="tablist" className="tabs tabs-boxed mb-4 w-fit">
+          <div
+            id="customer-contracts-list"
+            role="tablist"
+            className="tabs tabs-boxed mb-4 w-fit scroll-mt-4"
+          >
             {FILTER_TABS.map((tab) => (
               <button
                 key={tab.id}

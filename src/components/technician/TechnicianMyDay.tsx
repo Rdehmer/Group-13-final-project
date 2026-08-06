@@ -48,6 +48,7 @@ import {
   timeOffCoversDay,
   type TimeOffRange,
 } from "@/lib/time-off";
+import { timesheetHref } from "@/lib/timesheets";
 import type { Part, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
 
 const POLL_MS = 45_000;
@@ -489,7 +490,10 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
           <CalendarDays className="h-4 w-4" />
           Hours
         </Link>
-        <Link href="/timesheets" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
+        <Link
+          href={timesheetHref({ tech: profile?.id })}
+          className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs"
+        >
           <CalendarDays className="h-4 w-4" />
           Timesheet
         </Link>

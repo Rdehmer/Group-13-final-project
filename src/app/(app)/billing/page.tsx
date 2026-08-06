@@ -310,6 +310,11 @@ export default function BillingPage() {
     setFilter((prev) => (prev === next ? "all" : next));
     setPreviewWoId(null);
     setWoPreview(null);
+    window.setTimeout(() => {
+      document
+        .getElementById("invoice-queue")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }
 
   const selected = invoices.find((i) => i.id === selectedId) ?? null;
@@ -533,7 +538,10 @@ export default function BillingPage() {
         </div>
       ) : null}
 
-      <div className="mb-4 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+      <div
+        id="invoice-queue"
+        className="mb-4 scroll-mt-4 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end"
+      >
         <label className="form-control w-full sm:max-w-[14rem]">
           <select
             className="select select-bordered select-sm w-full"

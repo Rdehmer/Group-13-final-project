@@ -607,14 +607,25 @@ function PayPortalInner() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Balance Due" value={formatMoney(totalDue)} danger={totalDue > 0} />
+        <StatCard
+          label="Balance Due"
+          value={formatMoney(totalDue)}
+          danger={totalDue > 0}
+          scrollTarget="pay-open-invoices"
+        />
         <StatCard
           label="Past Due"
           value={formatMoney(overdueDue)}
           hint={overdueDue > 0 ? "Include these first" : "Nothing overdue"}
           danger={overdueDue > 0}
+          scrollTarget="pay-open-invoices"
         />
-        <StatCard label="Open Invoices" value={invoices.length} hint="Select which to pay" />
+        <StatCard
+          label="Open Invoices"
+          value={invoices.length}
+          hint="Select which to pay"
+          scrollTarget="pay-open-invoices"
+        />
       </div>
 
       {feeStandingMessage ? (
@@ -669,7 +680,10 @@ function PayPortalInner() {
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-5">
-        <section className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+        <section
+          id="pay-open-invoices"
+          className="lg:col-span-3 scroll-mt-4 rounded-2xl border border-base-300 bg-base-100 shadow-sm"
+        >
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-base-200 px-5 py-4">
             <div>
               <h2 className="flex items-center gap-2 text-lg font-bold">

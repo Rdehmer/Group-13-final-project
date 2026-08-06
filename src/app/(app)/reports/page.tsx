@@ -819,6 +819,15 @@ function VarianceCell({ n }: { n: number }) {
   );
 }
 
+function ReportStat(props: {
+  label: string;
+  value: string | number;
+  hint?: string;
+  danger?: boolean;
+}) {
+  return <StatCard {...props} scrollTarget="report-detail" />;
+}
+
 function ExecutiveReport({
   data,
   onOpen,
@@ -829,7 +838,7 @@ function ExecutiveReport({
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Service revenue"
           value={formatReportMoney(data.pnl.serviceRevenue)}
           hint={
@@ -838,12 +847,12 @@ function ExecutiveReport({
               : "vs prior period N/A"
           }
         />
-        <StatCard
+        <ReportStat
           label="Gross profit"
           value={formatReportMoney(data.pnl.gross)}
           hint={`Margin ${formatReportPct(data.pnl.margin)}`}
         />
-        <StatCard
+        <ReportStat
           label="Cash collected"
           value={formatReportMoney(data.periodCash)}
           hint={
@@ -852,7 +861,7 @@ function ExecutiveReport({
               : "Payment period cash"
           }
         />
-        <StatCard
+        <ReportStat
           label="Days sales outstanding"
           value={data.dso != null ? `${data.dso.toFixed(0)} days` : "N/A"}
           hint={`AR net ${formatReportMoney(data.arNet)}`}
@@ -861,15 +870,15 @@ function ExecutiveReport({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Unbilled (contract assets)"
           value={formatReportMoney(data.unbilledValue)}
           hint={`${data.unbilledCount} completed jobs`}
           danger={data.unbilledCount > 0}
         />
-        <StatCard label="Inventory at cost" value={formatReportMoney(data.inventory)} />
-        <StatCard label="Sales tax payable" value={formatReportMoney(data.taxPayable)} />
-        <StatCard
+        <ReportStat label="Inventory at cost" value={formatReportMoney(data.inventory)} />
+        <ReportStat label="Sales tax payable" value={formatReportMoney(data.taxPayable)} />
+        <ReportStat
           label="Job losses in range"
           value={data.jobLossCount}
           hint={`${data.jobCount} billed jobs analyzed`}
@@ -910,17 +919,17 @@ function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard
+        <ReportStat
           label="Current revenue"
           value={formatReportMoney(data.current.serviceRevenue)}
           hint={`${data.range.start} → ${data.range.end}`}
         />
-        <StatCard
+        <ReportStat
           label="Prior revenue"
           value={formatReportMoney(data.previous.serviceRevenue)}
           hint={`${data.prior.start} → ${data.prior.end}`}
         />
-        <StatCard
+        <ReportStat
           label="Revenue change"
           value={
             data.revenueGrowth != null
@@ -930,7 +939,7 @@ function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
           hint={`Margin ${formatReportPct(data.marginCurrent)} vs ${formatReportPct(data.marginPrior)}`}
         />
       </div>
-      <ReportTable headers={["Line", "Current", "Prior period", "Variance", "% change"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Line", "Current", "Prior period", "Variance", "% change"]}>
         {data.lines.map((l) => (
           <tr key={l.label} className={l.label === "Gross profit" ? "font-semibold border-t-2" : ""}>
             <td className={l.label.startsWith("  ") ? "pl-6 opacity-80" : ""}>{l.label.trim()}</td>
@@ -942,7 +951,7 @@ function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
             </td>
           </tr>
         ))}
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Prior period is the same number of days immediately before the current range start. Costs match actual
         labor and parts on work orders linked to recognized invoices in each window.
@@ -958,18 +967,18 @@ function CustomerBalancesReport({ rows }: { rows: ReturnType<typeof customerBala
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Customers" value={rows.length} />
-        <StatCard
+        <ReportStat label="Customers" value={rows.length} />
+        <ReportStat
           label="Open AR"
           value={formatReportMoney(rows.reduce((s, r) => s + r.openBalance, 0))}
         />
-        <StatCard
+        <ReportStat
           label="Overdue"
           value={formatReportMoney(rows.reduce((s, r) => s + r.overdueBalance, 0))}
           danger={rows.some((r) => r.overdueBalance > 0)}
         />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Customer", "Period billed", "Period collected", "Open balance", "Overdue", "# Open"]}
       >
         {rows.map((r) => (
@@ -998,7 +1007,7 @@ function CustomerBalancesReport({ rows }: { rows: ReturnType<typeof customerBala
           <MoneyCell n={rows.reduce((s, r) => s + r.overdueBalance, 0)} bold />
           <td className="text-right tabular-nums">{rows.reduce((s, r) => s + r.openInvoices, 0)}</td>
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Open balance is remaining receivable as of the as-of date (recognized invoices only). Period billed /
         collected use the selected date range.
@@ -1011,18 +1020,18 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="DSO"
           value={data.dso != null ? `${data.dso.toFixed(1)} days` : "N/A"}
           danger={data.dso != null && data.dso > 45}
         />
-        <StatCard
+        <ReportStat
           label="Collection ratio"
           value={data.collectionRate != null ? `${(data.collectionRate * 100).toFixed(0)}%` : "N/A"}
           hint="Cash ÷ billed (period)"
         />
-        <StatCard label="Open AR (gross)" value={formatReportMoney(data.arGross)} />
-        <StatCard
+        <ReportStat label="Open AR (gross)" value={formatReportMoney(data.arGross)} />
+        <ReportStat
           label="Avg days past due"
           value={data.avgDaysPastDue.toFixed(0)}
           hint={`${data.openCount} open invoices`}
@@ -1031,7 +1040,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
 
       <section>
         <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Top open AR by customer</h3>
-        <ReportTable headers={["Customer", "Open balance", "Invoices", "Max days late"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Customer", "Open balance", "Invoices", "Max days late"]}>
           {data.topCustomers.map((c) => (
             <tr key={c.customerId ?? c.name}>
               <td>
@@ -1050,7 +1059,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
               </td>
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
@@ -1058,7 +1067,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
         {data.overdue.length === 0 ? (
           <EmptyState title="Nothing past due" description="No open invoices past their due date." />
         ) : (
-          <ReportTable headers={["Invoice", "Customer", "Due", "Days late", "Balance", "Aging"]}>
+          <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Invoice", "Customer", "Due", "Days late", "Balance", "Aging"]}>
             {data.overdue.map((inv) => (
               <tr key={inv.id} className={inv.bucket === "d90" ? "bg-error/5" : ""}>
                 <td>
@@ -1078,7 +1087,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
                 </td>
               </tr>
             ))}
-          </ReportTable>
+          </ReportTable></div>
         )}
       </section>
       <PolicyNote>
@@ -1100,10 +1109,10 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Jobs" value={data.totals.jobCount} />
-        <StatCard label="Revenue" value={formatReportMoney(data.totals.revenue)} />
-        <StatCard label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
-        <StatCard
+        <ReportStat label="Jobs" value={data.totals.jobCount} />
+        <ReportStat label="Revenue" value={formatReportMoney(data.totals.revenue)} />
+        <ReportStat label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
+        <ReportStat
           label="Gross profit"
           value={formatReportMoney(data.totals.profit)}
           hint={formatReportPct(data.totals.margin)}
@@ -1118,7 +1127,7 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
           </span>
         </div>
       ) : null}
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Job", "Customer", "Type", "Revenue", "Labor", "Parts", "Profit", "Margin", "Hrs"]}
       >
         {data.rows.map((r) => (
@@ -1154,7 +1163,7 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
           <td className="text-right tabular-nums">{formatReportPct(data.totals.margin)}</td>
           <td className="text-right tabular-nums">{data.totals.laborHours.toFixed(1)}</td>
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Revenue is recognized service revenue (ex-tax) on linked invoices. COGS is actual technician cost rates
         and parts unit costs on that work order.
@@ -1170,16 +1179,16 @@ function TechLaborReport({ data }: { data: ReturnType<typeof technicianLaborRepo
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total hours" value={data.totals.totalHours.toFixed(1)} />
-        <StatCard label="Labor cost" value={formatReportMoney(data.totals.laborCost)} />
-        <StatCard label="Billable amount" value={formatReportMoney(data.totals.billableAmount)} />
-        <StatCard
+        <ReportStat label="Total hours" value={data.totals.totalHours.toFixed(1)} />
+        <ReportStat label="Labor cost" value={formatReportMoney(data.totals.laborCost)} />
+        <ReportStat label="Billable amount" value={formatReportMoney(data.totals.billableAmount)} />
+        <ReportStat
           label="Cost recovery"
           value={data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "N/A"}
           hint="Billable $ ÷ cost $"
         />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Technician", "Reg", "OT", "Total hrs", "Cost", "Billable", "Recovery", "Avg bill rate"]}
       >
         {data.rows.map((r) => (
@@ -1208,7 +1217,7 @@ function TechLaborReport({ data }: { data: ReturnType<typeof technicianLaborRepo
           </td>
           <td />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Billable amount uses customer billing rates on labor lines (potential income). Recovery below 1.0× means
         list rates do not cover labor cost for that tech in the period.
@@ -1224,16 +1233,16 @@ function InventoryReport({ data }: { data: ReturnType<typeof inventoryValuation>
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Active SKUs" value={data.totals.sku} />
-        <StatCard label="Value at cost" value={formatReportMoney(data.totals.valueAtCost)} />
-        <StatCard label="Value at list" value={formatReportMoney(data.totals.valueAtSell)} />
-        <StatCard
+        <ReportStat label="Active SKUs" value={data.totals.sku} />
+        <ReportStat label="Value at cost" value={formatReportMoney(data.totals.valueAtCost)} />
+        <ReportStat label="Value at list" value={formatReportMoney(data.totals.valueAtSell)} />
+        <ReportStat
           label="Below reorder"
           value={data.totals.reorderCount}
           danger={data.totals.reorderCount > 0}
         />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={[
           "Part #",
           "Name",
@@ -1275,7 +1284,7 @@ function InventoryReport({ data }: { data: ReturnType<typeof inventoryValuation>
           <MoneyCell n={data.totals.valueAtSell} bold />
           <td colSpan={2} />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Valuation is quantity on hand × unit cost (inventory asset on the balance sheet). Usage column is
         work-order consumption in the selected range.
@@ -1288,24 +1297,24 @@ function SalesTaxReportView({ data }: { data: ReturnType<typeof salesTaxReport> 
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Tax billed (period)"
           value={formatReportMoney(data.taxBilled)}
           hint={`${data.invoiceCount} invoices`}
         />
-        <StatCard
+        <ReportStat
           label="Taxable base"
           value={formatReportMoney(data.taxableBase)}
           hint={`Avg effective ${(data.avgRate * 100).toFixed(2)}%`}
         />
-        <StatCard label="Tax on open AR" value={formatReportMoney(data.taxOnOpen)} />
-        <StatCard
+        <ReportStat label="Tax on open AR" value={formatReportMoney(data.taxOnOpen)} />
+        <ReportStat
           label="Remittance estimate"
           value={formatReportMoney(data.remittanceEstimate)}
           hint="Open tax + held collected"
         />
       </div>
-      <ReportTable headers={["Month", "Invoices", "Taxable (ex-tax rev)", "Sales tax"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Invoices", "Taxable (ex-tax rev)", "Sales tax"]}>
         {data.byMonth.map((m) => (
           <tr key={m.month}>
             <td>{monthLabel(m.month)}</td>
@@ -1320,7 +1329,7 @@ function SalesTaxReportView({ data }: { data: ReturnType<typeof salesTaxReport> 
           <MoneyCell n={data.taxableBase} bold />
           <MoneyCell n={data.taxBilled} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         {ACCOUNTING_POLICIES.taxLiability} Record remittances from Period Close when filed.
       </PolicyNote>
@@ -1338,25 +1347,25 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Service revenue"
           value={formatReportMoney(pnl.serviceRevenue)}
           hint={`${pnl.earnedJobCount ?? 0} completed jobs · ASC 606`}
         />
-        <StatCard
+        <ReportStat
           label="Cost of services"
           value={formatReportMoney(pnl.cogs)}
           hint={`${pnl.matchedJobCount} jobs matched`}
         />
-        <StatCard label="Gross profit" value={formatReportMoney(pnl.gross)} />
-        <StatCard label="Gross margin" value={formatReportPct(pnl.margin)} />
+        <ReportStat label="Gross profit" value={formatReportMoney(pnl.gross)} />
+        <ReportStat label="Gross margin" value={formatReportPct(pnl.margin)} />
       </div>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Earned revenue (ASC 606)
         </h3>
-        <ReportTable headers={["Component", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Component", "Amount"]}>
           <tr>
             <td className="pl-4">Completed work (invoiced)</td>
             <MoneyCell n={pnl.billedCompletion ?? 0} />
@@ -1373,14 +1382,14 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             <td>Total earned service revenue</td>
             <MoneyCell n={pnl.serviceRevenue} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Billing components (invoice date, disclosure)
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           {incomeLines.map(([label, amt]) => (
             <tr key={label}>
               <td className="pl-4">{label}</td>
@@ -1403,14 +1412,14 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             <td>Invoice register total (disclosure)</td>
             <MoneyCell n={pnl.invoiceTotals} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Cost of services (matched actual costs)
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
               Direct labor at cost rates
@@ -1426,7 +1435,7 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             <td>Total cost of services</td>
             <MoneyCell n={pnl.cogs} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <div className="rounded-box bg-base-200/50 p-4">
@@ -1463,17 +1472,17 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="Total assets" value={formatReportMoney(sheet.totalAssets)} />
-        <StatCard label="Cash (collections)" value={formatReportMoney(sheet.cash)} />
-        <StatCard label="AR, net" value={formatReportMoney(sheet.arNet)} hint={`${sheet.openCount} open`} />
-        <StatCard label="Sales tax payable" value={formatReportMoney(sheet.salesTaxPayable)} />
+        <ReportStat label="Total assets" value={formatReportMoney(sheet.totalAssets)} />
+        <ReportStat label="Cash (collections)" value={formatReportMoney(sheet.cash)} />
+        <ReportStat label="AR, net" value={formatReportMoney(sheet.arNet)} hint={`${sheet.openCount} open`} />
+        <ReportStat label="Sales tax payable" value={formatReportMoney(sheet.salesTaxPayable)} />
       </div>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Assets
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">Cash — customer collections ledger</td>
             <MoneyCell n={sheet.cash} />
@@ -1505,14 +1514,14 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <td>Total assets</td>
             <MoneyCell n={sheet.totalAssets} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Liabilities
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
               Sales tax payable
@@ -1547,12 +1556,12 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <td>Total liabilities</td>
             <MoneyCell n={sheet.totalLiabilities} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">Equity</h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
               Net assets / equity
@@ -1568,7 +1577,7 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <td>Liabilities + equity</td>
             <MoneyCell n={sheet.totalLiabilities + sheet.equity} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       {sheet.balances ? (
@@ -1601,7 +1610,7 @@ function ArAgingSummary({
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {(Object.keys(AGING_LABELS) as (keyof typeof AGING_LABELS)[]).map((k) => (
-          <StatCard
+          <ReportStat
             key={k}
             label={AGING_LABELS[k]}
             value={formatReportMoney(aging.totals[k])}
@@ -1609,15 +1618,15 @@ function ArAgingSummary({
             danger={k === "d90" && aging.totals[k] > 0}
           />
         ))}
-        <StatCard label="Gross AR" value={formatReportMoney(aging.gross)} />
-        <StatCard
+        <ReportStat label="Gross AR" value={formatReportMoney(aging.gross)} />
+        <ReportStat
           label="Net AR"
           value={formatReportMoney(aging.net)}
           hint={`Allowance ${formatReportMoney(aging.allowance)}`}
         />
       </div>
 
-      <ReportTable headers={["Aging", "# Invoices", "Balance"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Aging", "# Invoices", "Balance"]}>
         {(Object.keys(AGING_LABELS) as (keyof typeof AGING_LABELS)[]).map((k) => (
           <tr key={k}>
             <td>{AGING_LABELS[k]}</td>
@@ -1640,7 +1649,7 @@ function ArAgingSummary({
           <td colSpan={2}>Accounts receivable, net</td>
           <MoneyCell n={aging.net} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>{ACCOUNTING_POLICIES.receivables} {ACCOUNTING_POLICIES.allowance}</PolicyNote>
     </div>
   );
@@ -1651,7 +1660,7 @@ function ArAgingDetail({ open }: { open: ReturnType<typeof openInvoicesAt> }) {
     return <EmptyState title="No open receivables" description="All customer balances are cleared." />;
   }
   return (
-    <ReportTable headers={["Invoice", "Customer", "Due", "Days", "Aging", "Balance", "Status"]}>
+    <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Invoice", "Customer", "Due", "Days", "Aging", "Balance", "Status"]}>
       {open.map((inv) => (
         <tr key={inv.id} className={inv.bucket === "d90" ? "bg-error/5" : ""}>
           <td>
@@ -1687,7 +1696,7 @@ function ArAgingDetail({ open }: { open: ReturnType<typeof openInvoicesAt> }) {
         <MoneyCell n={open.reduce((s, i) => s + Number(i.remaining_balance), 0)} bold />
         <td />
       </tr>
-    </ReportTable>
+    </ReportTable></div>
   );
 }
 
@@ -1698,7 +1707,7 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
   const top = rows.slice(0, 8);
   return (
     <div className="space-y-6">
-      <ReportTable headers={["Customer", "Invoices", "Service revenue", "Tax", "Paid", "Open balance"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Customer", "Invoices", "Service revenue", "Tax", "Paid", "Open balance"]}>
         {rows.map((r) => (
           <tr key={r.customerId ?? r.name}>
             <td>
@@ -1725,7 +1734,7 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
           <MoneyCell n={rows.reduce((s, r) => s + r.paid, 0)} bold />
           <MoneyCell n={rows.reduce((s, r) => s + r.balance, 0)} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>Recognized service revenue excludes sales tax (not revenue under GAAP).</PolicyNote>
     </div>
   );
@@ -1738,7 +1747,7 @@ function SalesByMonth({ rows }: { rows: ReturnType<typeof salesByMonth> }) {
   const chart = rows.map((r) => ({ ...r, label: monthLabel(r.month) }));
   return (
     <div className="space-y-6">
-      <ReportTable headers={["Month", "Invoices", "Service revenue", "Sales tax"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Invoices", "Service revenue", "Sales tax"]}>
         {rows.map((r) => (
           <tr key={r.month}>
             <td>{monthLabel(r.month)}</td>
@@ -1753,7 +1762,7 @@ function SalesByMonth({ rows }: { rows: ReturnType<typeof salesByMonth> }) {
           <MoneyCell n={rows.reduce((s, r) => s + r.revenue, 0)} bold />
           <MoneyCell n={rows.reduce((s, r) => s + r.tax, 0)} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Accrual revenue by invoice date. For cash collections use the Statement of Cash Flows (payment date).
       </PolicyNote>
@@ -1768,7 +1777,7 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
   const total = rows.reduce((s, r) => s + Math.max(0, r.amount), 0);
   return (
     <div className="space-y-6">
-      <ReportTable headers={["Transaction-price component", "Amount", "% of positive"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Transaction-price component", "Amount", "% of positive"]}>
         {rows.map((r) => (
           <tr key={r.service}>
             <td>{r.service}</td>
@@ -1778,7 +1787,7 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
             </td>
           </tr>
         ))}
-      </ReportTable>
+      </ReportTable></div>
     </div>
   );
 }
@@ -1787,17 +1796,17 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard
+        <ReportStat
           label="Cash from customers"
           value={formatReportMoney(cash.cashFromCustomers)}
           hint={`${cash.count} payments`}
         />
-        <StatCard
+        <ReportStat
           label="Credit sales (period)"
           value={formatReportMoney(cash.salesOnAccount)}
           hint="Invoice totals incl. tax"
         />
-        <StatCard
+        <ReportStat
           label="Ending open AR"
           value={formatReportMoney(cash.arEnd)}
           hint={`Begin ${formatReportMoney(cash.arBegin)}`}
@@ -1806,7 +1815,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
 
       <section>
         <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Cash flows from operating activities</h3>
-        <ReportTable headers={["Activity", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Activity", "Amount"]}>
           {cash.byMethod.map((m) => (
             <tr key={m.method}>
               <td className="pl-4">Collections from customers — {m.method}</td>
@@ -1817,7 +1826,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
             <td>Net cash provided by operating activities</td>
             <MoneyCell n={cash.cashFromCustomers} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
         <p className="mt-2 text-xs opacity-50">
           Direct method (cash receipts). Investing and financing activities are not modeled in this application.
         </p>
@@ -1825,7 +1834,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
 
       <section>
         <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">A/R rollforward (disclosure)</h3>
-        <ReportTable headers={["Line", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Line", "Amount"]}>
           <tr>
             <td className="pl-4">Beginning open AR</td>
             <MoneyCell n={cash.arBegin} />
@@ -1850,13 +1859,13 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
             <td className="pl-4">Difference (timing / status / partial payments)</td>
             <MoneyCell n={cash.reconcilingDiff} />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       {cash.lines.length === 0 ? (
         <EmptyState title="No payments in range" description="Record payments in the Payments module." />
       ) : (
-        <ReportTable headers={["Payment", "Date", "Method", "Customer", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Payment", "Date", "Method", "Customer", "Amount"]}>
           {cash.lines.slice(0, 40).map((p) => (
             <tr key={p.id}>
               <td className="font-mono text-xs">{p.payment_number}</td>
@@ -1866,7 +1875,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
               <MoneyCell n={Number(p.payment_amount)} />
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       )}
     </div>
   );
@@ -1882,11 +1891,11 @@ function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfit
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Recognized revenue" value={formatReportMoney(rev)} />
-        <StatCard label="Matched COGS" value={formatReportMoney(cogs)} />
-        <StatCard label="Gross profit" value={formatReportMoney(profit)} />
+        <ReportStat label="Recognized revenue" value={formatReportMoney(rev)} />
+        <ReportStat label="Matched COGS" value={formatReportMoney(cogs)} />
+        <ReportStat label="Gross profit" value={formatReportMoney(profit)} />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Contract", "Customer", "Price (book)", "Recognized", "COGS", "Profit", "Margin", "Status"]}
       >
         {rows.map((r) => (
@@ -1915,7 +1924,7 @@ function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfit
             </td>
           </tr>
         ))}
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Revenue is from recognized invoices linked to the contract. COGS is actual labor and parts cost on those
         invoices&apos; work orders. Contract price is disclosed as contractual backlog/book value, not automatically
@@ -1929,10 +1938,10 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="All jobs" value={summary.total} />
-        <StatCard label="Open" value={summary.open} />
-        <StatCard label="Completed" value={summary.completed} />
-        <StatCard
+        <ReportStat label="All jobs" value={summary.total} />
+        <ReportStat label="Open" value={summary.open} />
+        <ReportStat label="Completed" value={summary.completed} />
+        <ReportStat
           label="Completed unbilled"
           value={summary.unbilled}
           danger={summary.unbilled > 0}
@@ -1942,7 +1951,7 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
       <div className="grid gap-6 lg:grid-cols-2">
         <div>
           <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">By status</h3>
-          <ReportTable headers={["Status", "Count"]}>
+          <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Status", "Count"]}>
             {summary.byStatus.map((r) => (
               <tr key={r.status}>
                 <td>
@@ -1951,11 +1960,11 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
                 <td className="text-right tabular-nums font-medium">{r.count}</td>
               </tr>
             ))}
-          </ReportTable>
+          </ReportTable></div>
         </div>
         <div>
           <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">By priority</h3>
-          <ReportTable headers={["Priority", "Count"]}>
+          <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Priority", "Count"]}>
             {summary.byPriority.map((r) => (
               <tr key={r.priority}>
                 <td>
@@ -1964,7 +1973,7 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
                 <td className="text-right tabular-nums font-medium">{r.count}</td>
               </tr>
             ))}
-          </ReportTable>
+          </ReportTable></div>
         </div>
       </div>
       <Link href="/work-orders" className="btn btn-outline btn-sm gap-1 print:hidden">
@@ -1993,9 +2002,9 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Jobs" value={rows.length} danger />
-        <StatCard label="Est. contract asset" value={formatReportMoney(billable)} />
-        <StatCard label="Direct cost to date" value={formatReportMoney(cost)} />
+        <ReportStat label="Jobs" value={rows.length} danger />
+        <ReportStat label="Est. contract asset" value={formatReportMoney(billable)} />
+        <ReportStat label="Direct cost to date" value={formatReportMoney(cost)} />
       </div>
       <div className="alert alert-warning text-sm">
         <span>
@@ -2003,7 +2012,7 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
           for revenue leakage.
         </span>
       </div>
-      <ReportTable headers={["Job", "Customer", "Type", "Completed", "Est. billable", "Direct cost", ""]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Job", "Customer", "Type", "Completed", "Est. billable", "Direct cost", ""]}>
         {rows.map((j) => (
           <tr key={j.id}>
             <td>
@@ -2037,7 +2046,7 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
           <MoneyCell n={cost} bold />
           <td />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>{ACCOUNTING_POLICIES.wip}</PolicyNote>
     </div>
   );
@@ -2054,12 +2063,12 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="Invoices" value={rows.length} />
-        <StatCard label="Recognized" value={recognized.length} />
-        <StatCard label="Billed totals" value={formatReportMoney(total)} />
-        <StatCard label="Open balance" value={formatReportMoney(bal)} hint={`Paid ${formatReportMoney(paid)}`} />
+        <ReportStat label="Invoices" value={rows.length} />
+        <ReportStat label="Recognized" value={recognized.length} />
+        <ReportStat label="Billed totals" value={formatReportMoney(total)} />
+        <ReportStat label="Open balance" value={formatReportMoney(bal)} hint={`Paid ${formatReportMoney(paid)}`} />
       </div>
-      <ReportTable headers={["Invoice", "Date", "Customer", "Rec.", "Total", "Paid", "Balance", "Status"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Invoice", "Date", "Customer", "Rec.", "Total", "Paid", "Balance", "Status"]}>
         {rows.map((i) => (
           <tr key={i.id} className={!isRecognizedRevenue(i) ? "opacity-60" : ""}>
             <td>
@@ -2085,7 +2094,7 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
           <MoneyCell n={bal} bold />
           <td />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Draft / Needs Review / Canceled invoices are not recognized revenue until finalized (see Rec. column).
       </PolicyNote>
@@ -2103,15 +2112,15 @@ function ContractAssetReport({
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Beginning" value={formatReportMoney(data.beginning)} />
-        <StatCard label="+ Earned unbilled" value={formatReportMoney(data.earnedUnbilled)} />
-        <StatCard label="− Billed" value={formatReportMoney(data.billed)} />
-        <StatCard label="Ending contract asset" value={formatReportMoney(data.ending)} hint={`As of ${asOf}`} />
+        <ReportStat label="Beginning" value={formatReportMoney(data.beginning)} />
+        <ReportStat label="+ Earned unbilled" value={formatReportMoney(data.earnedUnbilled)} />
+        <ReportStat label="− Billed" value={formatReportMoney(data.billed)} />
+        <ReportStat label="Ending contract asset" value={formatReportMoney(data.ending)} hint={`As of ${asOf}`} />
       </div>
       {data.rows.length === 0 ? (
         <EmptyState title="No unbilled completions" description="Completed jobs without invoices appear here." />
       ) : (
-        <ReportTable headers={["Work order", "Completed", "Source", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Work order", "Completed", "Source", "Amount"]}>
           {data.rows.map((r) => (
             <tr key={r.workOrderId}>
               <td>{r.workOrderNumber}</td>
@@ -2120,7 +2129,7 @@ function ContractAssetReport({
               <MoneyCell n={r.amount} />
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       )}
       <PolicyNote>{ACCOUNTING_POLICIES.wip}</PolicyNote>
     </div>
@@ -2146,7 +2155,7 @@ function TrialBalanceReport({
       {data.rows.length === 0 ? (
         <EmptyState title="No GL activity" description="Trial balance fills as journals are posted." />
       ) : (
-        <ReportTable headers={["Account", "Name", "Debit", "Credit", "Balance"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Name", "Debit", "Credit", "Balance"]}>
           {data.rows.map((r) => (
             <tr key={r.accountCode}>
               <td className="font-mono text-xs">{r.accountCode}</td>
@@ -2162,7 +2171,7 @@ function TrialBalanceReport({
             <MoneyCell n={data.totalCredit} bold />
             <td />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       )}
       <PolicyNote>{ACCOUNTING_POLICIES.periodClose}</PolicyNote>
     </div>
@@ -2184,18 +2193,18 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Deferred revenue"
           value={formatReportMoney(data.totalDeferred)}
           hint={`${data.contractCount} prepaid contract${data.contractCount === 1 ? "" : "s"}`}
         />
-        <StatCard label="Current portion" value={formatReportMoney(data.totalCurrent)} hint="Next 12 months" />
-        <StatCard
+        <ReportStat label="Current portion" value={formatReportMoney(data.totalCurrent)} hint="Next 12 months" />
+        <ReportStat
           label="Noncurrent portion"
           value={formatReportMoney(data.totalNoncurrent)}
           hint="Beyond 12 months"
         />
-        <StatCard
+        <ReportStat
           label="Recognized to date"
           value={formatReportMoney(data.totalRecognized)}
           hint={`Of ${formatReportMoney(data.totalContractPrice)} prepaid`}
@@ -2206,7 +2215,7 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Contract balances as of {data.asOf}
         </h3>
-        <ReportTable
+        <div id="report-detail" className="scroll-mt-4"><ReportTable
           headers={[
             "Contract",
             "Customer",
@@ -2288,14 +2297,14 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
             <MoneyCell n={data.totalCurrent} bold />
             <MoneyCell n={data.totalNoncurrent} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Consolidated monthly rollforward
         </h3>
-        <ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
           {data.consolidated.map((m) => (
             <tr key={m.month}>
               <td>{monthLabel(m.month)}</td>
@@ -2305,7 +2314,7 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
               <MoneyCell n={m.endingBalance} />
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <PolicyNote>{ACCOUNTING_POLICIES.deferredRevenue}</PolicyNote>

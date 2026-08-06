@@ -11,6 +11,7 @@ import { formatMoney } from "@/lib/calculations";
 import { daysPastDue, calendarMonthsForYear, formatMonthLabel, monthKeyFromDate } from "@/lib/billing";
 import { loadPaymentBatchMap, type BatchLookup } from "@/lib/batches";
 import { applyInvoicePayment } from "@/lib/payments";
+import { jumpToSection } from "@/lib/scrollToSection";
 import type { Invoice, Payment } from "@/lib/types";
 
 type AgingBucket = "current" | "d30" | "d60" | "d90";
@@ -124,7 +125,9 @@ export default function PaymentsPage() {
   );
 
   function toggleBucket(bucket: AgingBucket) {
-    setSelectedBucket((prev) => (prev === bucket ? null : bucket));
+    jumpToSection("ar-aging-detail", () => {
+      setSelectedBucket((prev) => (prev === bucket ? null : bucket));
+    });
   }
 
   async function recordPayment(e: React.FormEvent) {
@@ -216,7 +219,7 @@ export default function PaymentsPage() {
       </div>
 
       {selectedBucket ? (
-        <div className="card bg-base-100 shadow mb-6">
+        <div id="ar-aging-detail" className="card bg-base-100 shadow mb-6 scroll-mt-4">
           <div className="card-body">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="card-title text-base">

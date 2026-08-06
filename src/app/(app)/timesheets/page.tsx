@@ -6,9 +6,10 @@
  * weekly certification, exceptions, audit, soft-void, billing readiness.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { format, parseISO } from "date-fns";
+import { useSearchParams } from "next/navigation";
+import { format, parseISO, addDays } from "date-fns";
 import {
   CheckCircle2,
   ChevronLeft,
@@ -57,8 +58,10 @@ import {
   submitWeeklyTimesheet,
   sumEntries,
   supabaseErrorMessage,
+  timesheetHref,
   todayIso,
   weekContaining,
+  parseTimesheetDeepLink,
 } from "@/lib/timesheets";
 import {
   BILLING_STATUS_LABELS,
@@ -85,6 +88,8 @@ function shortIso(iso: string | null) {
 
 export default function TimesheetsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const deep = useMemo(() => parseTimesheetDeepLink(searchParams), [searchParams]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [active, setActive] = useState<TimeEntry | null>(null);
@@ -92,14 +97,21 @@ export default function TimesheetsPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [week, setWeek] = useState(() => weekContaining());
+  const [week, setWeek] = useState(() =>
+    deep.week ? weekContaining(deep.week) : weekContaining(),
+  );
   const [otMult, setOtMult] = useState(1.5);
 
-  const [filterStatus, setFilterStatus] = useState<TimeApprovalStatus | "all">("all");
-  const [filterWo, setFilterWo] = useState("");
-  const [filterCustomer, setFilterCustomer] = useState("");
-  const [filterTech, setFilterTech] = useState("all");
+  const [filterStatus, setFilterStatus] = useState<TimeApprovalStatus | "all">(
+    deep.status ?? "all",
+  );
+  const [filterWoId, setFilterWoId] = useState(deep.wo ?? "");
+  const [filterWoNumber, setFilterWoNumber] = useState(deep.job ?? "");
+  const [filterCustomer, setFilterCustomer] = useState(deep.customer ?? "");
+  const [filterTech, setFilterTech] = useState(deep.tech ?? "all");
   const [techs, setTechs] = useState<Profile[]>([]);
+  const [linkedJobLabel, setLinkedJobLabel] = useState<string | null>(null);
+  const scrollDoneForEntry = useRef<string | null>(null);
 
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
@@ -119,7 +131,7 @@ export default function TimesheetsPage() {
     start: "08:00",
     end: "09:00",
     activity: "regular_work" as TimeActivityType,
-    workOrderId: "",
+    workOrderId: deep.wo ?? "",
     notes: "",
     reason: "",
   });
@@ -128,7 +140,23 @@ export default function TimesheetsPage() {
   >([]);
 
   const [storageMode, setStorageMode] = useState<"time_entries" | "fallback" | null>(null);
-  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(deep.entry ?? null);
+
+  useEffect(() => {
+    if (deep.tech) setFilterTech(deep.tech);
+    if (deep.wo) {
+      setFilterWoId(deep.wo);
+      setManual((m) => ({ ...m, workOrderId: deep.wo || m.workOrderId }));
+    }
+    if (deep.job) setFilterWoNumber(deep.job);
+    if (deep.customer) setFilterCustomer(deep.customer);
+    if (deep.status) setFilterStatus(deep.status);
+    if (deep.week) setWeek(weekContaining(deep.week));
+    if (deep.entry) {
+      setHighlightId(deep.entry);
+      scrollDoneForEntry.current = null;
+    }
+  }, [deep.tech, deep.wo, deep.job, deep.customer, deep.status, deep.week, deep.entry]);
 
   const isApprover =
     profile?.role === "administrator" || profile?.role === "service_manager";
@@ -184,11 +212,18 @@ export default function TimesheetsPage() {
 
       const techFilter = !manager ? meP.id : filterTech !== "all" ? filterTech : undefined;
 
+      const from = filterWoId
+        ? format(addDays(parseISO(week.start), -90), "yyyy-MM-dd")
+        : week.start;
+      const to = filterWoId
+        ? format(addDays(parseISO(week.end), 90), "yyyy-MM-dd")
+        : week.end;
+
       const rows = await loadTimeEntries(supabase, {
-        from: week.start,
-        to: week.end,
+        from,
+        to,
         technicianId: techFilter,
-        workOrderId: filterWo.trim() || undefined,
+        workOrderId: filterWoId.trim() || undefined,
         customerId: undefined,
         status: filterStatus,
       });
@@ -196,13 +231,32 @@ export default function TimesheetsPage() {
       let filtered = rows;
       if (filterCustomer.trim()) {
         const q = filterCustomer.trim().toLowerCase();
-        filtered = rows.filter((e) => {
+        filtered = filtered.filter((e) => {
           const name = e.customers?.name || e.work_orders?.customers?.name || "";
           return name.toLowerCase().includes(q);
         });
       }
-
+      if (filterWoNumber.trim()) {
+        const q = filterWoNumber.trim().toLowerCase();
+        filtered = filtered.filter((e) =>
+          (e.work_orders?.work_order_number || "").toLowerCase().includes(q),
+        );
+      }
       setEntries(filtered);
+
+      if (filterWoId) {
+        const { data: jobRow } = await supabase
+          .from("work_orders")
+          .select("work_order_number")
+          .eq("id", filterWoId)
+          .maybeSingle();
+        setLinkedJobLabel(
+          (jobRow as { work_order_number?: string } | null)?.work_order_number ??
+            filterWoId.slice(0, 8),
+        );
+      } else {
+        setLinkedJobLabel(null);
+      }
 
       try {
         if (meP.role === "technician" || !manager) {
@@ -247,11 +301,24 @@ export default function TimesheetsPage() {
     } finally {
       setLoading(false);
     }
-  }, [supabase, week, filterStatus, filterWo, filterCustomer, filterTech]);
+  }, [supabase, week, filterStatus, filterWoId, filterWoNumber, filterCustomer, filterTech]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!highlightId || loading) return;
+    if (scrollDoneForEntry.current === highlightId) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`te-${highlightId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        scrollDoneForEntry.current = highlightId;
+      }
+    }, 80);
+    return () => window.clearTimeout(t);
+  }, [highlightId, loading, entries]);
 
   const totals = useMemo(() => sumEntries(entries), [entries]);
   const todayRows = useMemo(
@@ -341,15 +408,32 @@ export default function TimesheetsPage() {
             : "Approve, reject, reopen, and lock timesheets. Billing uses only approved, ready-to-bill hours."
         }
         actions={
-          <button
-            type="button"
-            className="btn btn-outline btn-sm gap-1"
-            onClick={() => void load()}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {isTech ? (
+              <Link href="/technician" className="btn btn-outline btn-sm">
+                My Day
+              </Link>
+            ) : null}
+            {filterWoId ? (
+              <Link href={`/work-orders/${filterWoId}`} className="btn btn-outline btn-sm">
+                Open job{linkedJobLabel ? ` ${linkedJobLabel}` : ""}
+              </Link>
+            ) : null}
+            {filterWoId || filterTech !== "all" || filterWoNumber || filterCustomer || highlightId ? (
+              <Link href="/timesheets" className="btn btn-ghost btn-sm">
+                Clear filters
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
@@ -431,6 +515,21 @@ export default function TimesheetsPage() {
                   Return to active job
                 </Link>
               ) : null}
+              {active.id ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-accent"
+                  onClick={() => {
+                    setHighlightId(active.id);
+                    scrollDoneForEntry.current = null;
+                    document
+                      .getElementById(`te-${active.id}`)
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                >
+                  Jump to entry
+                </button>
+              ) : null}
             </div>
           ) : isTech ? (
             <p className="ml-auto text-sm text-slate-300">
@@ -445,16 +544,23 @@ export default function TimesheetsPage() {
       </section>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Today hours" value={formatHours(todayTotals.totalHours)} />
+        <StatCard
+          label="Today hours"
+          value={formatHours(todayTotals.totalHours)}
+          scrollTarget="timesheet-entries"
+          onClick={() => setFilterStatus("all")}
+        />
         <StatCard
           label="Week hours"
           value={formatHours(totals.totalHours)}
           hint={`${formatHours(totals.regularHours)} reg · ${formatHours(totals.overtimeHours)} OT`}
           danger={totals.totalHours > 40}
+          scrollTarget="timesheet-entries"
         />
         <StatCard
           label="Billable / nonbillable"
           value={`${formatHours(totals.billableHours)} / ${formatHours(totals.nonbillableHours)}`}
+          scrollTarget="timesheet-entries"
         />
         <StatCard
           label={showCost ? "Labor cost (int.)" : "Pending / rejected"}
@@ -467,6 +573,10 @@ export default function TimesheetsPage() {
                 : undefined
           }
           danger={totals.pending + totals.rejected > 0}
+          scrollTarget={isApprover ? "timesheet-exceptions" : "timesheet-entries"}
+          onClick={() => {
+            if (!showCost) setFilterStatus("pending_approval");
+          }}
         />
       </div>
 
@@ -545,7 +655,10 @@ export default function TimesheetsPage() {
             </ul>
           </details>
 
-          <section className="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+          <section
+            id="timesheet-exceptions"
+            className="scroll-mt-4 rounded-box border border-base-300 bg-base-100 p-4 shadow-sm"
+          >
             <h2 className="font-semibold">Timesheet exceptions</h2>
             <p className="text-xs opacity-60 mb-2">
               Critical / Warning / Review / Resolved — click Open to jump to the entry.
@@ -610,7 +723,10 @@ export default function TimesheetsPage() {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-end">
+      <div
+        id="timesheet-entries"
+        className="scroll-mt-4 flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-end"
+      >
         <label className="form-control">
           <span className="label-text text-xs">Status</span>
           <select
@@ -643,15 +759,35 @@ export default function TimesheetsPage() {
             </select>
           </label>
         ) : null}
-        <label className="form-control">
-          <span className="label-text text-xs">Work order # contains</span>
+        <label className="form-control min-w-[10rem]">
+          <span className="label-text text-xs">Job (WO #)</span>
           <input
             className="input input-bordered input-sm"
             placeholder="WO-"
-            value={filterWo}
-            onChange={(e) => setFilterWo(e.target.value)}
+            value={filterWoNumber}
+            onChange={(e) => setFilterWoNumber(e.target.value)}
           />
         </label>
+        {filterWoId ? (
+          <div className="form-control">
+            <span className="label-text text-xs">Linked job</span>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/work-orders/${filterWoId}`}
+                className="btn btn-outline btn-sm"
+              >
+                {linkedJobLabel ?? "Open"}
+              </Link>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setFilterWoId("")}
+              >
+                Clear job
+              </button>
+            </div>
+          </div>
+        ) : null}
         <label className="form-control">
           <span className="label-text text-xs">Customer</span>
           <input
@@ -833,18 +969,45 @@ export default function TimesheetsPage() {
                     </td>
                     {isManager ? (
                       <td className="text-xs">
-                        {entry.technician?.full_name || entry.technician?.email || "—"}
+                        <Link
+                          href={timesheetHref({
+                            tech: entry.technician_id,
+                            week: entry.entry_date,
+                          })}
+                          className="link link-hover font-medium"
+                          onClick={() => setFilterTech(entry.technician_id)}
+                        >
+                          {entry.technician?.full_name || entry.technician?.email || "—"}
+                        </Link>
                       </td>
                     ) : null}
                     <td className="max-w-[14rem] text-xs">
                       {wo ? (
                         <>
-                          <Link
-                            href={`/work-orders/${entry.work_order_id}`}
-                            className="link link-primary font-medium"
-                          >
-                            {wo.work_order_number}
-                          </Link>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <Link
+                              href={`/work-orders/${entry.work_order_id}`}
+                              className="link link-primary font-medium"
+                            >
+                              {wo.work_order_number}
+                            </Link>
+                            <Link
+                              href={timesheetHref({
+                                wo: entry.work_order_id,
+                                tech: isManager ? entry.technician_id : null,
+                                week: entry.entry_date,
+                                entry: entry.id,
+                              })}
+                              className="link link-hover text-[10px] opacity-70"
+                              onClick={() => {
+                                if (entry.work_order_id) setFilterWoId(entry.work_order_id);
+                                setHighlightId(entry.id);
+                                scrollDoneForEntry.current = null;
+                              }}
+                            >
+                              Filter timesheet
+                            </Link>
+                          </div>
                           <div className="opacity-80">{cust}</div>
                         </>
                       ) : (

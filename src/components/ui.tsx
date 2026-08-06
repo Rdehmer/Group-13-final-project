@@ -79,6 +79,8 @@ export function StatCard({
   danger,
   onClick,
   active,
+  /** Scroll to this element id after click (works alone or with onClick). */
+  scrollTarget,
 }: {
   label: string;
   value: string | number;
@@ -86,12 +88,14 @@ export function StatCard({
   danger?: boolean;
   onClick?: () => void;
   active?: boolean;
+  scrollTarget?: string;
 }) {
+  const interactive = Boolean(onClick || scrollTarget);
   const className = [
     "stat w-full rounded-xl border border-[#dce3ea] bg-white text-left shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)]",
     danger ? "border-[#f3c4c0] bg-[#fef3f2]" : "",
     active ? "ring-2 ring-[#00a3a6]/35 border-[#00a3a6]" : "",
-    onClick ? "cursor-pointer transition-all hover:-translate-y-px hover:shadow-md" : "",
+    interactive ? "cursor-pointer transition-all hover:-translate-y-px hover:shadow-md" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -110,9 +114,23 @@ export function StatCard({
     </>
   );
 
-  if (onClick) {
+  if (interactive) {
     return (
-      <button type="button" className={className} onClick={onClick} aria-pressed={active}>
+      <button
+        type="button"
+        className={className}
+        aria-pressed={active}
+        onClick={() => {
+          onClick?.();
+          if (!scrollTarget) return;
+          const delay = onClick ? 50 : 0;
+          window.setTimeout(() => {
+            document
+              .getElementById(scrollTarget)
+              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, delay);
+        }}
+      >
         {body}
       </button>
     );

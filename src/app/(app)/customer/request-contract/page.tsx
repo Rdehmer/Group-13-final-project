@@ -131,9 +131,15 @@ export default function RequestContractPage() {
             danger={pendingCount > 0}
           />
         </Link>
-        <StatCard label="Equipment on file" value={equipment.length} hint="Units to cover" />
+        <StatCard
+          label="Equipment on file"
+          value={equipment.length}
+          hint="Units to cover"
+          scrollTarget="contract-request-form"
+        />
       </div>
 
+      <div id="contract-request-form" className="scroll-mt-4">
       <ContractTierCards
         selectedPackId={selectedPackId}
         selectedTier={selectedTier}
@@ -149,6 +155,7 @@ export default function RequestContractPage() {
         onContinue={() => setTiersCollapsed(true)}
         onChangePlan={() => setTiersCollapsed(false)}
       />
+      </div>
 
       {tiersCollapsed ? (
         <div className="card bg-base-100 shadow">

@@ -2852,6 +2852,58 @@ export function canEditEntry(profile: Profile, entry: TimeEntry): boolean {
   ].includes(entry.approval_status);
 }
 
+/** ServiceTitan-style deep link into Timesheets (tech × job × entry × week). */
+export type TimesheetDeepLink = {
+  /** Filter to this technician profile id */
+  tech?: string | null;
+  /** Filter to this work order UUID */
+  wo?: string | null;
+  /** Highlight and scroll to this time entry id */
+  entry?: string | null;
+  /** Any date within the pay/work week (YYYY-MM-DD) */
+  week?: string | null;
+  /** Approval status filter */
+  status?: TimeApprovalStatus | "all" | null;
+  /** Free-text work order number contains */
+  job?: string | null;
+  /** Customer name contains */
+  customer?: string | null;
+};
+
+export function timesheetHref(query: TimesheetDeepLink = {}): string {
+  const params = new URLSearchParams();
+  if (query.tech) params.set("tech", query.tech);
+  if (query.wo) params.set("wo", query.wo);
+  if (query.entry) params.set("entry", query.entry);
+  if (query.week) params.set("week", query.week);
+  if (query.status && query.status !== "all") params.set("status", query.status);
+  if (query.job) params.set("job", query.job);
+  if (query.customer) params.set("customer", query.customer);
+  const qs = params.toString();
+  return qs ? `/timesheets?${qs}` : "/timesheets";
+}
+
+export function parseTimesheetDeepLink(
+  searchParams: URLSearchParams | { get: (key: string) => string | null },
+): TimesheetDeepLink {
+  const statusRaw = searchParams.get("status");
+  const status =
+    statusRaw && statusRaw !== "all"
+      ? (statusRaw as TimeApprovalStatus)
+      : statusRaw === "all"
+        ? "all"
+        : null;
+  return {
+    tech: searchParams.get("tech"),
+    wo: searchParams.get("wo"),
+    entry: searchParams.get("entry"),
+    week: searchParams.get("week"),
+    status,
+    job: searchParams.get("job"),
+    customer: searchParams.get("customer"),
+  };
+}
+
 export function localDateTimeToIso(date: string, time: string): string {
   const [hh, mm] = time.split(":").map(Number);
   const d = startOfDay(parseISO(date));
