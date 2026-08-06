@@ -63,6 +63,23 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["administrator", "service_manager", "technician", "billing"],
   },
   {
+    href: "/vendors",
+    label: "Vendors",
+    roles: ["administrator", "service_manager", "billing"],
+    children: [
+      {
+        href: "/vendors",
+        label: "Suppliers",
+        roles: ["administrator", "service_manager", "billing"],
+      },
+      {
+        href: "/service-vendors",
+        label: "Service vendors",
+        roles: ["administrator", "service_manager", "billing"],
+      },
+    ],
+  },
+  {
     href: "/billing",
     label: "Billing",
     roles: ["administrator", "billing"],
@@ -189,9 +206,18 @@ export function homeForRole(role: UserRole): string {
 }
 
 export function canAccess(role: UserRole, href: string): boolean {
+  const path = href.split("?")[0] || href;
   for (const item of NAV_ITEMS) {
-    if (item.href === href && item.roles.includes(role)) return true;
-    if (item.children?.some((child) => child.href === href && child.roles.includes(role))) {
+    if (item.roles.includes(role) && (path === item.href || path.startsWith(`${item.href}/`))) {
+      return true;
+    }
+    if (
+      item.children?.some(
+        (child) =>
+          child.roles.includes(role) &&
+          (path === child.href || path.startsWith(`${child.href}/`)),
+      )
+    ) {
       return true;
     }
   }
