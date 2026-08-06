@@ -17,6 +17,7 @@ import { StatusBadge, statusTone } from "@/components/ui";
 import { ProofOfCompletion } from "@/components/ProofOfCompletion";
 import { VoiceDiagnosticNotes } from "@/components/technician/VoiceDiagnosticNotes";
 import { TechPartsLogger } from "@/components/technician/TechPartsLogger";
+import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import {
@@ -1015,6 +1016,24 @@ export function JobSheet({
           compact
           onLog={(partId, quantity) => logWarehousePart(partId, quantity, false)}
         />
+      </section>
+
+      <section
+        className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4"
+        aria-labelledby="po-heading"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 id="po-heading" className="text-base font-semibold">
+            Purchase orders
+          </h3>
+          <Link href={`/work-orders/${job.id}`} className="link link-hover text-xs">
+            Open full job
+          </Link>
+        </div>
+        <p className="text-xs opacity-60">
+          Log field POs and receipts. When this job is invoiced, the PO number opens that invoice in Billing.
+        </p>
+        <PurchaseOrderPanel workOrderId={job.id} canEdit compact />
       </section>
 
       <section className="rounded-2xl border border-base-300 bg-base-100 p-4">

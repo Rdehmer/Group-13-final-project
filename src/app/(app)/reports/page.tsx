@@ -47,12 +47,16 @@ import {
   salesByMonth,
   salesByService,
   salesTaxReport,
-  technicianLaborReport,
+  technicianTimesheetSummaryByPayPeriod,
+  defaultCurrentPayPeriod,
+  shiftPayPeriod,
+  payPeriodContaining,
   unbilledJobs,
   type DateRange,
   type InvoiceWithCustomer,
   type ReportId,
   type TechProfile,
+  type TimesheetSummaryReport,
 } from "@/lib/reports";
 import { contractAssetRollforward } from "@/lib/accounting/earned-revenue";
 import { trialBalance } from "@/lib/accounting/ledger-local";
@@ -61,9 +65,11 @@ import type {
   Payment,
   ServiceContract,
   TechnicianLabor,
+  TimeEntry,
   WorkOrder,
   WorkOrderPart,
 } from "@/lib/types";
+import { loadTimeEntries, timesheetHref } from "@/lib/timesheets";
 
 type JobRow = WorkOrder & { customers?: { name: string } };
 type ContractRow = ServiceContract & { customers?: { name: string } };
@@ -86,13 +92,18 @@ export default function ReportsPage() {
   const [contracts, setContracts] = useState<ContractRow[]>([]);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [labor, setLabor] = useState<TechnicianLabor[]>([]);
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [partsUsed, setPartsUsed] = useState<WorkOrderPart[]>([]);
   const [parts, setParts] = useState<Part[]>([]);
   const [profiles, setProfiles] = useState<TechProfile[]>([]);
+  const [techFilter, setTechFilter] = useState<string>("");
+  /** When viewing timesheet summary, prefer weekly pay periods. */
+  const [payPeriodRange, setPayPeriodRange] = useState<DateRange>(() => defaultCurrentPayPeriod());
 
   async function load() {
     setLoading(true);
     setError(null);
+    const payRange = payPeriodRange;
     const [
       { data: inv, error: e1 },
       { data: pay, error: e2 },
@@ -113,8 +124,15 @@ export default function ReportsPage() {
       supabase.from("technician_labor").select("*"),
       supabase.from("work_order_parts").select("*"),
       supabase.from("parts").select("*"),
-      supabase.from("profiles").select("id, full_name, email, role"),
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, role, hourly_cost_rate, hourly_billing_rate"),
     ]);
+
+    const te = await loadTimeEntries(supabase, {
+      from: payRange.start,
+      to: payRange.end,
+    }).catch(() => [] as TimeEntry[]);
 
     const err = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8;
     if (err) setError(err.message);
@@ -124,6 +142,7 @@ export default function ReportsPage() {
     setContracts((sc as ContractRow[]) ?? []);
     setJobs((wo as JobRow[]) ?? []);
     setLabor((lab as TechnicianLabor[]) ?? []);
+    setTimeEntries(te);
     setPartsUsed((wop as WorkOrderPart[]) ?? []);
     setParts((pts as Part[]) ?? []);
     setProfiles((prof as TechProfile[]) ?? []);
@@ -132,7 +151,8 @@ export default function ReportsPage() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when pay period window changes for timesheets
+  }, [payPeriodRange.start, payPeriodRange.end]);
 
   const costs = useMemo(() => ({ labor, partsUsed, jobs }), [labor, partsUsed, jobs]);
 
@@ -186,8 +206,11 @@ export default function ReportsPage() {
     [invoices, jobs, costs, range],
   );
   const techLabor = useMemo(
-    () => technicianLaborReport(labor, profiles, range),
-    [labor, profiles, range],
+    () =>
+      technicianTimesheetSummaryByPayPeriod(timeEntries, labor, profiles, payPeriodRange, {
+        technicianId: techFilter || null,
+      }),
+    [timeEntries, labor, profiles, payPeriodRange, techFilter],
   );
   const inventory = useMemo(
     () => inventoryValuation(parts, partsUsed, range),
@@ -221,6 +244,7 @@ export default function ReportsPage() {
     "deferred_revenue",
     "trial_balance",
     "contract_asset",
+    "tech_labor",
   ].includes(reportId);
 
   function printReport() {
@@ -228,7 +252,10 @@ export default function ReportsPage() {
   }
 
   function exportCurrent() {
-    const name = `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${range.start}_${range.end}`;
+    const name =
+      reportId === "tech_labor"
+        ? `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${payPeriodRange.start}_${payPeriodRange.end}`
+        : `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${range.start}_${range.end}`;
     switch (reportId) {
       case "executive":
         exportCsv(name, ["KPI", "Value"], [
@@ -444,21 +471,72 @@ export default function ReportsPage() {
           ]),
         );
         break;
-      case "tech_labor":
-        exportCsv(
-          name,
-          ["Technician", "Reg hrs", "OT hrs", "Total hrs", "Labor cost", "Billable $", "Recovery"],
-          techLabor.rows.map((r) => [
-            r.name,
-            r.regularHours,
-            r.overtimeHours,
-            r.totalHours,
-            r.laborCost,
-            r.billableAmount,
-            r.recovery != null ? r.recovery.toFixed(2) + "x" : "N/A",
-          ]),
-        );
+      case "tech_labor": {
+        const headers = [
+          "Technician",
+          "Date",
+          "Start",
+          "First Arrival",
+          "End",
+          "Idle",
+          "Driving",
+          "Job Hrs",
+          "Meal",
+          "Training",
+          "Other",
+          "Hours Worked",
+          "Regular",
+          "Overtime",
+          "Double OT",
+          "PTO",
+          "Total Pay",
+        ];
+        const flat: (string | number)[][] = [];
+        for (const tech of techLabor.technicians) {
+          for (const d of tech.days) {
+            flat.push([
+              tech.name,
+              d.date,
+              d.start ?? "",
+              d.firstArrival ?? "",
+              d.end ?? "",
+              d.idle,
+              d.driving,
+              d.jobHours,
+              d.meal,
+              d.training,
+              d.other,
+              d.hoursWorked,
+              d.regular,
+              d.overtime,
+              d.doubleOt,
+              d.pto,
+              "",
+            ]);
+          }
+          flat.push([
+            tech.name,
+            "PAY PERIOD TOTAL",
+            "",
+            "",
+            "",
+            tech.totals.idle,
+            tech.totals.driving,
+            tech.totals.jobHours,
+            tech.totals.meal,
+            tech.totals.training,
+            tech.totals.other,
+            tech.totals.hoursWorked,
+            tech.totals.regular,
+            tech.totals.overtime,
+            tech.totals.doubleOt,
+            tech.totals.pto,
+            tech.totals.totalPay,
+          ]);
+        }
+        exportCsv(name, headers, flat);
         break;
+      }
       case "inventory":
         exportCsv(
           name,
@@ -545,7 +623,7 @@ export default function ReportsPage() {
     <div className="reports-page">
       <PageHeader
         title="Reports"
-        description="GAAP financials plus collections, job profitability, labor productivity, inventory, and tax — live from Ridley data"
+        description="GAAP financials plus collections, job profitability, timesheet pay periods, inventory, and tax — live from Ridley data"
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
@@ -637,6 +715,12 @@ export default function ReportsPage() {
                       As of <strong>{asOf}</strong>
                     </>
                   ) : null}
+                  {reportId === "tech_labor" ? (
+                    <>
+                      Pay period <strong>{payPeriodRange.start}</strong> → <strong>{payPeriodRange.end}</strong>
+                      {" · "}Sunday–Saturday (ServiceTitan-style)
+                    </>
+                  ) : null}
                   {needsRange ? (
                     <>
                       {needsAsOf ? " · " : null}
@@ -651,6 +735,9 @@ export default function ReportsPage() {
                   {reportId === "cash_flow" ? " · Cash · payment date" : null}
                   {reportId === "balance_sheet" ? " · Accrual position" : null}
                   {reportId === "deferred_revenue" ? " · Prepaid contract unearned balances" : null}
+                  {reportId === "tech_labor"
+                    ? " · Daily timesheets · start/end · driving · job hrs · reg/OT · total pay"
+                    : null}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 print:hidden">
@@ -666,6 +753,70 @@ export default function ReportsPage() {
             </div>
 
             <div className="mt-4 flex flex-wrap items-end gap-3 border-t border-base-200 pt-4 print:hidden">
+              {reportId === "tech_labor" ? (
+                <>
+                  <label className="form-control">
+                    <span className="label-text text-xs">Pay period from</span>
+                    <input
+                      type="date"
+                      className="input input-bordered input-sm"
+                      value={payPeriodRange.start}
+                      onChange={(e) => setPayPeriodRange(payPeriodContaining(e.target.value))}
+                    />
+                  </label>
+                  <label className="form-control">
+                    <span className="label-text text-xs">Pay period to</span>
+                    <input
+                      type="date"
+                      className="input input-bordered input-sm"
+                      value={payPeriodRange.end}
+                      readOnly
+                      title="Pay periods are fixed 7-day weeks (Sun–Sat)"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-1 pb-0.5">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setPayPeriodRange((r) => shiftPayPeriod(r, -1))}
+                    >
+                      ← Prior period
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setPayPeriodRange(defaultCurrentPayPeriod())}
+                    >
+                      This period
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setPayPeriodRange((r) => shiftPayPeriod(r, 1))}
+                    >
+                      Next period →
+                    </button>
+                  </div>
+                  <label className="form-control min-w-[12rem]">
+                    <span className="label-text text-xs">Technician</span>
+                    <select
+                      className="select select-bordered select-sm"
+                      value={techFilter}
+                      onChange={(e) => setTechFilter(e.target.value)}
+                    >
+                      <option value="">All technicians</option>
+                      {profiles
+                        .filter((p) => p.role === "technician" || labor.some((l) => l.technician_id === p.id) || timeEntries.some((t) => t.technician_id === p.id))
+                        .sort((a, b) => (a.full_name || a.email || "").localeCompare(b.full_name || b.email || ""))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.full_name || p.email}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
               {needsRange ? (
                 <>
                   <label className="form-control">
@@ -1173,55 +1324,178 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   );
 }
 
-function TechLaborReport({ data }: { data: ReturnType<typeof technicianLaborReport> }) {
-  if (data.rows.length === 0) {
-    return <EmptyState title="No labor in range" description="Technicians need time entries on work dates in range." />;
+function TechLaborReport({ data }: { data: TimesheetSummaryReport }) {
+  if (data.technicians.length === 0) {
+    return (
+      <EmptyState
+        title="No timesheet activity in this pay period"
+        description="Technicians need clock-in / labor entries with work dates inside the selected Sunday–Saturday pay period. Open Timesheets to add entries, then refresh."
+      />
+    );
   }
+
+  const hrs = (n: number) => (n > 0 ? n.toFixed(2) : "—");
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <ReportStat label="Total hours" value={data.totals.totalHours.toFixed(1)} />
-        <ReportStat label="Labor cost" value={formatReportMoney(data.totals.laborCost)} />
-        <ReportStat label="Billable amount" value={formatReportMoney(data.totals.billableAmount)} />
+        <ReportStat label="Technicians" value={data.techCount} />
+        <ReportStat label="Hours worked" value={data.grandTotals.hoursWorked.toFixed(2)} />
         <ReportStat
-          label="Cost recovery"
-          value={data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "N/A"}
-          hint="Billable $ ÷ cost $"
+          label="Regular / OT"
+          value={`${data.grandTotals.regular.toFixed(1)} / ${data.grandTotals.overtime.toFixed(1)}`}
         />
+        <ReportStat label="Total pay" value={formatReportMoney(data.grandTotals.totalPay)} hint="At cost rates · OT ×1.5" />
       </div>
-      <div id="report-detail" className="scroll-mt-4"><ReportTable
-        headers={["Technician", "Reg", "OT", "Total hrs", "Cost", "Billable", "Recovery", "Avg bill rate"]}
-      >
-        {data.rows.map((r) => (
-          <tr key={r.technicianId}>
-            <td className="font-medium">{r.name}</td>
-            <td className="text-right tabular-nums">{r.regularHours.toFixed(1)}</td>
-            <td className="text-right tabular-nums">{r.overtimeHours.toFixed(1)}</td>
-            <td className="text-right tabular-nums font-medium">{r.totalHours.toFixed(1)}</td>
-            <MoneyCell n={r.laborCost} />
-            <MoneyCell n={r.billableAmount} />
-            <td className="text-right tabular-nums">
-              {r.recovery != null ? `${r.recovery.toFixed(2)}×` : "—"}
-            </td>
-            <td className="text-right tabular-nums">{formatReportMoney(r.avgBillRate)}</td>
-          </tr>
-        ))}
-        <tr className="border-t-2 font-bold">
-          <td>Total</td>
-          <td className="text-right tabular-nums">{data.totals.regularHours.toFixed(1)}</td>
-          <td className="text-right tabular-nums">{data.totals.overtimeHours.toFixed(1)}</td>
-          <td className="text-right tabular-nums">{data.totals.totalHours.toFixed(1)}</td>
-          <MoneyCell n={data.totals.laborCost} bold />
-          <MoneyCell n={data.totals.billableAmount} bold />
-          <td className="text-right tabular-nums">
-            {data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "—"}
-          </td>
-          <td />
-        </tr>
-      </ReportTable></div>
+
+      <p className="text-xs opacity-60">
+        Source:{" "}
+        {data.source === "time_entries"
+          ? "Time entries"
+          : data.source === "technician_labor"
+            ? "Technician labor (job hours)"
+            : "Time entries + technician labor"}
+        . Meal breaks are excluded from Hours Worked (ServiceTitan). Idle under ~1 hour in the clock span is
+        treated as paid. Total Pay uses each technician&apos;s hourly cost rate when configured.
+      </p>
+
+      {data.technicians.map((tech) => (
+        <section
+          key={tech.technicianId}
+          className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 print:break-inside-avoid"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-200 bg-base-200/40 px-4 py-3">
+            <div>
+              <h3 className="text-base font-semibold">{tech.name}</h3>
+              <p className="text-xs opacity-55">
+                Pay period {data.payPeriodLabel}
+                {tech.hourlyRate > 0 ? ` · $${tech.hourlyRate.toFixed(2)}/hr cost` : " · hourly rate not set"}
+              </p>
+            </div>
+            <Link
+              href={timesheetHref({ tech: tech.technicianId, week: data.payPeriod.start })}
+              className="btn btn-ghost btn-xs print:hidden"
+            >
+              Open timesheet
+            </Link>
+          </div>
+
+          <div id={tech === data.technicians[0] ? "report-detail" : undefined} className="scroll-mt-4">
+            <DualHorizontalScroll>
+              <table className="table table-xs">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wide opacity-70">
+                    <th>Date</th>
+                    <th>Start</th>
+                    <th>First Arrival</th>
+                    <th>End</th>
+                    <th className="text-right">Idle</th>
+                    <th className="text-right">Driving</th>
+                    <th className="text-right">Job Hrs</th>
+                    <th className="text-right">Meal</th>
+                    <th className="text-right">Training</th>
+                    <th className="text-right">Other</th>
+                    <th className="text-right">Hrs Worked</th>
+                    <th className="text-right">Regular</th>
+                    <th className="text-right">OT</th>
+                    <th className="text-right">Double OT</th>
+                    <th className="text-right">PTO</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tech.days.map((d) => (
+                    <tr key={d.date}>
+                      <td className="whitespace-nowrap font-medium">{d.date}</td>
+                      <td className="whitespace-nowrap tabular-nums">{d.start ?? "—"}</td>
+                      <td className="whitespace-nowrap tabular-nums">{d.firstArrival ?? "—"}</td>
+                      <td className="whitespace-nowrap tabular-nums">{d.end ?? "—"}</td>
+                      <td className="text-right tabular-nums">{hrs(d.idle)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.driving)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.jobHours)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.meal)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.training)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.other)}</td>
+                      <td className="text-right tabular-nums font-medium">{hrs(d.hoursWorked)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.regular)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.overtime)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.doubleOt)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.pto)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 bg-base-200/50 font-semibold">
+                    <td colSpan={4}>Total hours</td>
+                    <td className="text-right tabular-nums">{tech.totals.idle.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.driving.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.jobHours.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.meal.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.training.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.other.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.hoursWorked.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.regular.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.overtime.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.doubleOt.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.pto.toFixed(2)}</td>
+                  </tr>
+                  <tr className="bg-primary/5 font-bold">
+                    <td colSpan={10}>Total pay (pay period)</td>
+                    <td colSpan={5} className="text-right text-primary">
+                      {formatReportMoney(tech.totals.totalPay)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </DualHorizontalScroll>
+          </div>
+
+          <div className="grid gap-4 border-t border-base-200 p-4 sm:grid-cols-2 print:grid-cols-2">
+            <div className="rounded-lg border border-dashed border-base-300 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
+                Employee disclosure & signature
+              </p>
+              <p className="mt-2 text-[11px] leading-snug opacity-70">
+                I certify these timesheet hours for the pay period are complete and accurate.
+              </p>
+              <div className="mt-6 border-b border-base-content/30" />
+              <p className="mt-1 text-[10px] opacity-50">Signature · Date</p>
+            </div>
+            <div className="rounded-lg border border-dashed border-base-300 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
+                Manager approval
+              </p>
+              <p className="mt-2 text-[11px] leading-snug opacity-70">
+                Reviewed for payroll. Hours match approved activity for this pay period.
+              </p>
+              <div className="mt-6 border-b border-base-content/30" />
+              <p className="mt-1 text-[10px] opacity-50">Manager signature · Date</p>
+            </div>
+          </div>
+        </section>
+      ))}
+
+      {data.technicians.length > 1 ? (
+        <div className="rounded-2xl border border-base-300 p-4">
+          <h3 className="mb-2 text-sm font-semibold">Grand totals — all technicians</h3>
+          <div className="grid gap-2 text-sm sm:grid-cols-3">
+            <p>
+              Hours worked: <strong className="tabular-nums">{data.grandTotals.hoursWorked.toFixed(2)}</strong>
+            </p>
+            <p>
+              Regular / OT:{" "}
+              <strong className="tabular-nums">
+                {data.grandTotals.regular.toFixed(2)} / {data.grandTotals.overtime.toFixed(2)}
+              </strong>
+            </p>
+            <p>
+              Total pay: <strong className="tabular-nums">{formatReportMoney(data.grandTotals.totalPay)}</strong>
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <PolicyNote>
-        Billable amount uses customer billing rates on labor lines (potential income). Recovery below 1.0× means
-        list rates do not cover labor cost for that tech in the period.
+        Modeled on ServiceTitan&apos;s Technician Timesheet Summary By Pay Period: weekly pay periods, daily
+        start/end, activity buckets (Idle, Driving, Job Hrs, Meal, Training, Other), Regular/OT, and Total Pay when
+        hourly rates are set. Temporary clock-out is reserved for future clock-out reasons.
       </PolicyNote>
     </div>
   );
