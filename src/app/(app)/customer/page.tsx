@@ -13,6 +13,7 @@ import { parseCustomerContracts } from "@/lib/contracts";
 import type { Profile, WorkOrder } from "@/lib/types";
 import type { CustomerAddressFields } from "@/lib/customer-address";
 import { formatCustomerAddress, hasCustomerAddress } from "@/lib/customer-address";
+import { CustomerHomeLoading } from "@/components/customer/CustomerHomeLoading";
 import { emptyBusinessLocationAddress } from "./BusinessLocationCard";
 
 function GatedDashboardLink({
@@ -120,7 +121,7 @@ function CustomerDashboardPageInner() {
     })();
   }, [loadData, supabase]);
 
-  if (!profile) return <div className="p-8 text-center opacity-60">Loading…</div>;
+  if (!profile) return <CustomerHomeLoading />;
 
   if (!profile.customer_id) {
     return (
@@ -269,7 +270,7 @@ function CustomerDashboardPageInner() {
 
 export default function CustomerDashboardPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-center opacity-60">Loading…</div>}>
+    <Suspense fallback={<CustomerHomeLoading />}>
       <CustomerDashboardPageInner />
     </Suspense>
   );
