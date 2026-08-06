@@ -145,6 +145,48 @@ h3,
   backdrop-filter: blur(10px);
 }
 
+/* EquipmentIQ brand — thin white outline on mark only (dark surfaces) */
+.brand-logo-lockup {
+  line-height: 1;
+}
+
+.brand-logo-mark {
+  filter:
+    drop-shadow(0.4px 0 0 rgba(255, 255, 255, 0.7))
+    drop-shadow(-0.4px 0 0 rgba(255, 255, 255, 0.7))
+    drop-shadow(0 0.4px 0 rgba(255, 255, 255, 0.7))
+    drop-shadow(0 -0.4px 0 rgba(255, 255, 255, 0.7));
+}
+
+.brand-logo-full {
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.12));
+}
+
+.brand-logo-lockup-hero {
+  transform: translateY(-2px);
+}
+
+.brand-logo-lockup-hero .brand-logo-mark {
+  object-position: left center;
+}
+
+/* Hero mark PNG has internal padding — pull lockup left to align with copy */
+.home-hero .brand-logo-lockup-hero {
+  margin-left: -0.5rem;
+}
+
+@media (min-width: 640px) {
+  .home-hero .brand-logo-lockup-hero {
+    margin-left: -0.625rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .home-hero .brand-logo-lockup-hero {
+    margin-left: -0.75rem;
+  }
+}
+
 .home-landing-rise > * {
   animation: home-landing-rise 0.55s ease-out both;
 }
@@ -280,28 +322,16 @@ h3,
   animation: customer-welcome-rise 0.6s ease-out both;
 }
 
-.customer-welcome-logo-wrap {
+.customer-welcome-brand-block {
   animation-delay: 0ms;
 }
 
-.customer-welcome-brand {
-  animation-delay: 120ms;
-}
-
-.customer-welcome-title {
-  animation-delay: 220ms;
-}
-
 .customer-welcome-subtitle {
-  animation-delay: 320ms;
+  animation-delay: 160ms;
 }
 
 .customer-welcome-progress {
-  animation-delay: 420ms;
-}
-
-.customer-welcome-ring {
-  animation: customer-welcome-pulse 2s ease-in-out infinite;
+  animation-delay: 280ms;
 }
 
 .customer-welcome-progress-bar {
@@ -372,7 +402,6 @@ h3,
 @media (prefers-reduced-motion: reduce) {
   .login-hero,
   .customer-welcome-content > *,
-  .customer-welcome-ring,
   .customer-welcome-progress-bar,
   .customer-welcome-exit,
   .customer-home-loading-ring,

@@ -16,7 +16,7 @@ export function LoginWelcomeSplash({ exiting = false, displayName, role }: Props
 
   return (
     <div
-      className={`customer-welcome-splash login-hero fixed inset-0 z-50 flex flex-col items-center justify-center px-6 text-primary-content ${
+      className={`customer-welcome-splash login-hero fixed inset-0 z-50 flex flex-col items-center justify-center px-6 pt-[7vh] text-primary-content sm:pt-[9vh] ${
         exiting ? "customer-welcome-exit" : ""
       }`}
       role="status"
@@ -25,15 +25,11 @@ export function LoginWelcomeSplash({ exiting = false, displayName, role }: Props
       aria-label={subtitle}
     >
       <div className="customer-welcome-content flex w-full max-w-md flex-col items-center text-center">
-        <div className="customer-welcome-logo-wrap relative mb-8">
-          <span
-            className="customer-welcome-ring absolute -inset-4 rounded-full border-2 border-white/25"
-            aria-hidden
-          />
-          <EquipmentIQLogo variant="auth" onDark className="relative" />
+        <div className="customer-welcome-brand-block flex flex-col items-center gap-2.5">
+          <EquipmentIQLogo variant="splash" onDark />
+          <h1 className="customer-welcome-title text-2xl font-bold sm:text-3xl">{greeting}</h1>
         </div>
 
-        <h1 className="customer-welcome-title text-2xl font-bold sm:text-3xl">{greeting}</h1>
         <p className="customer-welcome-subtitle mt-2 text-sm opacity-80 sm:text-base">{subtitle}</p>
 
         <div className="customer-welcome-progress mt-10 h-1 w-full max-w-xs overflow-hidden rounded-full bg-white/15">
