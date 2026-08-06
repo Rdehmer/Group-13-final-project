@@ -414,7 +414,13 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
     return timeOff.some((r) => timeOffCoversDay(r, job.scheduled_date!.slice(0, 10)));
   }
 
-  const greet = `${greetForTime()}, ${firstNameFromProfile(profile.full_name, profile.email)}`;
+  const firstName = firstNameFromProfile(profile.full_name, profile.email);
+  const [dayHeader, setDayHeader] = useState(`Hello, ${firstName}`);
+
+  // Avoid SSR/client time mismatch (greeting + locale date) during hydration.
+  useEffect(() => {
+    setDayHeader(`${greetForTime()}, ${firstName} · ${format(new Date(), "EEEE, MMM d")}`);
+  }, [firstName]);
   const openToday = nowNext.length + later.length;
 
   // URL job id but not in list (reassigned) — clear quietly after load
@@ -445,10 +451,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
 
   return (
     <div className="mx-auto max-w-xl space-y-5 pb-8">
-      <PageHeader
-        title="My Day"
-        description={`${greet} · ${format(new Date(), "EEEE, MMM d")}`}
-      />
+      <PageHeader title="My Day" description={dayHeader} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm opacity-70">

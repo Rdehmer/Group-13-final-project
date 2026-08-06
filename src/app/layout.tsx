@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans, Sora } from "next/font/google";
+import { HydrationAttrGuard } from "@/components/HydrationAttrGuard";
 import { ThemeLock } from "@/components/ThemeLock";
 import "./globals.css";
 
@@ -26,7 +27,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       data-theme="ridley"
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col bg-base-200">
+      <body className="min-h-full flex flex-col bg-base-200" suppressHydrationWarning>
+        <HydrationAttrGuard />
         <ThemeLock />
         {children}
       </body>

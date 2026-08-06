@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -69,63 +70,76 @@ function InvoiceActivityChart({
           />
         ) : (
           <div className="h-64 w-full min-w-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
-                <YAxis
-                  tick={{ fontSize: 12 }}
-                  width={56}
-                  tickFormatter={(v) => shortCurrency(Number(v))}
-                />
-                <Tooltip
-                  formatter={(value, name) => [
-                    fullCurrency(Number(value)),
-                    String(name),
-                  ]}
-                  labelFormatter={(label) => String(label)}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line
-                  type="monotone"
-                  dataKey="invoiced"
-                  name="Total Invoiced"
-                  stroke="#2563eb"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#2563eb" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="collected"
-                  name="Amount Collected"
-                  stroke="#16a34a"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#16a34a" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="outstanding"
-                  name="Outstanding Balance"
-                  stroke="#d97706"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#d97706" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartMount>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    width={56}
+                    tickFormatter={(v) => shortCurrency(Number(v))}
+                  />
+                  <Tooltip
+                    formatter={(value, name) => [
+                      fullCurrency(Number(value)),
+                      String(name),
+                    ]}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="invoiced"
+                    name="Total Invoiced"
+                    stroke="#2563eb"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#2563eb" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="collected"
+                    name="Amount Collected"
+                    stroke="#16a34a"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#16a34a" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="outstanding"
+                    name="Outstanding Balance"
+                    stroke="#d97706"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#d97706" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartMount>
           </div>
         )}
       </div>
     </div>
   );
+}
+
+function ChartMount({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(true);
+  }, []);
+  if (!ready) {
+    return <div className="h-64 w-full min-w-0 animate-pulse rounded-box bg-base-200/80" aria-hidden />;
+  }
+  return <>{children}</>;
 }
 
 export function DashboardCharts({
@@ -148,16 +162,18 @@ export function DashboardCharts({
         <div className="card-body">
           <h3 className="card-title text-base">Work Orders (6 months)</h3>
           <div className="h-64 w-full min-w-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={workOrderTrend}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="count" name="Work Orders" fill="oklch(var(--p))" />
-              </BarChart>
-            </ResponsiveContainer>
+            <ChartMount>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={workOrderTrend}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="count" name="Work Orders" fill="oklch(var(--p))" />
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartMount>
           </div>
         </div>
       </div>
@@ -169,22 +185,24 @@ export function DashboardCharts({
           <div className="card-body">
             <h3 className="card-title text-base">Invoiced Revenue (6 months)</h3>
             <div className="h-64 w-full min-w-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={revenueByMonth}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => shortCurrency(Number(v))} />
-                  <Tooltip formatter={(v) => [fullCurrency(Number(v)), "Revenue"]} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="revenue"
-                    name="Revenue"
-                    stroke="oklch(var(--su))"
-                    strokeWidth={2}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <ChartMount>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={revenueByMonth}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => shortCurrency(Number(v))} />
+                    <Tooltip formatter={(v) => [fullCurrency(Number(v)), "Revenue"]} />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="revenue"
+                      name="Revenue"
+                      stroke="oklch(var(--su))"
+                      strokeWidth={2}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartMount>
             </div>
           </div>
         </div>
