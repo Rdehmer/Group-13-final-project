@@ -4,6 +4,8 @@ export function loadingSubtitleForRole(role: UserRole): string {
   switch (role) {
     case "customer":
       return "Loading your account…";
+    case "vendor":
+      return "Loading vendor portal…";
     case "technician":
       return "Loading My Day…";
     case "billing":
@@ -19,5 +21,7 @@ export function welcomeGreeting(displayName: string | null | undefined, role: Us
   if (displayName?.trim()) {
     return `Welcome back, ${displayName.split(" ")[0]}`;
   }
-  return role === "customer" ? "Welcome to your portal" : "Welcome back";
+  if (role === "customer") return "Welcome to your portal";
+  if (role === "vendor") return "Welcome to the vendor portal";
+  return "Welcome back";
 }

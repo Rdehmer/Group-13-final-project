@@ -141,6 +141,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "timesheets",
   ],
   customer: [],
+  vendor: [],
 };
 
 export function permissionKeyForHref(href: string): PermissionKey | null {
@@ -149,6 +150,9 @@ export function permissionKeyForHref(href: string): PermissionKey | null {
     if (path === prefix || path.startsWith(`${prefix}/`)) return key;
   }
   if (path.startsWith("/customer")) return null;
+  if (path.startsWith("/vendor") && path !== "/vendors" && !path.startsWith("/vendors/")) {
+    return null;
+  }
   return null;
 }
 
@@ -196,9 +200,12 @@ export function profileHasModule(profile: Profile, key: PermissionKey): boolean 
 
 export function profileCanAccessHref(profile: Profile, href: string): boolean {
   if (!profile.is_active) return false;
-  // Customer portal uses role only
+  // Customer / vendor portals use role only (not employee permission matrix)
   if (profile.role === "customer") {
     return href === "/customer" || href.startsWith("/customer/");
+  }
+  if (profile.role === "vendor") {
+    return href === "/vendor" || href.startsWith("/vendor/");
   }
   const key = permissionKeyForHref(href);
   if (!key) return false;
@@ -208,6 +215,9 @@ export function profileCanAccessHref(profile: Profile, href: string): boolean {
 function navAllowed(item: NavItem, profile: Profile): boolean {
   if (profile.role === "customer") {
     return item.roles.includes("customer");
+  }
+  if (profile.role === "vendor") {
+    return item.roles.includes("vendor");
   }
   // Section headers are labels only — visibility comes from children / role list.
   if (item.section) {
@@ -221,6 +231,16 @@ function navAllowed(item: NavItem, profile: Profile): boolean {
 function filterNavItem(item: NavItem, profile: Profile): NavItem | null {
   if (profile.role === "customer") {
     if (!item.roles.includes("customer")) return null;
+    if (!item.children?.length) return item;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  if (profile.role === "vendor") {
+    if (!item.roles.includes("vendor")) return null;
     if (!item.children?.length) return item;
     const kids = item.children
       .map((c) => filterNavItem(c, profile))
@@ -262,7 +282,7 @@ export function staffRoles(): UserRole[] {
 }
 
 export function isStaffRole(role: UserRole): boolean {
-  return role !== "customer";
+  return role !== "customer" && role !== "vendor";
 }
 
 /** Is an override different from the role default? */

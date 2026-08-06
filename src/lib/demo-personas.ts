@@ -42,6 +42,12 @@ export const DEMO_PERSONAS: DemoPersona[] = [
     role: "billing",
   },
   {
+    id: "vendor",
+    label: "Vendor",
+    email: "vendor1@ridley-demo.test",
+    role: "vendor",
+  },
+  {
     id: "admin",
     label: "Admin",
     email: "admin@ridley-demo.test",

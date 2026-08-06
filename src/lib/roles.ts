@@ -207,6 +207,12 @@ export const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
+  // ── Vendor portal ──────────────────────────────────────────────────
+  {
+    href: "/vendor",
+    label: "Vendor Home",
+    roles: ["vendor"],
+  },
   // ── Customer portal ────────────────────────────────────────────────
   {
     href: "/customer",
@@ -286,6 +292,8 @@ export function homeForRole(role: UserRole): string {
       return "/billing";
     case "customer":
       return "/customer";
+    case "vendor":
+      return "/vendor";
     case "administrator":
     case "service_manager":
     default:
