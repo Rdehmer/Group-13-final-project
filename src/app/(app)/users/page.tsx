@@ -5,6 +5,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { isStaffRole } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile, type UserRole } from "@/lib/types";
@@ -54,7 +55,7 @@ export default function UsersPage() {
           {users.length === 0 ? (
             <div className="p-6"><EmptyState title="No users found" description="User profiles are created on sign-up." /></div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody>
@@ -89,7 +90,7 @@ export default function UsersPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

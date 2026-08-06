@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import { postApBill, postApPayment } from "@/lib/accounting/postings";
@@ -803,7 +804,7 @@ export default function VendorDetailPage() {
                 description="Enter a vendor bill to post AP and track what you owe."
               />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -876,7 +877,7 @@ export default function VendorDetailPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </section>

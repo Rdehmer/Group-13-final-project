@@ -9,6 +9,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { ScrollableOverlay } from "@/components/ScrollableOverlay";
 import type { Profile, ServiceVendor, ServiceVendorRating } from "@/lib/types";
@@ -347,7 +348,7 @@ export default function ServiceVendorsPage() {
           }
         />
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-base-300 bg-base-100">
+        <DualHorizontalScroll className="rounded-xl border border-base-300 bg-base-100">
           <table className="table table-sm">
             <thead>
               <tr>
@@ -386,7 +387,7 @@ export default function ServiceVendorsPage() {
               })}
             </tbody>
           </table>
-        </div>
+        </DualHorizontalScroll>
       )}
 
       {showForm && canCreate ? (

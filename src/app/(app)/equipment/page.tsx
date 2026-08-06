@@ -9,6 +9,7 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusHoverEditor } from "@/components/StatusHoverEditor";
 import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import {
@@ -1332,7 +1333,7 @@ function EquipmentPageInner() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table table-sm">
                 <thead>
                   <tr>
@@ -1653,7 +1654,7 @@ function EquipmentPageInner() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

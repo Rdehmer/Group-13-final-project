@@ -11,6 +11,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatCard, StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
 import {
@@ -440,7 +441,7 @@ export default async function DashboardPage() {
             {(openWorkOrders ?? []).length === 0 ? (
               <EmptyState title="No open work orders" description="Create a work order to get started." />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -472,7 +473,7 @@ export default async function DashboardPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>
@@ -483,7 +484,7 @@ export default async function DashboardPage() {
             {(lowStockParts ?? []).length === 0 ? (
               <EmptyState title="Inventory looks good" description="No parts at or below reorder level." />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -506,7 +507,7 @@ export default async function DashboardPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>

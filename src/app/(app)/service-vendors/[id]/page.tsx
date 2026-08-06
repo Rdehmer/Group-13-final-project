@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import type {
@@ -660,7 +661,7 @@ export default function ServiceVendorDetailPage() {
               {bills.length === 0 ? (
                 <p className="text-sm opacity-60">No service bills yet.</p>
               ) : (
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -698,7 +699,7 @@ export default function ServiceVendorDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               )}
             </div>
           </section>

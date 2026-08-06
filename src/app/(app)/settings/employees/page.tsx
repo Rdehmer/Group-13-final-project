@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { formatMoneyRate, listEmployees } from "@/lib/employees";
 import { effectivePermissionMap } from "@/lib/employeePermissions";
@@ -150,7 +151,7 @@ export default function EmployeesSettingsPage() {
             />
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -211,7 +212,7 @@ export default function EmployeesSettingsPage() {
                 })}
               </tbody>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
     </div>

@@ -13,6 +13,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { formatMoney } from "@/lib/calculations";
 import {
   getReceiptViewUrl,
@@ -533,7 +534,7 @@ export function PurchaseOrderPanel({
                 </div>
 
                 {poLines.length > 0 ? (
-                  <div className="mt-3 overflow-x-auto">
+                  <DualHorizontalScroll className="mt-3">
                     <table className="table table-xs">
                       <thead>
                         <tr>
@@ -581,7 +582,7 @@ export function PurchaseOrderPanel({
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </DualHorizontalScroll>
                 ) : (
                   <p className="mt-2 text-xs opacity-50">No part lines on this PO.</p>
                 )}

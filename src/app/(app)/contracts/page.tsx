@@ -8,6 +8,7 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
 import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import type {
@@ -1113,7 +1114,7 @@ export default function ContractsPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1341,7 +1342,7 @@ export default function ContractsPage() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

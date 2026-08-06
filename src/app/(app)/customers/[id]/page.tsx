@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import type { Customer, Equipment, WorkOrder, ServiceContract, Invoice } from "@/lib/types";
@@ -156,7 +157,7 @@ export default function CustomerDetailPage() {
               {equipment.length === 0 ? (
                 <EmptyState title="No equipment" description="Register equipment for this customer." />
               ) : (
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -185,7 +186,7 @@ export default function CustomerDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               )}
             </div>
           </div>
@@ -196,7 +197,7 @@ export default function CustomerDetailPage() {
               {contracts.length === 0 ? (
                 <EmptyState title="No contracts" description="Create a service contract for this customer." />
               ) : (
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead>
                     <tbody>
@@ -213,7 +214,7 @@ export default function CustomerDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               )}
             </div>
           </div>
@@ -227,7 +228,7 @@ export default function CustomerDetailPage() {
               {workOrders.length === 0 ? (
                 <EmptyState title="No work orders" description="Work orders for this customer will appear here." />
               ) : (
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead><tr><th>Job #</th><th>Type</th><th>Priority</th><th>Status</th></tr></thead>
                     <tbody>
@@ -241,7 +242,7 @@ export default function CustomerDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               )}
             </div>
           </div>
@@ -255,7 +256,7 @@ export default function CustomerDetailPage() {
               {invoices.length === 0 ? (
                 <EmptyState title="No invoices" description="Invoices for this customer will appear here." />
               ) : (
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -282,7 +283,7 @@ export default function CustomerDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               )}
             </div>
             <ActivityFeed recordType="customer" recordId={id} />

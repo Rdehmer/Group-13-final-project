@@ -547,12 +547,13 @@ h3,
 }
 
 .overflow-x-auto.rounded-box,
-.overflow-x-auto.rounded-2xl {
+.overflow-x-auto.rounded-2xl,
+.dual-h-scroll.rounded-box,
+.dual-h-scroll.rounded-2xl {
   background: #ffffff;
   border: 1px solid var(--eq-line);
   border-radius: var(--eq-radius);
   box-shadow: var(--eq-shadow);
-  overflow: hidden;
 }
 
 .btn {
