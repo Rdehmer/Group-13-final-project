@@ -1,76 +1,61 @@
 "use client";
 
 /**
- * This business faces customer communication gap risk when updates live only in phone or email.
- * Our app reduces the risk by giving customers a dedicated inbox tied to their EquipmentIQ account.
+ * Vendor portal inbox — messages with Ridley staff about work, supplies, and billing.
  */
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { MessageSquarePlus, RefreshCw } from "lucide-react";
-import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/ui";
 import type { Profile } from "@/lib/types";
-import { ConversationPanel } from "./ConversationPanel";
+import { ConversationPanel } from "@/app/(app)/customer/inbox/ConversationPanel";
+import { ThreadList } from "@/app/(app)/customer/inbox/ThreadList";
+import { markVendorInboxThreadRead } from "@/lib/vendor-inbox";
+import { listSupplyOrdersForVendor, listWorkItemsForVendor } from "@/lib/vendorPortal";
+import { VendorNewMessageModal } from "./VendorNewMessageModal";
 import {
-  buildFollowUpDraft,
-  followUpContextFromWorkOrder,
-  type FollowUpWorkOrderContext,
-} from "./inbox-draft";
-import {
-  inboxCategoryLabel,
-  normalizeInboxThread,
-  normalizeWorkOrderOption,
-  type InboxCategory,
-  type InboxMessage,
-  type InboxThread,
-  type WorkOrderOption,
-  type WorkOrderRow,
-} from "./inbox-types";
-import { NewMessageModal } from "./NewMessageModal";
-import { ThreadList } from "./ThreadList";
-import { markInboxThreadRead } from "@/lib/customer-inbox";
+  vendorInboxCategoryLabel,
+  type VendorInboxCategory,
+  type VendorInboxMessage,
+  type VendorInboxThread,
+  type VendorSupplyOrderOption,
+  type VendorWorkItemOption,
+} from "./vendor-inbox-types";
 
 const THREAD_SELECT = `
   *,
-  work_orders ( work_order_number, work_order_type, status, scheduled_date, equipment ( name ) )
+  vendor_work_items ( id, title ),
+  vendor_supply_orders ( id, item_name )
 `;
 
-const WORK_ORDER_SELECT =
-  "id, work_order_number, work_order_type, status, scheduled_date, equipment ( name )";
-
-export default function CustomerInboxPage() {
+export default function VendorInboxPage() {
   return (
     <Suspense fallback={<div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>}>
-      <CustomerInboxPageInner />
+      <VendorInboxPageInner />
     </Suspense>
   );
 }
 
-function CustomerInboxPageInner() {
-  const searchParams = useSearchParams();
-  const followUpWorkOrderId = searchParams.get("work_order_id");
-  const handledFollowUp = useRef(false);
-
+function VendorInboxPageInner() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [threads, setThreads] = useState<InboxThread[]>([]);
-  const [messages, setMessages] = useState<InboxMessage[]>([]);
-  const [workOrders, setWorkOrders] = useState<WorkOrderOption[]>([]);
+  const [threads, setThreads] = useState<VendorInboxThread[]>([]);
+  const [messages, setMessages] = useState<VendorInboxMessage[]>([]);
+  const [workItems, setWorkItems] = useState<VendorWorkItemOption[]>([]);
+  const [supplyOrders, setSupplyOrders] = useState<VendorSupplyOrderOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reply, setReply] = useState("");
-  const [replyDraftHint, setReplyDraftHint] = useState(false);
-  const [lastAutoDraft, setLastAutoDraft] = useState("");
 
   const [showNew, setShowNew] = useState(false);
   const [newSubject, setNewSubject] = useState("");
-  const [newCategory, setNewCategory] = useState<InboxCategory>("general");
-  const [newWorkOrderId, setNewWorkOrderId] = useState("");
+  const [newCategory, setNewCategory] = useState<VendorInboxCategory>("general");
+  const [newWorkItemId, setNewWorkItemId] = useState("");
+  const [newSupplyOrderId, setNewSupplyOrderId] = useState("");
   const [newBody, setNewBody] = useState("");
 
   const selectedThread = useMemo(
@@ -78,26 +63,26 @@ function CustomerInboxPageInner() {
     [threads, selectedId],
   );
 
-  const loadThreads = useCallback(async (customerId: string) => {
+  const loadThreads = useCallback(async (vendorId: string) => {
     const { data, error: loadError } = await supabase
-      .from("customer_inbox_threads")
+      .from("vendor_inbox_threads")
       .select(THREAD_SELECT)
-      .eq("customer_id", customerId)
+      .eq("vendor_id", vendorId)
       .order("last_message_at", { ascending: false });
 
     if (loadError) throw new Error(loadError.message);
-    return ((data as InboxThread[]) ?? []).map(normalizeInboxThread);
+    return (data as VendorInboxThread[]) ?? [];
   }, [supabase]);
 
   const loadMessages = useCallback(async (threadId: string) => {
     const { data, error: loadError } = await supabase
-      .from("customer_inbox_messages")
+      .from("vendor_inbox_messages")
       .select("*")
       .eq("thread_id", threadId)
       .order("created_at", { ascending: true });
 
     if (loadError) throw new Error(loadError.message);
-    return (data as InboxMessage[]) ?? [];
+    return (data as VendorInboxMessage[]) ?? [];
   }, [supabase]);
 
   const refresh = useCallback(async () => {
@@ -114,24 +99,29 @@ function CustomerInboxPageInner() {
 
     const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
     setProfile(p as Profile);
-    if (!p?.customer_id) {
+    if (!p?.vendor_id) {
       setLoading(false);
       return;
     }
 
     try {
-      const [threadRows, { data: wo }] = await Promise.all([
-        loadThreads(p.customer_id),
-        supabase
-          .from("work_orders")
-          .select(WORK_ORDER_SELECT)
-          .eq("customer_id", p.customer_id)
-          .order("created_at", { ascending: false })
-          .limit(25),
+      const [threadRows, workRes, orderRes] = await Promise.all([
+        loadThreads(p.vendor_id),
+        listWorkItemsForVendor(supabase, p.vendor_id),
+        listSupplyOrdersForVendor(supabase, p.vendor_id),
       ]);
 
       setThreads(threadRows);
-      setWorkOrders(((wo as WorkOrderRow[] | null) ?? []).map(normalizeWorkOrderOption));
+      setWorkItems(
+        workRes.data.map((item) => ({ id: item.id, title: item.title, status: item.status })),
+      );
+      setSupplyOrders(
+        orderRes.data.map((order) => ({
+          id: order.id,
+          item_name: order.item_name,
+          status: order.status,
+        })),
+      );
       setSelectedId((prev) => {
         if (prev && threadRows.some((t) => t.id === prev)) return prev;
         return threadRows[0]?.id ?? null;
@@ -147,55 +137,6 @@ function CustomerInboxPageInner() {
     void refresh();
   }, [refresh]);
 
-  function draftContextForWorkOrderId(workOrderId: string): FollowUpWorkOrderContext | null {
-    const fromList = workOrders.find((w) => w.id === workOrderId);
-    if (fromList) return followUpContextFromWorkOrder(fromList);
-
-    const thread = threads.find((t) => t.work_order_id === workOrderId);
-    const wo = thread?.work_orders;
-    if (!wo?.work_order_number || !wo.status) return null;
-
-    return {
-      work_order_number: wo.work_order_number,
-      work_order_type: wo.work_order_type,
-      status: wo.status,
-      scheduled_date: wo.scheduled_date,
-      equipment_name: wo.equipment?.name ?? null,
-    };
-  }
-
-  function applyAutoDraft(context: FollowUpWorkOrderContext): string {
-    return buildFollowUpDraft(context);
-  }
-
-  useEffect(() => {
-    if (!followUpWorkOrderId || handledFollowUp.current || loading) return;
-
-    const draftContext = draftContextForWorkOrderId(followUpWorkOrderId);
-    const existing = threads.find((t) => t.work_order_id === followUpWorkOrderId);
-    if (existing) {
-      setSelectedId(existing.id);
-      if (draftContext) {
-        setReply(applyAutoDraft(draftContext));
-        setReplyDraftHint(true);
-      }
-      handledFollowUp.current = true;
-      return;
-    }
-
-    const wo = workOrders.find((w) => w.id === followUpWorkOrderId);
-    if (wo) {
-      const draft = applyAutoDraft(followUpContextFromWorkOrder(wo));
-      setNewSubject(`Follow up on ${wo.work_order_number}`);
-      setNewCategory("service");
-      setNewWorkOrderId(wo.id);
-      setNewBody(draft);
-      setLastAutoDraft(draft);
-      setShowNew(true);
-      handledFollowUp.current = true;
-    }
-  }, [followUpWorkOrderId, loading, threads, workOrders]);
-
   useEffect(() => {
     if (!selectedId) {
       setMessages([]);
@@ -205,12 +146,10 @@ function CustomerInboxPageInner() {
       try {
         const rows = await loadMessages(selectedId);
         setMessages(rows);
-        await markInboxThreadRead(supabase, selectedId);
+        await markVendorInboxThreadRead(supabase, selectedId);
         const now = new Date().toISOString();
         setThreads((prev) =>
-          prev.map((t) =>
-            t.id === selectedId ? { ...t, customer_last_read_at: now } : t,
-          ),
+          prev.map((t) => (t.id === selectedId ? { ...t, vendor_last_read_at: now } : t)),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load messages.");
@@ -221,47 +160,22 @@ function CustomerInboxPageInner() {
   function resetNewForm() {
     setNewSubject("");
     setNewCategory("general");
-    setNewWorkOrderId("");
+    setNewWorkItemId("");
+    setNewSupplyOrderId("");
     setNewBody("");
-    setLastAutoDraft("");
-  }
-
-  function handleWorkOrderIdChange(workOrderId: string) {
-    setNewWorkOrderId(workOrderId);
-    if (!workOrderId) {
-      if (!newBody.trim() || newBody === lastAutoDraft) {
-        setNewBody("");
-        setLastAutoDraft("");
-      }
-      return;
-    }
-
-    const wo = workOrders.find((w) => w.id === workOrderId);
-    if (!wo) return;
-
-    const draft = applyAutoDraft(followUpContextFromWorkOrder(wo));
-    if (!newBody.trim() || newBody === lastAutoDraft) {
-      setNewBody(draft);
-      setLastAutoDraft(draft);
-    }
-  }
-
-  function handleReplyChange(value: string) {
-    setReply(value);
-    if (replyDraftHint) setReplyDraftHint(false);
   }
 
   async function handleSendReply() {
-    if (!profile?.customer_id || !selectedId || !reply.trim()) return;
+    if (!profile?.vendor_id || !selectedId || !reply.trim()) return;
     setBusy(true);
     setError(null);
     const body = reply.trim();
 
     const { data, error: insertError } = await supabase
-      .from("customer_inbox_messages")
+      .from("vendor_inbox_messages")
       .insert({
         thread_id: selectedId,
-        sender_role: "customer",
+        sender_role: "vendor",
         sender_profile_id: profile.id,
         body,
       })
@@ -274,26 +188,26 @@ function CustomerInboxPageInner() {
       return;
     }
 
-    setMessages((prev) => [...prev, data as InboxMessage]);
+    setMessages((prev) => [...prev, data as VendorInboxMessage]);
     setReply("");
-    setReplyDraftHint(false);
-    const refreshed = await loadThreads(profile.customer_id);
+    const refreshed = await loadThreads(profile.vendor_id);
     setThreads(refreshed);
     setBusy(false);
   }
 
   async function handleCreateThread() {
-    if (!profile?.customer_id || !newSubject.trim() || !newBody.trim()) return;
+    if (!profile?.vendor_id || !newSubject.trim() || !newBody.trim()) return;
     setBusy(true);
     setError(null);
 
     const { data: thread, error: threadError } = await supabase
-      .from("customer_inbox_threads")
+      .from("vendor_inbox_threads")
       .insert({
-        customer_id: profile.customer_id,
+        vendor_id: profile.vendor_id,
         subject: newSubject.trim(),
         category: newCategory,
-        work_order_id: newWorkOrderId || null,
+        vendor_work_item_id: newWorkItemId || null,
+        vendor_supply_order_id: newSupplyOrderId || null,
       })
       .select(THREAD_SELECT)
       .single();
@@ -304,9 +218,9 @@ function CustomerInboxPageInner() {
       return;
     }
 
-    const { error: msgError } = await supabase.from("customer_inbox_messages").insert({
+    const { error: msgError } = await supabase.from("vendor_inbox_messages").insert({
       thread_id: thread.id,
-      sender_role: "customer",
+      sender_role: "vendor",
       sender_profile_id: profile.id,
       body: newBody.trim(),
     });
@@ -317,7 +231,7 @@ function CustomerInboxPageInner() {
       return;
     }
 
-    const refreshed = await loadThreads(profile.customer_id);
+    const refreshed = await loadThreads(profile.vendor_id);
     setThreads(refreshed);
     setSelectedId(thread.id);
     setShowNew(false);
@@ -329,11 +243,11 @@ function CustomerInboxPageInner() {
     return <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>;
   }
 
-  if (!profile.customer_id) {
+  if (!profile.vendor_id) {
     return (
       <EmptyState
-        title="No customer account linked"
-        description="Contact EquipmentIQ to link your portal account."
+        title="No vendor account linked"
+        description="Contact Ridley Equipment Services to link your portal account."
       />
     );
   }
@@ -342,7 +256,7 @@ function CustomerInboxPageInner() {
     <div>
       <PageHeader
         title="Inbox"
-        description="Messages with EquipmentIQ about your service, billing, and contracts."
+        description="Messages with Ridley Equipment Services about work assignments, supply orders, and billing."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -380,7 +294,7 @@ function CustomerInboxPageInner() {
       ) : threads.length === 0 ? (
         <EmptyState
           title="No messages yet"
-          description="Ask about a visit, invoice, or contract — our team will reply here."
+          description="Ask about a work item, supply order, or invoice — our team will reply here."
           action={
             <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>
               Start a conversation
@@ -394,6 +308,7 @@ function CustomerInboxPageInner() {
               threads={threads}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              unreadMode="vendor"
             />
           </div>
 
@@ -403,18 +318,12 @@ function CustomerInboxPageInner() {
                 <div className="rounded-box border border-base-300 bg-base-100 px-4 py-3">
                   <h2 className="font-semibold">{selectedThread.subject}</h2>
                   <p className="mt-1 text-xs opacity-60">
-                    {inboxCategoryLabel(selectedThread.category)}
-                    {selectedThread.work_order_id &&
-                    selectedThread.work_orders?.work_order_number ? (
-                      <>
-                        {" · "}
-                        <Link
-                          href={`/customer/open-request?work_order_id=${selectedThread.work_order_id}`}
-                          className="link link-hover"
-                        >
-                          {selectedThread.work_orders.work_order_number}
-                        </Link>
-                      </>
+                    {vendorInboxCategoryLabel(selectedThread.category)}
+                    {selectedThread.vendor_work_items?.title ? (
+                      <> · {selectedThread.vendor_work_items.title}</>
+                    ) : null}
+                    {selectedThread.vendor_supply_orders?.item_name ? (
+                      <> · {selectedThread.vendor_supply_orders.item_name}</>
                     ) : null}
                   </p>
                 </div>
@@ -422,8 +331,10 @@ function CustomerInboxPageInner() {
                   messages={messages}
                   reply={reply}
                   busy={busy}
-                  showDraftHint={replyDraftHint}
-                  onReplyChange={handleReplyChange}
+                  viewerRole="vendor"
+                  vendorLabel="You"
+                  staffLabel="Ridley Equipment Services"
+                  onReplyChange={setReply}
                   onSend={() => void handleSendReply()}
                 />
               </div>
@@ -436,17 +347,20 @@ function CustomerInboxPageInner() {
         </div>
       )}
 
-      <NewMessageModal
+      <VendorNewMessageModal
         open={showNew}
         busy={busy}
-        workOrders={workOrders}
+        workItems={workItems}
+        supplyOrders={supplyOrders}
         subject={newSubject}
         category={newCategory}
-        workOrderId={newWorkOrderId}
+        workItemId={newWorkItemId}
+        supplyOrderId={newSupplyOrderId}
         body={newBody}
         onSubjectChange={setNewSubject}
         onCategoryChange={setNewCategory}
-        onWorkOrderIdChange={handleWorkOrderIdChange}
+        onWorkItemIdChange={setNewWorkItemId}
+        onSupplyOrderIdChange={setNewSupplyOrderId}
         onBodyChange={setNewBody}
         onClose={() => {
           if (!busy) {

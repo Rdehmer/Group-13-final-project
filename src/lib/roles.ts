@@ -277,6 +277,11 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Vendor Home",
     roles: ["vendor"],
   },
+  {
+    href: "/vendor/inbox",
+    label: "Inbox",
+    roles: ["vendor"],
+  },
   // ── Customer portal ────────────────────────────────────────────────
   {
     href: "/customer",
