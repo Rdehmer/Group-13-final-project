@@ -229,17 +229,36 @@ export default function AccountingClosePage() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Close checklist" value={`${passCount}/${checklist.length}`} hint="Items passing" />
-        <StatCard label="Deferred liability" value={formatMoney(deferred.totalDeferred)} hint="Prepaid unearned" />
-        <StatCard label="Contract asset" value={formatMoney(asset.ending)} hint="Unbilled completions" />
+        <StatCard
+          label="Close checklist"
+          value={`${passCount}/${checklist.length}`}
+          hint="Items passing"
+          scrollTarget="close-checklist"
+        />
+        <StatCard
+          label="Deferred liability"
+          value={formatMoney(deferred.totalDeferred)}
+          hint="Prepaid unearned"
+          scrollTarget="close-deferred"
+        />
+        <StatCard
+          label="Contract asset"
+          value={formatMoney(asset.ending)}
+          hint="Unbilled completions"
+          scrollTarget="close-contract-asset"
+        />
         <StatCard
           label="Period status"
           value={periodRow?.status ?? "Open"}
           hint={periodRow?.closed_at ? `Closed ${periodRow.closed_at.slice(0, 10)}` : "Editable"}
+          scrollTarget="close-checklist"
         />
       </div>
 
-      <section className="rounded-box bg-base-100 p-4 shadow">
+      <section
+        id="close-checklist"
+        className="scroll-mt-4 rounded-box bg-base-100 p-4 shadow"
+      >
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-semibold">Close checklist — {period}</h2>
           <div className="flex flex-wrap gap-2">
@@ -320,7 +339,7 @@ export default function AccountingClosePage() {
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="space-y-3 rounded-box bg-base-100 p-4 shadow">
+        <section id="close-deferred" className="scroll-mt-4 space-y-3 rounded-box bg-base-100 p-4 shadow">
           <h2 className="text-base font-semibold">Post month-end journals</h2>
 
           <div className="rounded-lg border border-base-300 p-3">
@@ -609,7 +628,9 @@ export default function AccountingClosePage() {
             </DualHorizontalScroll>
           )}
 
-          <h3 className="pt-2 text-sm font-semibold">Contract asset rollforward</h3>
+          <h3 id="close-contract-asset" className="scroll-mt-4 pt-2 text-sm font-semibold">
+            Contract asset rollforward
+          </h3>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <div>Beginning</div>
             <div className="text-right tabular-nums">{formatMoney(asset.beginning)}</div>

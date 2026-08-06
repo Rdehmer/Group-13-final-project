@@ -58,6 +58,7 @@ import {
   isTimesheetMissingTable,
   localDateTimeToIso,
   ACTIVITY_TYPES,
+  timesheetHref,
 } from "@/lib/timesheets";
 
 type Props = {
@@ -753,18 +754,30 @@ export function JobSheet({
               Timesheet
             </h3>
           </div>
-          {!showAddEntry ? (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm min-h-10"
-              onClick={() => {
-                resetAddEntryForm();
-                setShowAddEntry(true);
-              }}
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={timesheetHref({
+                wo: job.id,
+                tech: profile.id,
+                week: laborDate || todayIso(),
+              })}
+              className="btn btn-ghost btn-sm min-h-10"
             >
-              Add Entry
-            </button>
-          ) : null}
+              Full timesheet
+            </Link>
+            {!showAddEntry ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm min-h-10"
+                onClick={() => {
+                  resetAddEntryForm();
+                  setShowAddEntry(true);
+                }}
+              >
+                Add Entry
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {activeClock && activeClock.work_order_id === job.id ? (
@@ -793,6 +806,17 @@ export function JobSheet({
                 >
                   Clock out
                 </button>
+                <Link
+                  href={timesheetHref({
+                    entry: activeClock.id,
+                    wo: job.id,
+                    tech: profile.id,
+                    week: activeClock.entry_date,
+                  })}
+                  className="btn btn-ghost btn-xs mt-1"
+                >
+                  View in timesheet
+                </Link>
               </div>
             </div>
           </div>
@@ -849,6 +873,16 @@ export function JobSheet({
                       <span>{Number(row.overtime_hours).toFixed(2)} OT</span>
                     ) : null}
                     <span className="badge badge-ghost badge-sm">{row.billable_status}</span>
+                    <Link
+                      href={timesheetHref({
+                        wo: job.id,
+                        tech: profile.id,
+                        week: row.work_date,
+                      })}
+                      className="link link-primary"
+                    >
+                      Timesheet
+                    </Link>
                   </div>
                   {row.notes && timesheetActivityLabel(row.notes) !== row.notes ? (
                     <p className="mt-1 text-xs opacity-70">{row.notes.replace(/^[^—]+ — /, "")}</p>

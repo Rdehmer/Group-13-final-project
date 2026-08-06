@@ -15,7 +15,7 @@ import {
 } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
-import { StatCard, EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
 import type { Invoice, Payment, WorkOrder } from "@/lib/types";
 
@@ -781,26 +781,33 @@ export function InvoiceCashReport() {
             {unbilledCompleted.length} completed WO(s) without invoice — open work orders
           </div>
         </Link>
-        <StatCard
+        <JumpStatCard
           label="Completed work orders"
           value={completedWoCount}
           hint="In selected date range"
+          targetId="section-recognition"
         />
       </div>
 
       <div className="mb-2 text-sm font-medium opacity-70">Open AR aging</div>
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Current" value={formatMoney(agingTotals.current)} hint="Not yet due" />
-        <StatCard label="1–30 days" value={formatMoney(agingTotals.d30)} />
-        <StatCard label="31–60 days" value={formatMoney(agingTotals.d60)} />
-        <StatCard
+        <JumpStatCard
+          label="Current"
+          value={formatMoney(agingTotals.current)}
+          hint="Not yet due"
+          targetId="section-ar"
+        />
+        <JumpStatCard label="1–30 days" value={formatMoney(agingTotals.d30)} targetId="section-ar" />
+        <JumpStatCard label="31–60 days" value={formatMoney(agingTotals.d60)} targetId="section-ar" />
+        <JumpStatCard
           label="61+ days"
           value={formatMoney(agingTotals.d90)}
           danger={agingTotals.d90 > 0}
+          targetId="section-ar"
         />
       </div>
 
-      <div id="section-recognition" className="mt-6 card bg-base-100 shadow">
+      <div id="section-recognition" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -946,7 +953,7 @@ export function InvoiceCashReport() {
         </div>
       </div>
 
-      <div id="section-invoices" className="mt-6 card bg-base-100 shadow">
+      <div id="section-invoices" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <h2 className="card-title text-base">Invoices (recognized work)</h2>
           <p className="text-sm opacity-70">
@@ -1072,7 +1079,7 @@ export function InvoiceCashReport() {
         </div>
       </div>
 
-      <div id="section-payments" className="mt-6 card bg-base-100 shadow">
+      <div id="section-payments" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <h2 className="card-title text-base">Cash collected (payments)</h2>
           <p className="text-sm opacity-70">Payments that make up Cash Collected.</p>
@@ -1187,7 +1194,7 @@ export function InvoiceCashReport() {
         </div>
       </div>
 
-      <div id="section-ar" className="mt-6 card bg-base-100 shadow">
+      <div id="section-ar" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
