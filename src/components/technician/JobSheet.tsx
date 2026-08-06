@@ -31,6 +31,7 @@ import {
   isOpenJob,
   isOutOfScope,
   jobAddress,
+  formatCustomerPhone,
   jobPhone,
   jobTimeLabel,
   laborClockRange,
@@ -453,15 +454,15 @@ export function JobSheet({
             <div className="flex flex-wrap items-center gap-2">
               {phone ? (
                 showCustomerPhone ? (
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2">
                     <Phone className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-                    <div className="min-w-0">
+                    <div>
                       <p className="text-xs font-medium uppercase tracking-wide opacity-60">Customer number</p>
                       <a
                         href={telHref(phone)}
-                        className="block truncate text-base font-semibold text-primary underline-offset-2 hover:underline"
+                        className="block whitespace-nowrap text-base font-semibold tabular-nums tracking-wide text-primary underline-offset-2 hover:underline"
                       >
-                        {phone}
+                        {formatCustomerPhone(phone)}
                       </a>
                     </div>
                     <button

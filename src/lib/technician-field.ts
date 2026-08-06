@@ -157,9 +157,32 @@ export function jobPhone(job: FieldJob): string | null {
   return raw || null;
 }
 
+/** Digits only (strip formatting). Keeps a leading + for international. */
+export function phoneDigits(phone: string): string {
+  const trimmed = phone.trim();
+  if (trimmed.startsWith("+")) {
+    return `+${trimmed.slice(1).replace(/\D/g, "")}`;
+  }
+  return trimmed.replace(/\D/g, "");
+}
+
+/**
+ * Show the full customer number clearly, including area code.
+ * US 10-digit (or 11 with leading 1) → (XXX) XXX-XXXX. Otherwise keep original.
+ */
+export function formatCustomerPhone(phone: string): string {
+  const digits = phoneDigits(phone).replace(/^\+/, "");
+  const national =
+    digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (national.length === 10) {
+    return `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`;
+  }
+  return phone.trim();
+}
+
 /** tel: link digits (keep leading + for international). */
 export function telHref(phone: string): string {
-  const cleaned = phone.replace(/[^\d+]/g, "");
+  const cleaned = phoneDigits(phone);
   return cleaned ? `tel:${cleaned}` : `tel:${phone}`;
 }
 
