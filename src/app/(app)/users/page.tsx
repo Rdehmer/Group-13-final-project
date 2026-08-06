@@ -42,7 +42,7 @@ export default function UsersPage() {
     <div>
       <PageHeader
         title="Users"
-        description="Assign roles and manage access"
+        description="Manage service managers and staff roles — this is the primary admin control surface."
         actions={
           <Link href="/settings/employees" className="btn btn-outline btn-sm">
             Employee rates & permissions

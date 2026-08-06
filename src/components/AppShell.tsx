@@ -54,6 +54,8 @@ function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/scheduling" && role === "technician") return "Hours";
   if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
+  if (item.href === "/dashboard" && role === "administrator") return "Admin home";
+  if (item.href === "/dashboard" && role === "service_manager") return "Operations";
   return item.label;
 }
 
@@ -492,10 +494,7 @@ export function AppShell({
   const isCustomer = profile.role === "customer";
   const isTechnician = profile.role === "technician";
   const showTopSearchAndNew = !isCustomer && !isTechnician;
-  const showManagerInbox =
-    profile.role === "service_manager" ||
-    profile.role === "administrator" ||
-    profile.role === "billing";
+  const showManagerInbox = profile.role === "service_manager" || profile.role === "billing";
   const canCollapseSidebar =
     profile.role === "service_manager" || profile.role === "administrator";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);

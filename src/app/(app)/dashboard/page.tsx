@@ -20,9 +20,14 @@ import {
   type InvoiceActivityPoint,
 } from "@/components/DashboardCharts";
 import { ManagerDashboardStudio } from "@/components/ManagerDashboardStudio";
+import {
+  AdminDashboardHome,
+  summarizeStaffProfiles,
+} from "@/components/AdminDashboardHome";
 import { formatMoney } from "@/lib/calculations";
 import { relatedName } from "@/lib/relations";
 import { fetchManagerUnreadInboxCount } from "@/lib/manager-inbox";
+import type { UserRole } from "@/lib/types";
 
 function safeNumber(value: unknown): number {
   const n = Number(value);
@@ -70,16 +75,34 @@ function groupPieSlices(
 }
 
 /**
- * This business faces operational blind-spot risk when managers lack real-time visibility.
- * Our app reduces the risk by surfacing open work, revenue, and contract health on one dashboard.
+ * Service managers get the live ops widget board.
+ * Administrators get a lean control-plane home (users / access first).
  */
 export default async function DashboardPage() {
   const supabase = await createClient();
   const profile = await getProfile();
-  /** Same widget dashboard for service managers and administrators. */
-  const isManager =
-    profile?.role === "service_manager" || profile?.role === "administrator";
-  const canManageContracts = isManager;
+  const isAdmin = profile?.role === "administrator";
+  const isServiceManager = profile?.role === "service_manager";
+  const isManager = isServiceManager;
+  const canManageContracts = isServiceManager || isAdmin;
+
+  if (isAdmin) {
+    const { data: staffRows } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, role, is_active")
+      .in("role", ["administrator", "service_manager", "technician", "billing"])
+      .order("full_name");
+    const data = summarizeStaffProfiles(
+      ((staffRows as {
+        id: string;
+        full_name: string | null;
+        email: string;
+        role: UserRole;
+        is_active: boolean;
+      }[] | null) ?? []),
+    );
+    return <AdminDashboardHome data={data} />;
+  }
 
   const [
     { count: customerCount },
