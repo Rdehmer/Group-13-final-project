@@ -3,7 +3,8 @@ export type UserRole =
   | "service_manager"
   | "technician"
   | "billing"
-  | "customer";
+  | "customer"
+  | "vendor";
 
 /** ServiceTitan-style module keys used for employee permission matrices. */
 export type PermissionKey =
@@ -42,6 +43,8 @@ export type Profile = {
   full_name: string | null;
   role: UserRole;
   customer_id: string | null;
+  /** When role = vendor, scopes the login to this AP vendor. */
+  vendor_id?: string | null;
   hourly_cost_rate: number | null;
   hourly_billing_rate: number | null;
   /** Optional staff fields (employee HR-lite / settings). */
@@ -369,11 +372,43 @@ export type Vendor = {
   postal_code: string | null;
   payment_terms: string;
   notes: string | null;
+  /** Trade type for vendor portal (HVAC, Plumbing, etc.). */
+  specialty?: string | null;
   is_active: boolean;
   approval_status: VendorApprovalStatus;
   requested_by: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VendorSpecialty = "HVAC" | "Plumbing" | "Electrical" | "Parts" | "Other";
+
+export type VendorWorkItemStatus = "Pending" | "Accepted" | "Rejected";
+
+export type VendorWorkItem = {
+  id: string;
+  vendor_id: string;
+  title: string;
+  description: string | null;
+  status: VendorWorkItemStatus;
+  due_date: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VendorSupplyOrderStatus = "Pending" | "Accepted" | "Rejected";
+
+export type VendorSupplyOrder = {
+  id: string;
+  vendor_id: string;
+  item_name: string;
+  quantity: number;
+  status: VendorSupplyOrderStatus;
+  notes: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -846,4 +881,5 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   technician: "Technician",
   billing: "Billing Employee",
   customer: "Customer",
+  vendor: "Vendor",
 };

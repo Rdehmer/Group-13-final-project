@@ -31,7 +31,11 @@ export function StatusBadge({
 
 export function statusTone(status: string): keyof typeof TONE {
   const s = status.toLowerCase();
-  if (["critical", "past due", "disputed", "out of service", "canceled"].some((x) => s.includes(x)))
+  if (
+    ["critical", "past due", "disputed", "out of service", "canceled", "rejected"].some((x) =>
+      s.includes(x),
+    )
+  )
     return "error";
   if (s.includes("waiting on parts") || s === "waiting for parts") return "white";
   if (s.includes("in progress")) return "progress";
@@ -42,9 +46,18 @@ export function statusTone(status: string): keyof typeof TONE {
   )
     return "warning";
   if (
-    ["completed", "paid", "active", "approved", "operational", "renewed", "reviewed", "exported", "posted"].some(
-      (x) => s.includes(x),
-    )
+    [
+      "completed",
+      "paid",
+      "active",
+      "approved",
+      "accepted",
+      "operational",
+      "renewed",
+      "reviewed",
+      "exported",
+      "posted",
+    ].some((x) => s.includes(x))
   )
     return "success";
   if (["draft", "requested", "scheduled", "sent", "open"].some((x) => s.includes(x))) return "info";

@@ -35,6 +35,8 @@ import {
   recomputeBillStatus,
   todayIso,
 } from "@/lib/vendors";
+import { VENDOR_SPECIALTIES } from "@/lib/vendorPortal";
+import { VendorPortalAssignments } from "@/components/VendorPortalAssignments";
 
 const ALLOWED_ROLES = new Set(["administrator", "service_manager", "billing"]);
 const PAYMENT_METHODS: VendorPaymentMethod[] = ["Check", "ACH", "Cash", "Card", "Other"];
@@ -169,6 +171,7 @@ export default function VendorDetailPage() {
         state: vendor.state?.trim() || null,
         postal_code: vendor.postal_code?.trim() || null,
         payment_terms: vendor.payment_terms.trim() || "Net 30",
+        specialty: vendor.specialty?.trim() || null,
         notes: vendor.notes?.trim() || null,
         is_active: vendor.is_active,
         updated_at: new Date().toISOString(),
@@ -647,6 +650,22 @@ export default function VendorDetailPage() {
                     onChange={(e) => setVendor({ ...vendor, phone: e.target.value })}
                   />
                 </FormRow>
+                <FormRow label="Specialty / trade">
+                  <select
+                    className="select select-bordered w-full"
+                    value={vendor.specialty ?? ""}
+                    onChange={(e) =>
+                      setVendor({ ...vendor, specialty: e.target.value || null })
+                    }
+                  >
+                    <option value="">Select…</option>
+                    {VENDOR_SPECIALTIES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </FormRow>
                 <FormRow label="Address">
                   <input
                     className="input input-bordered w-full"
@@ -755,6 +774,9 @@ export default function VendorDetailPage() {
                 </FormRow>
                 <FormRow label="Phone">
                   <span>{vendor.phone ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Specialty">
+                  <span>{vendor.specialty ?? "—"}</span>
                 </FormRow>
                 <FormRow label="Address">
                   <span>
@@ -881,6 +903,14 @@ export default function VendorDetailPage() {
           </div>
         </section>
       </div>
+
+      {profile ? (
+        <VendorPortalAssignments
+          vendorId={id}
+          profile={profile}
+          canManage={canEditMaster}
+        />
+      ) : null}
 
       {showBill ? (
         <dialog className="modal modal-open">

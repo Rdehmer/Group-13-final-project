@@ -85,6 +85,11 @@ export const NAV_ITEMS: NavItem[] = [
     ],
   },
   {
+    href: "/vendor",
+    label: "Vendor Home",
+    roles: ["vendor"],
+  },
+  {
     href: "/emergency-purchases",
     /** Manager inbox for technician “I bought a part” emergency buys. */
     label: "Reimbursements",
@@ -225,6 +230,8 @@ export function homeForRole(role: UserRole): string {
       return "/billing";
     case "customer":
       return "/customer";
+    case "vendor":
+      return "/vendor";
     case "administrator":
     case "service_manager":
     default:
