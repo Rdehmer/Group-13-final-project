@@ -16,11 +16,8 @@ import {
   type ContractTierId,
   type CustomerContract,
 } from "@/lib/contracts";
-import {
-  DEFAULT_CUSTOMER_PACK_ID,
-  listActivePacks,
-  loadCatalog,
-} from "@/lib/contract-plans";
+import { DEFAULT_CUSTOMER_PACK_ID, listActivePacks } from "@/lib/contract-plans";
+import { loadCompanyCatalog } from "@/lib/company-catalog";
 import type { Equipment, Profile } from "@/lib/types";
 
 export default function RequestContractPage() {
@@ -32,12 +29,14 @@ export default function RequestContractPage() {
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
   const [selectedPackId, setSelectedPackId] = useState(DEFAULT_CUSTOMER_PACK_ID);
   const [selectedTier, setSelectedTier] = useState<ContractTierId>("silver");
-  const [tiersCollapsed, setTiersCollapsed] = useState(false);
+  const [tiersCollapsed, setTierCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) return;
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -49,12 +48,14 @@ export default function RequestContractPage() {
       const [{ data: sc }, { data: eq }, { data: customer }] = await Promise.all([
         supabase
           .from("service_contracts")
-          .select(`
+          .select(
+            `
             *,
             contract_equipment (
               equipment ( id, name, category, location )
             )
-          `)
+          `,
+          )
           .eq("customer_id", p.customer_id)
           .order("created_at", { ascending: false }),
         supabase.from("equipment").select("*").eq("customer_id", p.customer_id).order("name"),
@@ -69,7 +70,8 @@ export default function RequestContractPage() {
       const parsed = parseCustomerContracts(sc ?? []);
       setContracts(parsed);
 
-      const packs = listActivePacks(loadCatalog());
+      const { catalog } = await loadCompanyCatalog(supabase);
+      const packs = listActivePacks(catalog);
       const draft = loadContractDraft(p.customer_id);
       const activeContractCount = parsed.filter((c) => contractFilterTab(c, "active")).length;
       const recommended = suggestTier(equipmentList.length, activeContractCount > 0);
@@ -77,14 +79,20 @@ export default function RequestContractPage() {
       const draftPack =
         draft?.packId && packs.some((x) => x.id === draft.packId)
           ? draft.packId
-          : packs[0]?.id ?? DEFAULT_CUSTOMER_PACK_ID;
+          : (packs[0]?.id ?? DEFAULT_CUSTOMER_PACK_ID);
       setSelectedPackId(draftPack);
 
-      if (draft?.tierId) {
+      const packLevels = packs.find((x) => x.id === draftPack)?.levels ?? [];
+      if (draft?.tierId && packLevels.some((l) => l.id === draft.tierId)) {
         setSelectedTier(draft.tierId);
-        setTiersCollapsed(true);
+        setTierCollapsed(true);
       } else {
-        setSelectedTier(recommended);
+        const recommendedId =
+          packLevels.find((l) => l.id === recommended)?.id ??
+          packLevels.find((l) => l.recommended)?.id ??
+          packLevels[0]?.id ??
+          recommended;
+        setSelectedTier(recommendedId);
       }
 
       setLoading(false);
@@ -108,7 +116,10 @@ export default function RequestContractPage() {
 
   if (!profile.customer_id) {
     return (
-      <EmptyState title="No customer account linked" description="Contact Ridley Equipment Services to link your portal account." />
+      <EmptyState
+        title="No customer account linked"
+        description="Contact Ridley Equipment Services to link your portal account."
+      />
     );
   }
 
@@ -116,14 +127,17 @@ export default function RequestContractPage() {
     <div>
       <PageHeader
         title="Request a Service Contract"
-        description="Choose your industry and coverage level, tell us what to protect, and submit for Ridley's review—pricing confirmed before activation."
+        description="Choose your industry and coverage level, tell us what to protect, and submit for review—pricing confirmed before activation."
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <Link href="/customer/contracts" className="block rounded-box transition hover:opacity-90">
           <StatCard label="Active contracts" value={activeCount} hint="View agreements →" />
         </Link>
-        <Link href="/customer/contracts?filter=pending" className="block rounded-box transition hover:opacity-90">
+        <Link
+          href="/customer/contracts?filter=pending"
+          className="block rounded-box transition hover:opacity-90"
+        >
           <StatCard
             label="Pending requests"
             value={pendingCount}
@@ -141,13 +155,13 @@ export default function RequestContractPage() {
         collapsed={tiersCollapsed}
         onSelectPack={(packId) => {
           setSelectedPackId(packId);
-          setTiersCollapsed(false);
+          setTierCollapsed(false);
         }}
         onSelectTier={(tierId) => {
           setSelectedTier(tierId);
         }}
-        onContinue={() => setTiersCollapsed(true)}
-        onChangePlan={() => setTiersCollapsed(false)}
+        onContinue={() => setTierCollapsed(true)}
+        onChangePlan={() => setTierCollapsed(false)}
       />
 
       {tiersCollapsed ? (

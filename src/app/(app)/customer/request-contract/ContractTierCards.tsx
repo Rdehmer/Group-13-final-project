@@ -9,11 +9,13 @@ import {
   type ContractTierId,
 } from "@/lib/contracts";
 import { formatMoney } from "@/lib/calculations";
+import { loadCompanyCatalog } from "@/lib/company-catalog";
+import { createClient } from "@/lib/supabase/client";
 import {
   listActivePacks,
-  loadCatalog,
   midBandMidpointAssetValue,
   resolvePlan,
+  type ContractPlanCatalog,
   type IndustryPack,
 } from "@/lib/contract-plans";
 import { premiumForFeeOption } from "@/lib/contract-pricing";
@@ -30,12 +32,6 @@ type Props = {
   onChangePlan: () => void;
 };
 
-const TIER_BADGE: Record<ContractTierId, string> = {
-  gold: "badge-warning",
-  silver: "badge-ghost",
-  bronze: "badge-neutral",
-};
-
 export function ContractTierCards({
   selectedPackId,
   selectedTier,
@@ -46,12 +42,18 @@ export function ContractTierCards({
   onContinue,
   onChangePlan,
 }: Props) {
+  const supabase = useMemo(() => createClient(), []);
   const [showCompare, setShowCompare] = useState(false);
   const [packs, setPacks] = useState<IndustryPack[]>([]);
+  const [catalog, setCatalog] = useState<ContractPlanCatalog | null>(null);
 
   useEffect(() => {
-    setPacks(listActivePacks(loadCatalog()));
-  }, []);
+    void (async () => {
+      const { catalog: cat } = await loadCompanyCatalog(supabase);
+      setCatalog(cat);
+      setPacks(listActivePacks(cat));
+    })();
+  }, [supabase]);
 
   const activePack = packs.find((p) => p.id === selectedPackId) ?? packs[0];
   const activeTier = getContractTier(selectedTier, selectedPackId);
@@ -60,6 +62,14 @@ export function ContractTierCards({
     if (!activePack) return 100_000;
     return midBandMidpointAssetValue(activePack);
   }, [activePack]);
+
+  useEffect(() => {
+    if (activePack && !activePack.levels.some((l) => l.id === selectedTier)) {
+      const next =
+        activePack.levels.find((l) => l.recommended)?.id ?? activePack.levels[0]?.id;
+      if (next) onSelectTier(next);
+    }
+  }, [activePack, selectedTier, onSelectTier]);
 
   if (collapsed) {
     return (
@@ -84,7 +94,8 @@ export function ContractTierCards({
         <div>
           <p className="mb-1 text-sm font-medium">What kind of coverage do you need?</p>
           <p className="text-sm opacity-70">
-            Choose your industry, then pick Gold, Silver, or Bronze. All three plans are shown below.
+            Choose your industry, then pick a protection plan. Plans are set by your service
+            company.
           </p>
         </div>
 
@@ -107,16 +118,26 @@ export function ContractTierCards({
         </label>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div
+        className={`grid gap-4 ${
+          tiers.length >= 4
+            ? "lg:grid-cols-2 xl:grid-cols-4"
+            : tiers.length === 2
+              ? "lg:grid-cols-2"
+              : "lg:grid-cols-3"
+        }`}
+      >
         {tiers.map((tier) => {
-          const resolved = resolvePlan(selectedPackId, tier.id, assetValue, loadCatalog());
-          const monthly125 = resolved
-            ? premiumForFeeOption(resolved.thresholds, 125)
-            : 0;
-          const monthly100 = resolved
-            ? premiumForFeeOption(resolved.thresholds, 100)
-            : 0;
+          const resolved = resolvePlan(
+            selectedPackId,
+            tier.id,
+            assetValue,
+            catalog ?? undefined,
+          );
+          const monthly125 = resolved ? premiumForFeeOption(resolved.thresholds, 125) : 0;
+          const monthly100 = resolved ? premiumForFeeOption(resolved.thresholds, 100) : 0;
           const selected = selectedTier === tier.id;
+          const emphasize = tier.recommended || tier.id === "gold";
 
           return (
             <button
@@ -124,13 +145,13 @@ export function ContractTierCards({
               type="button"
               className={`card bg-base-100 text-left shadow transition hover:shadow-md ${
                 selected ? "ring-2 ring-primary" : "ring-1 ring-base-300"
-              } ${tier.id === "gold" ? "border-t-4 border-warning" : ""}`}
+              } ${emphasize ? "border-t-4 border-warning" : ""}`}
               onClick={() => onSelectTier(tier.id)}
               aria-pressed={selected}
             >
               <div className="card-body gap-3 p-5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={`badge badge-sm ${TIER_BADGE[tier.id]}`}>{tier.name}</span>
+                  <span className={`badge badge-sm ${tierBadgeClass(tier.id)}`}>{tier.name}</span>
                   {recommendedTier === tier.id ? (
                     <span className="badge badge-primary badge-sm">Recommended</span>
                   ) : null}
@@ -172,7 +193,7 @@ export function ContractTierCards({
           aria-expanded={showCompare}
         >
           <Columns2 className="h-5 w-5" />
-          {showCompare ? "Hide plan comparison" : "Compare Gold, Silver & Bronze"}
+          {showCompare ? "Hide plan comparison" : "Compare plans"}
         </button>
       </div>
 

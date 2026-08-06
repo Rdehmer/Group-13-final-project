@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listContractTiersForUi, type ContractTierId } from "@/lib/contracts";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -8,11 +8,13 @@ import {
   formatCapSummaryLine,
   getIndustryCapProfile,
 } from "@/lib/contract-cap-profiles";
+import { loadCompanyCatalog } from "@/lib/company-catalog";
+import { createClient } from "@/lib/supabase/client";
 import {
-  loadCatalog,
   resolvePlan,
   midBandMidpointAssetValue,
   getPack,
+  type ContractPlanCatalog,
   type ResolvedPlan,
 } from "@/lib/contract-plans";
 import {
@@ -51,7 +53,7 @@ function buildColumn(
   tierName: string,
   tagline: string,
   assetValue: number,
-  catalog: ReturnType<typeof loadCatalog>,
+  catalog: ContractPlanCatalog,
 ): CompareColumn {
   const resolved = resolvePlan(packId, tierId, assetValue, catalog);
   if (!resolved) {
@@ -100,20 +102,34 @@ function buildColumn(
 }
 
 export function ContractTierCompare({ recommendedTier, packId }: Props) {
-  const pack = getPack(packId, loadCatalog());
+  const supabase = useMemo(() => createClient(), []);
+  const [catalog, setCatalog] = useState<ContractPlanCatalog | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const { catalog: cat } = await loadCompanyCatalog(supabase);
+      setCatalog(cat);
+    })();
+  }, [supabase]);
+
+  const pack = catalog ? getPack(packId, catalog) : null;
   const capProfile = getIndustryCapProfile(packId);
 
   const columns = useMemo(() => {
-    const cat = loadCatalog();
-    const p = getPack(packId, cat);
+    if (!catalog) return [];
+    const p = getPack(packId, catalog);
     const assetValue = p ? midBandMidpointAssetValue(p) : 100_000;
     const tierList = listContractTiersForUi(packId);
     return tierList.map((tier) =>
-      buildColumn(packId, tier.id, tier.name, tier.tagline, assetValue, cat),
+      buildColumn(packId, tier.id, tier.name, tier.tagline, assetValue, catalog),
     );
-  }, [packId]);
+  }, [packId, catalog]);
 
   const assetValue = pack ? midBandMidpointAssetValue(pack) : 100_000;
+
+  if (!catalog) {
+    return <p className="text-sm opacity-60">Loading plan comparison…</p>;
+  }
 
   return (
     <div className="space-y-3">

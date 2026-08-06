@@ -26,6 +26,19 @@ const BASE_TIER_CAPS: Record<
   bronze: { aggregate: 4_000, perEquipment: 1_000, partsMid: 500 },
 };
 
+/** Map custom level ids onto seed cap tiers (gold/silver/bronze). */
+export function coerceServiceTierId(tier: string | null | undefined): ServiceTierId {
+  const id = (tier ?? "silver").toLowerCase();
+  if (id === "gold" || id === "silver" || id === "bronze") return id;
+  if (id.includes("gold") || id.includes("premier") || id.includes("premium") || id.includes("plus")) {
+    return "gold";
+  }
+  if (id.includes("bronze") || id.includes("basic") || id.includes("essential") || id.includes("starter")) {
+    return "bronze";
+  }
+  return "silver";
+}
+
 export const CAP_PROFILE_MULTIPLIER: Record<IndustryCapProfile, number> = {
   heavyCommercial: 1.75,
   commercial: 1.0,
@@ -70,14 +83,14 @@ export function bandScaleForCaps(bandId: AssetBandId | string | undefined): numb
 }
 
 export function resolveCoverageCaps(
-  tier: ServiceTierId,
+  tier: ServiceTierId | string,
   bandId: AssetBandId | string,
   packId?: string | null,
 ): ResolvedCoverageCaps {
   const profile = getIndustryCapProfile(packId);
   const profileMultiplier = CAP_PROFILE_MULTIPLIER[profile];
   const bandScale = bandScaleForCaps(bandId);
-  const base = BASE_TIER_CAPS[tier];
+  const base = BASE_TIER_CAPS[coerceServiceTierId(tier)];
   return {
     aggregate: Math.round(base.aggregate * profileMultiplier * bandScale),
     perEquipment: Math.round(base.perEquipment * profileMultiplier * bandScale),

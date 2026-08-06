@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Admin Contract Plans — industry × Gold/Silver/Bronze × asset-value bands.
+ * Admin Contract Plans — company-scoped industry packs with dynamic
+ * protection levels and asset-value bands (1A + 2B).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -13,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Trash2,
 } from "lucide-react";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { formatMoney } from "@/lib/calculations";
@@ -22,15 +24,23 @@ import {
   resolveCoverageCaps,
 } from "@/lib/contract-cap-profiles";
 import {
+  loadCompanyCatalog,
+  resetCompanyCatalogToSeed,
+  saveCompanyCatalog,
+} from "@/lib/company-catalog";
+import { createClient } from "@/lib/supabase/client";
+import {
+  addBandToLevel,
+  addLevelToPack,
   clonePack,
   createBlankPack,
   formatBandRange,
-  loadCatalog,
-  resetCatalogToSeed,
-  saveCatalog,
+  removeBandFromLevel,
+  removeLevelFromPack,
   setPackActive,
   updateBandBounds,
   updateBandThresholds,
+  updateLevelMeta,
   upsertPack,
   type AssetValueBand,
   type ContractPlanCatalog,
@@ -38,8 +48,6 @@ import {
   type PlanThresholds,
   type ServiceLevelId,
 } from "@/lib/contract-plans";
-
-const TIERS: ServiceLevelId[] = ["gold", "silver", "bronze"];
 
 function extrasToText(extras: Record<string, string | number | boolean>): string {
   return Object.entries(extras)
@@ -65,31 +73,44 @@ function textToExtras(text: string): Record<string, string | number | boolean> {
 }
 
 export default function ContractPlansSettingsPage() {
+  const supabase = useMemo(() => createClient(), []);
   const [catalog, setCatalog] = useState<ContractPlanCatalog | null>(null);
+  const [companyId, setCompanyId] = useState<string | null>(null);
   const [packId, setPackId] = useState("warehouse");
   const [tierId, setTierId] = useState<ServiceLevelId>("gold");
   const [bandId, setBandId] = useState("mid");
   const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [newPackName, setNewPackName] = useState("");
+  const [newLevelName, setNewLevelName] = useState("");
+  const [newBandLabel, setNewBandLabel] = useState("");
 
-  const reload = useCallback(() => {
-    const cat = loadCatalog();
-    setCatalog(cat);
-    if (!cat.packs.some((p) => p.id === packId)) {
-      setPackId(cat.packs[0]?.id ?? "warehouse");
+  const reload = useCallback(async () => {
+    setError(null);
+    try {
+      const { catalog: cat, companyId: cid } = await loadCompanyCatalog(supabase);
+      setCatalog(cat);
+      setCompanyId(cid);
+      if (!cat.packs.some((p) => p.id === packId)) {
+        setPackId(cat.packs[0]?.id ?? "warehouse");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load company catalog.");
     }
-  }, [packId]);
+  }, [supabase, packId]);
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only
+  }, []);
 
   const pack = useMemo(
     () => catalog?.packs.find((p) => p.id === packId) ?? null,
     [catalog, packId],
   );
   const level = useMemo(
-    () => pack?.levels.find((l) => l.id === tierId) ?? null,
+    () => pack?.levels.find((l) => l.id === tierId) ?? pack?.levels[0] ?? null,
     [pack, tierId],
   );
   const band = useMemo(
@@ -98,21 +119,35 @@ export default function ContractPlansSettingsPage() {
   );
 
   useEffect(() => {
+    if (pack && !pack.levels.some((l) => l.id === tierId)) {
+      setTierId(pack.levels[0]?.id ?? "gold");
+    }
+  }, [pack, tierId]);
+
+  useEffect(() => {
     if (level && !level.bands.some((b) => b.id === bandId)) {
       setBandId(level.bands[0]?.id ?? "mid");
     }
   }, [level, bandId]);
 
-  function persist(next: ContractPlanCatalog, msg: string) {
-    saveCatalog(next);
-    setCatalog(next);
-    setMessage(msg);
+  async function persist(next: ContractPlanCatalog, msg: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await saveCompanyCatalog(supabase, next, companyId);
+      setCatalog(saved);
+      setMessage(msg);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function patchThresholds(patch: Partial<PlanThresholds>) {
-    if (!catalog || !band) return;
-    const next = updateBandThresholds(catalog, packId, tierId, band.id, patch);
-    persist(next, "Thresholds saved.");
+    if (!catalog || !band || !level) return;
+    const next = updateBandThresholds(catalog, packId, level.id, band.id, patch);
+    void persist(next, "Thresholds saved to your company catalog.");
   }
 
   function patchBand(bounds: {
@@ -120,26 +155,29 @@ export default function ContractPlansSettingsPage() {
     min_asset_value?: number;
     max_asset_value?: number | null;
   }) {
-    if (!catalog || !band) return;
-    const next = updateBandBounds(catalog, packId, tierId, band.id, bounds);
-    persist(next, "Band bounds saved.");
+    if (!catalog || !band || !level) return;
+    const next = updateBandBounds(catalog, packId, level.id, band.id, bounds);
+    void persist(next, "Band bounds saved.");
   }
 
   function onRenamePack(name: string) {
     if (!catalog || !pack) return;
-    persist(upsertPack(catalog, { ...pack, name }), "Pack renamed.");
+    void persist(upsertPack(catalog, { ...pack, name }), "Pack renamed.");
   }
 
   function onToggleActive() {
     if (!catalog || !pack) return;
-    persist(setPackActive(catalog, pack.id, !pack.active), pack.active ? "Pack deactivated." : "Pack activated.");
+    void persist(
+      setPackActive(catalog, pack.id, !pack.active),
+      pack.active ? "Pack deactivated." : "Pack activated.",
+    );
   }
 
   function onClone() {
     if (!catalog || !pack) return;
     const next = clonePack(catalog, pack.id, `${pack.name} Copy`);
     const created = next.packs.find((p) => !catalog.packs.some((o) => o.id === p.id));
-    persist(next, "Pack cloned.");
+    void persist(next, "Pack cloned.");
     if (created) setPackId(created.id);
   }
 
@@ -153,19 +191,85 @@ export default function ContractPlansSettingsPage() {
       id = `${blank.id}_${n++}`;
     }
     const packToAdd: IndustryPack = { ...blank, id };
-    persist(upsertPack(catalog, packToAdd), "Industry pack added.");
+    void persist(upsertPack(catalog, packToAdd), "Industry pack added.");
     setPackId(id);
     setNewPackName("");
   }
 
-  function onReset() {
-    if (!confirm("Reset all contract plans to seeded defaults? Your edits will be lost.")) return;
-    const seed = resetCatalogToSeed();
-    setCatalog(seed);
-    setPackId("warehouse");
-    setTierId("gold");
-    setBandId("mid");
-    setMessage("Catalog reset to seed defaults.");
+  async function onReset() {
+    if (
+      !confirm(
+        "Reset this company’s contract plans to seeded defaults? Your company edits will be lost.",
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const seed = await resetCompanyCatalogToSeed(supabase, companyId);
+      setCatalog(seed);
+      setPackId("warehouse");
+      setTierId("gold");
+      setBandId("mid");
+      setMessage("Catalog reset to seed defaults for this company.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Reset failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function onAddLevel() {
+    if (!catalog || !pack) return;
+    const name = newLevelName.trim() || "New plan";
+    const next = addLevelToPack(catalog, pack.id, {
+      name,
+      copyFromLevelId: level?.id,
+    });
+    const created = next.packs
+      .find((p) => p.id === pack.id)
+      ?.levels.find((l) => !pack.levels.some((o) => o.id === l.id));
+    void persist(next, "Protection level added.");
+    if (created) setTierId(created.id);
+    setNewLevelName("");
+  }
+
+  function onRemoveLevel() {
+    if (!catalog || !pack || !level) return;
+    if (pack.levels.length <= 1) {
+      setError("Keep at least one protection level.");
+      return;
+    }
+    if (!confirm(`Remove plan level “${level.name}”?`)) return;
+    const next = removeLevelFromPack(catalog, pack.id, level.id);
+    void persist(next, "Protection level removed.");
+  }
+
+  function onAddBand() {
+    if (!catalog || !pack || !level) return;
+    const label = newBandLabel.trim() || "New band";
+    const next = addBandToLevel(catalog, pack.id, level.id, {
+      label,
+      copyFromBandId: band?.id,
+    });
+    const updated = next.packs.find((p) => p.id === pack.id)?.levels.find((l) => l.id === level.id);
+    const created = updated?.bands.find((b) => !level.bands.some((o) => o.id === b.id));
+    void persist(next, "Asset band added.");
+    if (created) setBandId(created.id);
+    setNewBandLabel("");
+  }
+
+  function onRemoveBand() {
+    if (!catalog || !pack || !level || !band) return;
+    if (level.bands.length <= 1) {
+      setError("Keep at least one asset-value band.");
+      return;
+    }
+    if (!confirm(`Remove band “${band.label}”?`)) return;
+    void persist(
+      removeBandFromLevel(catalog, pack.id, level.id, band.id),
+      "Asset band removed.",
+    );
   }
 
   if (!catalog) {
@@ -176,16 +280,26 @@ export default function ContractPlansSettingsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Contract Plans"
-        description="Industry packs × Gold/Silver/Bronze × asset-value thresholds (stored in this browser)"
+        description="Customize industry packs, protection levels, and asset bands for your company. Changes sync for all users in your company."
         actions={
           <div className="flex flex-wrap gap-2">
             <Link href="/settings" className="btn btn-ghost btn-sm gap-1">
               <ArrowLeft className="h-4 w-4" /> Settings
             </Link>
-            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={reload}>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              onClick={() => void reload()}
+              disabled={saving}
+            >
               <RefreshCw className="h-4 w-4" /> Reload
             </button>
-            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={onReset}>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              onClick={() => void onReset()}
+              disabled={saving}
+            >
               <RotateCcw className="h-4 w-4" /> Reset seed
             </button>
           </div>
@@ -200,13 +314,21 @@ export default function ContractPlansSettingsPage() {
           </button>
         </div>
       ) : null}
+      {error ? (
+        <div className="alert alert-error text-sm">
+          <span>{error}</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setError(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       <div className="alert alert-info text-sm">
         <ClipboardList className="h-4 w-4" />
         <span>
-          Plans are saved in local browser storage. Applying a preset on Contracts copies price and
-          thresholds onto that contract; later catalog edits do not change live deals unless you
-          re-apply.
+          Plans are stored for your company in the database (not just this browser). Add or rename
+          protection levels and asset bands as needed. Applying a preset on Contracts still snapshots
+          onto that deal — later catalog edits do not change live contracts unless you re-apply.
         </span>
       </div>
 
@@ -268,7 +390,7 @@ export default function ContractPlansSettingsPage() {
                       className="input input-bordered w-full min-w-[16rem]"
                       value={pack.description}
                       onChange={(e) =>
-                        persist(
+                        void persist(
                           upsertPack(catalog, { ...pack, description: e.target.value }),
                           "Description saved.",
                         )
@@ -285,30 +407,108 @@ export default function ContractPlansSettingsPage() {
                   </div>
                 </div>
 
-                <label className="form-control w-full max-w-xs">
-                  <span className="label-text text-sm">Coverage level</span>
-                  <select
-                    className="select select-bordered"
-                    value={tierId}
-                    onChange={(e) => setTierId(e.target.value as ServiceLevelId)}
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="form-control w-full max-w-xs">
+                    <span className="label-text text-sm">Protection level</span>
+                    <select
+                      className="select select-bordered"
+                      value={level?.id ?? ""}
+                      onChange={(e) => setTierId(e.target.value)}
+                    >
+                      {pack.levels.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                          {t.recommended ? " ★" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <input
+                    className="input input-bordered input-sm w-40"
+                    placeholder="New level name"
+                    value={newLevelName}
+                    onChange={(e) => setNewLevelName(e.target.value)}
+                  />
+                  <button type="button" className="btn btn-outline btn-sm gap-1" onClick={onAddLevel}>
+                    <Plus className="h-3.5 w-3.5" /> Add level
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm text-error gap-1"
+                    onClick={onRemoveLevel}
                   >
-                    {TIERS.map((t) => (
-                      <option key={t} value={t}>
-                        {t.charAt(0).toUpperCase() + t.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    <Trash2 className="h-3.5 w-3.5" /> Remove level
+                  </button>
+                </div>
 
                 {level ? (
                   <>
-                    <p className="text-sm opacity-70">{level.tagline}</p>
-                    <ul className="space-y-0.5 text-xs opacity-80">
-                      {level.coverages.slice(0, 6).map((line) => (
-                        <li key={line}>• {line}</li>
-                      ))}
-                    </ul>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FormRow label="Level display name">
+                        <input
+                          className="input input-bordered w-full"
+                          value={level.name}
+                          onChange={(e) =>
+                            void persist(
+                              updateLevelMeta(catalog, pack.id, level.id, {
+                                name: e.target.value,
+                              }),
+                              "Level renamed.",
+                            )
+                          }
+                        />
+                      </FormRow>
+                      <FormRow label="Tagline">
+                        <input
+                          className="input input-bordered w-full"
+                          value={level.tagline}
+                          onChange={(e) =>
+                            void persist(
+                              updateLevelMeta(catalog, pack.id, level.id, {
+                                tagline: e.target.value,
+                              }),
+                              "Tagline saved.",
+                            )
+                          }
+                        />
+                      </FormRow>
+                    </div>
+                    <label className="label cursor-pointer justify-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-sm"
+                        checked={Boolean(level.recommended)}
+                        onChange={(e) =>
+                          void persist(
+                            updateLevelMeta(catalog, pack.id, level.id, {
+                              recommended: e.target.checked,
+                            }),
+                            "Recommended flag updated.",
+                          )
+                        }
+                      />
+                      <span className="label-text text-sm">Mark as recommended</span>
+                    </label>
+                    <FormRow label="Coverage bullets (one per line)">
+                      <textarea
+                        className="textarea textarea-bordered w-full text-sm"
+                        rows={5}
+                        value={level.coverages.join("\n")}
+                        onChange={(e) =>
+                          void persist(
+                            updateLevelMeta(catalog, pack.id, level.id, {
+                              coverages: e.target.value
+                                .split("\n")
+                                .map((s) => s.trim())
+                                .filter(Boolean),
+                            }),
+                            "Coverages saved.",
+                          )
+                        }
+                      />
+                    </FormRow>
+
+                    <div className="flex flex-wrap items-center gap-2">
                       {level.bands.map((b) => (
                         <button
                           key={b.id}
@@ -318,23 +518,33 @@ export default function ContractPlansSettingsPage() {
                         >
                           {b.label}{" "}
                           <span className="opacity-70 font-normal">({formatBandRange(b)})</span>
-                          {b.thresholds.extras.max_units_covered != null ? (
-                            <span className="opacity-70 font-normal">
-                              {" "}
-                              · {String(b.thresholds.extras.max_units_covered)} units
-                            </span>
-                          ) : null}
                         </button>
                       ))}
+                      <input
+                        className="input input-bordered input-sm w-36"
+                        placeholder="New band"
+                        value={newBandLabel}
+                        onChange={(e) => setNewBandLabel(e.target.value)}
+                      />
+                      <button type="button" className="btn btn-outline btn-sm gap-1" onClick={onAddBand}>
+                        <Plus className="h-3.5 w-3.5" /> Add band
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm text-error gap-1"
+                        onClick={onRemoveBand}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> Remove band
+                      </button>
                     </div>
                   </>
                 ) : null}
 
-                {band ? (
+                {band && level ? (
                   <BandEditor
                     band={band}
                     packId={packId}
-                    tierId={tierId}
+                    tierId={level.id}
                     onBounds={patchBand}
                     onThresholds={patchThresholds}
                   />
@@ -380,21 +590,12 @@ function BandEditor({
   return (
     <div className="space-y-4 rounded-box border border-base-300 bg-base-200/30 p-4">
       <p className="font-semibold">
-        {band.label} band · {formatMoney(t.monthly_premium_at_125_fee ?? Math.round(t.annual_price / 12))}/mo @ $125 visit
-        {t.extras.max_units_covered != null ? (
-          <span className="font-normal opacity-70">
-            {" "}
-            · up to {String(t.extras.max_units_covered)} pieces of equipment
-          </span>
-        ) : null}
+        {band.label} band ·{" "}
+        {formatMoney(t.monthly_premium_at_125_fee ?? Math.round(t.annual_price / 12))}/mo @ $125 visit
       </p>
       <p className="text-sm opacity-80">
-        Coverage caps (derived): {formatMoney(displayPerEq)}/equipment · {formatMoney(displayAgg)}/yr aggregate
-      </p>
-      <p className="text-xs opacity-60">
-        Override <code className="text-xs">aggregate_coverage_cap</code> or{" "}
-        <code className="text-xs">per_equipment_cap</code> in extras below to replace profile defaults.
-        Edit <code className="text-xs">max_units_covered</code> to change the unit cap for this band.
+        Coverage caps (derived): {formatMoney(displayPerEq)}/equipment · {formatMoney(displayAgg)}/yr
+        aggregate
       </p>
       <div className="grid gap-3 sm:grid-cols-3">
         <FormRow label="Band label">
