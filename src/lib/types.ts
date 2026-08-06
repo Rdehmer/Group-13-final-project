@@ -221,7 +221,10 @@ export type Part = {
   unit_cost: number;
   standard_customer_price: number;
   warranty_eligible: boolean;
+  /** Denormalized supplier name (synced from vendors.name when vendor_id is set). */
   supplier: string | null;
+  /** Optional link to parts AP supplier (public.vendors). */
+  vendor_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
