@@ -33,7 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/work-orders",
-    label: "Jobs",
+    label: "Work Orders",
     roles: ["administrator", "service_manager", "billing"],
   },
   {

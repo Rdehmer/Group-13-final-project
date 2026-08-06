@@ -26,6 +26,10 @@ import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/b
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
+import {
+  WO_STATUSES,
+  scheduleFieldsForStatusChange,
+} from "@/lib/work-order-status";
 import type {
   AdditionalWorkRequest,
   EmergencyPurchase,
@@ -36,6 +40,8 @@ import type {
   WorkOrder,
   WorkOrderPart,
 } from "@/lib/types";
+
+const PRIORITIES: WorkOrder["priority"][] = ["Low", "Normal", "High", "Critical"];
 
 type JobDetail = WorkOrder & {
   customers?: {
@@ -177,7 +183,8 @@ export default function JobDetailPage() {
     load();
   }, [id]);
 
-  const isManager = profile?.role === "administrator" || profile?.role === "service_manager";
+  const isServiceManager = profile?.role === "service_manager";
+  const isManager = profile?.role === "administrator" || isServiceManager;
   const isBillingRole = profile?.role === "billing";
   const isBilling = isBillingRole || profile?.role === "administrator";
   const isTech =
@@ -263,7 +270,24 @@ export default function JobDetailPage() {
   }
 
   async function setStatus(status: string, extra: Record<string, unknown> = {}) {
-    await patchJob({ status, ...extra }, "status_change", status);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const scheduleExtra = isServiceManager
+      ? scheduleFieldsForStatusChange(
+          status,
+          {
+            scheduled_date: wo?.scheduled_date,
+            scheduled_start_time: wo?.scheduled_start_time,
+          },
+          todayIso,
+        )
+      : {};
+    await patchJob({ status, ...scheduleExtra, ...extra }, "status_change", status);
+  }
+
+  async function updatePriorityQuick(next: WorkOrder["priority"]) {
+    if (!isServiceManager || !wo || wo.priority === next) return;
+    setPriority(next);
+    await patchJob({ priority: next }, "priority_change", next);
   }
 
   async function approveComplete() {
@@ -726,7 +750,7 @@ export default function JobDetailPage() {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => router.push("/work-orders")}>
-          <ArrowLeft className="h-4 w-4" /> Jobs board
+          <ArrowLeft className="h-4 w-4" /> Work Orders
         </button>
         <div className="flex flex-wrap gap-2">
           <Link href={`/customers/${wo.customer_id}`} className="btn btn-outline btn-sm gap-1">
@@ -771,8 +795,66 @@ export default function JobDetailPage() {
               · {wo.work_order_type}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
-              <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+              {isServiceManager ? (
+                <div className="dropdown dropdown-hover">
+                  <div
+                    tabIndex={0}
+                    role="button"
+                    className="cursor-pointer rounded-btn outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    aria-label={`Change priority, currently ${wo.priority}`}
+                  >
+                    <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
+                  </div>
+                  <ul
+                    tabIndex={0}
+                    className="dropdown-content menu z-20 w-36 rounded-box border border-base-300 bg-base-100 p-2 shadow"
+                  >
+                    {PRIORITIES.map((option) => (
+                      <li key={option}>
+                        <button
+                          type="button"
+                          className={option === wo.priority ? "active" : ""}
+                          onClick={() => updatePriorityQuick(option)}
+                        >
+                          <StatusBadge label={option} tone={statusTone(option)} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
+              )}
+              {isServiceManager ? (
+                <div className="dropdown dropdown-hover">
+                  <div
+                    tabIndex={0}
+                    role="button"
+                    className="cursor-pointer rounded-btn outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    aria-label={`Change status, currently ${wo.status}`}
+                  >
+                    <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+                  </div>
+                  <ul
+                    tabIndex={0}
+                    className="dropdown-content menu z-20 w-48 rounded-box border border-base-300 bg-base-100 p-2 shadow"
+                  >
+                    {WO_STATUSES.map((option) => (
+                      <li key={option}>
+                        <button
+                          type="button"
+                          className={option === wo.status ? "active" : ""}
+                          onClick={() => setStatus(option)}
+                        >
+                          <StatusBadge label={option} tone={statusTone(option)} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+              )}
               <StatusBadge label={wo.billing_status} tone={statusTone(wo.billing_status)} />
               <StatusBadge label={wo.warranty_coverage} tone={statusTone(wo.warranty_coverage)} />
             </div>

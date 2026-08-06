@@ -216,7 +216,8 @@ export default function TechnicianPage() {
 
   const isServiceManager = profile?.role === "service_manager";
   const isManager = profile?.role === "administrator" || isServiceManager;
-  const rowHeight = densityRowHeight(density);
+  // Managers always use comfortable density (no compact control).
+  const rowHeight = densityRowHeight(isServiceManager ? "comfortable" : density);
 
   useEffect(() => {
     const prefs = loadPrefs();
@@ -229,8 +230,14 @@ export default function TechnicianPage() {
 
   useEffect(() => {
     if (!prefsHydrated) return;
-    savePrefs({ categoryFilter, listExpanded, density, techView });
-  }, [categoryFilter, listExpanded, density, techView, prefsHydrated]);
+    // Persist comfortable for managers so compact never sticks for this role.
+    savePrefs({
+      categoryFilter,
+      listExpanded,
+      density: isServiceManager ? "comfortable" : density,
+      techView,
+    });
+  }, [categoryFilter, listExpanded, density, techView, prefsHydrated, isServiceManager]);
 
   const loadProfile = useCallback(async () => {
     const {
@@ -1262,26 +1269,28 @@ export default function TechnicianPage() {
             ) : null}
           </div>
 
-          {/* Density */}
-          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Calendar density">
-            <span className="text-xs font-semibold opacity-60">Density:</span>
-            <button
-              type="button"
-              className={`btn btn-xs ${density === "compact" ? "btn-neutral" : "btn-ghost"}`}
-              onClick={() => setDensity("compact")}
-              aria-pressed={density === "compact"}
-            >
-              Compact
-            </button>
-            <button
-              type="button"
-              className={`btn btn-xs ${density === "comfortable" ? "btn-neutral" : "btn-ghost"}`}
-              onClick={() => setDensity("comfortable")}
-              aria-pressed={density === "comfortable"}
-            >
-              Comfortable
-            </button>
-          </div>
+          {/* Density — technicians only; managers stay on comfortable */}
+          {!isServiceManager ? (
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Calendar density">
+              <span className="text-xs font-semibold opacity-60">Density:</span>
+              <button
+                type="button"
+                className={`btn btn-xs ${density === "compact" ? "btn-neutral" : "btn-ghost"}`}
+                onClick={() => setDensity("compact")}
+                aria-pressed={density === "compact"}
+              >
+                Compact
+              </button>
+              <button
+                type="button"
+                className={`btn btn-xs ${density === "comfortable" ? "btn-neutral" : "btn-ghost"}`}
+                onClick={() => setDensity("comfortable")}
+                aria-pressed={density === "comfortable"}
+              >
+                Comfortable
+              </button>
+            </div>
+          ) : null}
 
           {/* Category filters */}
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by schedule status">
@@ -1424,9 +1433,23 @@ export default function TechnicianPage() {
                 <ul className="mt-2 space-y-2">
                   {unscheduledOrders.slice(0, 8).map((wo) => (
                     <li key={wo.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                      <button type="button" className="link link-hover link-primary" onClick={() => selectWorkOrder(wo.id)}>
-                        {wo.work_order_number}
-                      </button>
+                      {isServiceManager ? (
+                        <Link
+                          href={`/work-orders/${wo.id}`}
+                          className="link link-hover link-primary font-medium"
+                          onClick={() => selectWorkOrder(wo.id)}
+                        >
+                          {wo.work_order_number}
+                        </Link>
+                      ) : (
+                        <button
+                          type="button"
+                          className="link link-hover link-primary"
+                          onClick={() => selectWorkOrder(wo.id)}
+                        >
+                          {wo.work_order_number}
+                        </button>
+                      )}
                       <span className="opacity-70">{customerName(wo)}</span>
                       <button
                         type="button"
@@ -1488,13 +1511,23 @@ export default function TechnicianPage() {
                           >
                             <div className="flex flex-wrap items-start justify-between gap-2">
                               <div>
-                                <button
-                                  type="button"
-                                  className="link link-hover link-primary font-semibold"
-                                  onClick={() => selectWorkOrder(wo.id)}
-                                >
-                                  {wo.work_order_number}
-                                </button>
+                                {isServiceManager ? (
+                                  <Link
+                                    href={`/work-orders/${wo.id}`}
+                                    className="link link-hover link-primary font-semibold"
+                                    onClick={() => selectWorkOrder(wo.id)}
+                                  >
+                                    {wo.work_order_number}
+                                  </Link>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="link link-hover link-primary font-semibold"
+                                    onClick={() => selectWorkOrder(wo.id)}
+                                  >
+                                    {wo.work_order_number}
+                                  </button>
+                                )}
                                 <p className="text-sm opacity-70">
                                   Scheduled {wo.scheduled_date?.slice(0, 10)} · {days} day
                                   {days === 1 ? "" : "s"} past · {customerName(wo)}
@@ -1865,13 +1898,23 @@ export default function TechnicianPage() {
                       className={`rounded-box border border-base-300 p-3 ${active ? `ring-2 ${style.ring}` : ""}`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
-                        <button
-                          type="button"
-                          className="link link-hover link-primary font-semibold"
-                          onClick={() => selectWorkOrder(wo.id)}
-                        >
-                          {wo.work_order_number}
-                        </button>
+                        {isServiceManager ? (
+                          <Link
+                            href={`/work-orders/${wo.id}`}
+                            className="link link-hover link-primary font-semibold"
+                            onClick={() => selectWorkOrder(wo.id)}
+                          >
+                            {wo.work_order_number}
+                          </Link>
+                        ) : (
+                          <button
+                            type="button"
+                            className="link link-hover link-primary font-semibold"
+                            onClick={() => selectWorkOrder(wo.id)}
+                          >
+                            {wo.work_order_number}
+                          </button>
+                        )}
                         <div className="flex items-center gap-1">
                           {wo.hasConflict ? (
                             <span className="badge badge-error badge-xs gap-0.5">
@@ -1954,7 +1997,18 @@ export default function TechnicianPage() {
               <div className="card-body">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <h2 className="text-lg font-bold">{selected.work_order_number}</h2>
+                    <h2 className="text-lg font-bold">
+                      {isServiceManager ? (
+                        <Link
+                          href={`/work-orders/${selected.id}`}
+                          className="link link-hover link-primary"
+                        >
+                          {selected.work_order_number}
+                        </Link>
+                      ) : (
+                        selected.work_order_number
+                      )}
+                    </h2>
                     <p className="text-sm opacity-70">
                       <Link
                         href={
