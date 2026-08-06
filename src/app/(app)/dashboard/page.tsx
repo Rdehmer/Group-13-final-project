@@ -288,6 +288,12 @@ export default async function DashboardPage() {
           href: "/work-orders?filter=urgent",
           danger: (criticalCount ?? 0) > 0,
         },
+        {
+          label: "Timesheet exceptions review",
+          value: 1,
+          href: "/timesheets",
+          danger: true,
+        },
       ].filter((t) => t.value > 0)
     : [];
 

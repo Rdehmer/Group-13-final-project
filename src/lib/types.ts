@@ -666,11 +666,22 @@ export type TimeBillableStatus = "billable" | "nonbillable" | "contract_included
 
 export type TimeApprovalStatus =
   | "active"
+  | "missing_clock_out"
+  | "pending_correction"
   | "complete"
   | "pending_approval"
+  | "submitted"
   | "approved"
   | "rejected"
   | "locked";
+
+export type TimeBillingControlStatus =
+  | "not_ready"
+  | "ready_to_bill"
+  | "included_on_draft"
+  | "billed"
+  | "nonbillable"
+  | "disputed";
 
 /** Canonical timesheet row stored in Supabase `time_entries`. */
 export type TimeEntry = {
@@ -697,9 +708,43 @@ export type TimeEntry = {
   manual_entry_reason: string | null;
   is_manual: boolean;
   approval_status: TimeApprovalStatus;
+  submitted_at?: string | null;
+  submitted_by?: string | null;
   approved_by: string | null;
   approved_at: string | null;
+  rejected_at?: string | null;
+  rejected_by?: string | null;
   rejection_reason: string | null;
+  reopened_at?: string | null;
+  reopened_by?: string | null;
+  reopen_reason?: string | null;
+  correction_reason?: string | null;
+  edit_reason?: string | null;
+  original_clock_in_at?: string | null;
+  original_clock_out_at?: string | null;
+  original_regular_hours?: number | null;
+  original_overtime_hours?: number | null;
+  original_activity_type?: string | null;
+  original_notes?: string | null;
+  original_values?: Record<string, unknown> | null;
+  revised_values?: Record<string, unknown> | null;
+  requires_manager_assignment_override?: boolean;
+  unassigned_work_order?: boolean;
+  exception_flags?: string[] | null;
+  exception_severity?: "critical" | "warning" | "review" | "resolved" | null;
+  duration_flag_12h?: boolean;
+  duration_flag_16h?: boolean;
+  is_duplicate_suspect?: boolean;
+  billing_status?: TimeBillingControlStatus;
+  invoice_id?: string | null;
+  billed_at?: string | null;
+  billed_by?: string | null;
+  is_void?: boolean;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+  weekly_timesheet_id?: string | null;
+  cert_week_start?: string | null;
   created_by: string | null;
   updated_by: string | null;
   locked_at: string | null;
@@ -715,6 +760,7 @@ export type TimeEntry = {
     work_order_number: string | null;
     work_order_type?: string | null;
     problem_description?: string | null;
+    status?: string | null;
     customers?: {
       id: string;
       name: string;
@@ -725,6 +771,44 @@ export type TimeEntry = {
     equipment?: { id: string; name: string | null; serial_number?: string | null } | null;
   } | null;
   customers?: { id: string; name: string } | null;
+};
+
+export type WeeklyTimesheet = {
+  id: string;
+  technician_id: string;
+  week_start: string;
+  week_end: string;
+  status: "open" | "submitted" | "manager_approved" | "locked" | "returned";
+  certification_text: string | null;
+  certified_at: string | null;
+  certified_name: string | null;
+  submitted_at: string | null;
+  submitted_by: string | null;
+  manager_id: string | null;
+  manager_approved_at: string | null;
+  locked_at: string | null;
+  locked_by: string | null;
+  return_reason: string | null;
+  returned_at: string | null;
+  returned_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TimeEntryAudit = {
+  id: string;
+  time_entry_id: string | null;
+  action: string;
+  actor_id: string | null;
+  actor_role?: string | null;
+  work_order_id?: string | null;
+  detail?: string | null;
+  reason?: string | null;
+  original_values?: Record<string, unknown> | null;
+  revised_values?: Record<string, unknown> | null;
+  status_before?: string | null;
+  status_after?: string | null;
+  created_at: string;
 };
 
 /** Weekly preferred availability window (0=Sun … 6=Sat). */

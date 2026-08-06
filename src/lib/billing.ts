@@ -303,13 +303,27 @@ export type InvoicePreview = {
 };
 
 export function sumLaborCharges(labor: TechnicianLabor[]): number {
-  return labor.reduce(
+  return laborEligibleForInvoice(labor).reduce(
     (s, l) =>
       s +
       Number(l.regular_hours) * Number(l.customer_billing_rate) +
       Number(l.overtime_hours) * Number(l.customer_billing_rate) * 1.5,
     0,
   );
+}
+
+/** Only unbilled, billable labor may become invoice lines (no silent re-bill). */
+export function laborEligibleForInvoice(labor: TechnicianLabor[]): TechnicianLabor[] {
+  return labor.filter((l) => {
+    if (l.invoiced) return false;
+    const bs = String(l.billable_status ?? "").toLowerCase();
+    if (bs.includes("non") || bs.includes("non-billable") || bs === "nonbillable") return false;
+    if (bs.includes("contract")) return false;
+    // When control flag present, require manager clearance
+    const gated = (l as TechnicianLabor & { approval_gated?: boolean }).approval_gated;
+    if (gated === true) return false;
+    return true;
+  });
 }
 
 export function sumPartsCharges(parts: WorkOrderPart[]): number {
@@ -330,6 +344,7 @@ export function buildWorkOrderPreview(
     discounts?: number;
   },
 ): InvoicePreview {
+  const billableLabor = laborEligibleForInvoice(labor);
   const laborCharges = sumLaborCharges(labor);
   const partsCharges = sumPartsCharges(parts);
   const warrantyDeductions = sumWarrantyCovered(parts);
@@ -347,7 +362,7 @@ export function buildWorkOrderPreview(
   const tax = subtotal * taxRate;
   const total = invoiceTotal(subtotal, tax);
 
-  const laborLines: BillableLine[] = labor.map((l) => {
+  const laborLines: BillableLine[] = billableLabor.map((l) => {
     const reg = Number(l.regular_hours);
     const ot = Number(l.overtime_hours);
     const rate = Number(l.customer_billing_rate);
