@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { allocateAcrossInvoices, type AllocatableInvoice } from "@/lib/payments";
 import {
+  createDemoPaymentIntent,
   encodeAllocations,
   getStripe,
   getStripePublishableKey,
   isStripeConfigured,
+  isStripeDemoMode,
 } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -23,7 +25,7 @@ type Body = {
  */
 export async function POST(req: Request) {
   try {
-    if (!isStripeConfigured()) {
+    if (!isStripeConfigured() && !isStripeDemoMode()) {
       return NextResponse.json(
         {
           error:
@@ -111,10 +113,36 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Nothing to charge." }, { status: 400 });
     }
 
+    const allocationRows = allocations.map((a) => ({
+      invoiceId: a.invoiceId,
+      amount: a.amount,
+    }));
+
+    if (isStripeDemoMode()) {
+      const demo = createDemoPaymentIntent({
+        customerId: profile.customer_id,
+        userId: user.id,
+        amount: total,
+        allocations: allocationRows,
+        memo: (body.memo ?? "").slice(0, 200) || null,
+      });
+
+      return NextResponse.json({
+        demo: true,
+        clientSecret: `${demo.id}_secret_demo`,
+        paymentIntentId: demo.id,
+        amount: total,
+        publishableKey: "pk_demo_local",
+        allocations: allocations.map((a) => ({
+          invoiceId: a.invoiceId,
+          invoiceNumber: a.invoiceNumber,
+          amount: a.amount,
+        })),
+      });
+    }
+
     const stripe = getStripe();
-    const allocationMeta = encodeAllocations(
-      allocations.map((a) => ({ invoiceId: a.invoiceId, amount: a.amount })),
-    );
+    const allocationMeta = encodeAllocations(allocationRows);
 
     if (allocationMeta.length > 490) {
       return NextResponse.json(
@@ -148,6 +176,7 @@ export async function POST(req: Request) {
     );
 
     return NextResponse.json({
+      demo: false,
       clientSecret: intent.client_secret,
       paymentIntentId: intent.id,
       amount: total,
