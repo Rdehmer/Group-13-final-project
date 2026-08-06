@@ -113,6 +113,10 @@ export type ServiceContract = {
   renewal_option: string | null;
   billing_method: string;
   contract_price: number;
+  /** Monthly recurring fee (typically annual / 12 for MRC). */
+  monthly_amount: number;
+  /** Customer deductible before covered work. */
+  deductible: number;
   payment_terms: string | null;
   included_service_visits: number;
   service_frequency: string | null;

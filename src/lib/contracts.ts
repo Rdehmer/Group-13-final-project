@@ -9,7 +9,7 @@ import {
   resolvePlan,
   buildPricingExtrasLine,
 } from "@/lib/contract-plans";
-import type { ServiceFeeOption } from "@/lib/contract-pricing";
+import { premiumForFeeOption, type ServiceFeeOption } from "@/lib/contract-pricing";
 
 export const CONTRACT_TYPES = [
   "Preventive Maintenance",
@@ -294,6 +294,8 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
       : 100_000;
 
   let notes = form.notes || null;
+  let monthlyAmount = 0;
+  let deductible = 0;
   if (packId && tierId) {
     const resolved = resolvePlan(packId, tierId, assetValue);
     if (resolved) {
@@ -305,6 +307,12 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
       });
       const extrasLine = buildPricingExtrasLine(resolved.thresholds, serviceFeeOption, packId);
       notes = mergePlanSnapshotIntoNotes(notes, `${tag}\n${extrasLine}`);
+      if (/monthly\s*recurring/i.test(resolved.thresholds.billing_method)) {
+        monthlyAmount = premiumForFeeOption(resolved.thresholds, serviceFeeOption);
+      }
+      const d = resolved.thresholds.extras.deductible;
+      const dn = typeof d === "number" ? d : Number(d);
+      deductible = Number.isFinite(dn) && dn >= 0 ? dn : 0;
     }
   }
 
@@ -322,6 +330,8 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
     renewal_option: form.renewal_option || null,
     billing_method: form.billing_method,
     contract_price: 0,
+    monthly_amount: monthlyAmount,
+    deductible,
     payment_terms: form.payment_terms || null,
     included_service_visits: Number(form.included_service_visits) || 0,
     service_frequency: form.service_frequency || null,

@@ -19,8 +19,14 @@ import {
   tierBadgeClass,
   type CustomerContract,
 } from "@/lib/contracts";
-import type { Profile } from "@/lib/types";
+import type { Invoice, Profile } from "@/lib/types";
 import { ContractCoveragePanel } from "../ContractCoveragePanel";
+import {
+  formatStandingDetail,
+  getContractPaymentStanding,
+  resolvedDeductible,
+  standingBadgeClass,
+} from "@/lib/contract-billing";
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -92,6 +98,7 @@ export default function CustomerContractDetailPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [contract, setContract] = useState<CustomerContract | null>(null);
+  const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -122,6 +129,13 @@ export default function CustomerContractDetailPage() {
         return;
       }
       setContract(parseCustomerContracts([sc])[0] ?? null);
+      const { data: inv } = await supabase
+        .from("invoices")
+        .select("*")
+        .eq("contract_id", params.id)
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0);
+      setStandingInvoices((inv as Invoice[]) ?? []);
       setLoading(false);
     })();
   }, [params.id, supabase]);
@@ -152,6 +166,8 @@ export default function CustomerContractDetailPage() {
   const renewal = formatRenewalNote(contract.renewal_option);
   const typeHelp = CONTRACT_TYPE_HELP[contract.contract_type];
   const isActive = contract.status.toLowerCase() === "active" || contract.status.toLowerCase() === "renewed";
+  const standing = getContractPaymentStanding(contract, standingInvoices);
+  const deductible = resolvedDeductible(contract);
 
   return (
     <div className="space-y-6">
@@ -186,6 +202,11 @@ export default function CustomerContractDetailPage() {
             </span>
           ) : null}
           <StatusBadge label={contract.status} tone={statusTone(contract.status)} />
+          {standing.id !== "not_monthly" ? (
+            <span className={`badge badge-sm ${standingBadgeClass(standing.id)}`}>
+              {standing.label}
+            </span>
+          ) : null}
           {isExpiringSoon(contract.end_date) && contract.status.toLowerCase() === "active" ? (
             <span className="badge badge-sm badge-warning">Expiring soon</span>
           ) : null}
@@ -228,6 +249,27 @@ export default function CustomerContractDetailPage() {
           </ul>
         )}
       </SectionCard>
+
+      {standing.id !== "not_monthly" ? (
+        <SectionCard title="Payment status">
+          <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`badge badge-sm ${standingBadgeClass(standing.id)}`}>
+                {standing.label}
+              </span>
+              <span className="opacity-70">{formatStandingDetail(standing)}</span>
+            </div>
+            {deductible > 0 ? (
+              <p className="mt-2 text-sm opacity-70">Deductible: {formatMoney(deductible)}</p>
+            ) : null}
+            {standing.id === "payment_due" || standing.id === "past_due" ? (
+              <Link href="/customer/pay" className="btn btn-primary btn-sm mt-3">
+                Pay now
+              </Link>
+            ) : null}
+          </div>
+        </SectionCard>
+      ) : null}
 
       {(contract.warranty_terms ||
         contract.cancellation_terms ||

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -395,10 +395,10 @@ export default function PartsPage() {
       >
         <option value="">All</option>
         <option value="__sort_asc">
-          Sort Aâ€“Z{sortingThis && sort.direction === "asc" ? " âœ“" : ""}
+          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
         </option>
         <option value="__sort_desc">
-          Sort Zâ€“A{sortingThis && sort.direction === "desc" ? " âœ“" : ""}
+          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
         </option>
         {options.map((opt) => (
           <option key={opt} value={opt}>
@@ -622,7 +622,7 @@ export default function PartsPage() {
       action: "bulk_reorder_level",
       recordType: "part",
       recordId: ids[0],
-      newValue: `${ids.length} parts â†’ reorder ${value}`,
+      newValue: `${ids.length} parts → reorder ${value}`,
     });
     setBulkSelected(new Set());
     setBulkReorderValue("");
@@ -744,10 +744,10 @@ export default function PartsPage() {
       action: "purchase_order_fulfilled",
       recordType: "purchase_order",
       recordId: row.id,
-      newValue: `${row.parts?.part_number ?? partId} Ã— ${qty}`,
+      newValue: `${row.parts?.part_number ?? partId} × ${qty}`,
     });
     await loadManagerPos();
-    setSuccess("Purchase order fulfilled â€” warehouse stock reduced.");
+    setSuccess("Purchase order fulfilled — warehouse stock reduced.");
     setPoBusyId(null);
   }
 
@@ -784,7 +784,7 @@ export default function PartsPage() {
   ];
 
   if (loading) {
-    return <div className="p-8 text-center opacity-60">Loading inventoryâ€¦</div>;
+    return <div className="p-8 text-center opacity-60">Loading inventory…</div>;
   }
 
   if (!profile) {
@@ -862,7 +862,7 @@ export default function PartsPage() {
           aria-pressed={lowStockOnly}
         >
           <span>
-            {lowStockCount} part(s) at or below reorder level â€” click to{" "}
+            {lowStockCount} part(s) at or below reorder level — click to{" "}
             {lowStockOnly ? "clear" : "filter"}
           </span>
         </button>
@@ -887,14 +887,14 @@ export default function PartsPage() {
                 >
                   <div>
                     <p className="font-semibold">
-                      {row.parts?.part_number ?? "Part"} â€” {row.parts?.name ?? "Catalog item"}
+                      {row.parts?.part_number ?? "Part"} — {row.parts?.name ?? "Catalog item"}
                     </p>
                     <p className="text-sm opacity-70">
-                      Qty {row.quantity_requested} Â· {techLabel(row.technician)}
-                      {row.note ? ` Â· ${row.note}` : ""}
+                      Qty {row.quantity_requested} · {techLabel(row.technician)}
+                      {row.note ? ` · ${row.note}` : ""}
                     </p>
                     <p className="text-xs opacity-60">
-                      Warehouse on hand: {row.parts?.quantity_on_hand ?? "â€”"}
+                      Warehouse on hand: {row.parts?.quantity_on_hand ?? "—"}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -918,7 +918,7 @@ export default function PartsPage() {
                       disabled={poBusyId === row.id}
                       onClick={() => void fulfillPo(row)}
                     >
-                      {poBusyId === row.id ? "Workingâ€¦" : "Fulfill"}
+                      {poBusyId === row.id ? "Working…" : "Fulfill"}
                     </button>
                     {row.parts?.id ? (
                       <Link href={`/parts/${row.parts.id}`} className="btn btn-ghost btn-xs">
@@ -1029,7 +1029,7 @@ export default function PartsPage() {
               className="input input-bordered input-sm w-full"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Part #, name, category, supplierâ€¦"
+              placeholder="Part #, name, category, supplier…"
               aria-label="Search parts"
             />
           </label>
@@ -1141,7 +1141,7 @@ export default function PartsPage() {
                               {header.label}
                               {sort.key === header.key ? (
                                 <span aria-hidden="true">
-                                  {sort.direction === "asc" ? "â–²" : "â–¼"}
+                                  {sort.direction === "asc" ? "▲" : "▼"}
                                 </span>
                               ) : null}
                             </button>
@@ -1300,8 +1300,8 @@ export default function PartsPage() {
                           </td>
                           {isManager ? (
                             <>
-                              <td className="align-top">{p.category ?? "â€”"}</td>
-                              <td className="align-top">{p.supplier ?? "â€”"}</td>
+                              <td className="align-top">{p.category ?? "—"}</td>
+                              <td className="align-top">{p.supplier ?? "—"}</td>
                             </>
                           ) : null}
                           <td className="align-top">

@@ -17,6 +17,16 @@ import {
   resolvePackIdFromSnapshot,
   sumEquipmentAssetValue,
 } from "@/lib/contract-plans";
+import {
+  formatStandingDetail,
+  getContractPaymentStanding,
+  monthlyFromAnnual,
+  resolveMoneyFromContractNotes,
+  resolvedDeductible,
+  resolvedMonthlyAmount,
+  standingBadgeClass,
+} from "@/lib/contract-billing";
+import type { Invoice } from "@/lib/types";
 
 type ContractDetail = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -38,6 +48,7 @@ export default function ContractDetailPage() {
   const [contract, setContract] = useState<ContractDetail | null>(null);
   const [equipment, setEquipment] = useState<CoveredEquipment[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
@@ -52,6 +63,8 @@ export default function ContractDetailPage() {
     renewal_option: "",
     billing_method: "Monthly Recurring Charge",
     contract_price: "0",
+    monthly_amount: "0",
+    deductible: "0",
     payment_terms: "",
     included_service_visits: "0",
     service_frequency: "",
@@ -71,7 +84,8 @@ export default function ContractDetailPage() {
 
   async function load() {
     setLoading(true);
-    const [{ data }, { data: cust }, { data: { user } }, { data: links }] = await Promise.all([
+    const [{ data }, { data: cust }, { data: { user } }, { data: links }, { data: inv }] =
+      await Promise.all([
       supabase.from("service_contracts").select("*, customers(id, name)").eq("id", id).single(),
       supabase.from("customers").select("*").order("name"),
       supabase.auth.getUser(),
@@ -79,10 +93,17 @@ export default function ContractDetailPage() {
         .from("contract_equipment")
         .select("equipment ( id, name, location, replacement_cost )")
         .eq("contract_id", id),
+      supabase
+        .from("invoices")
+        .select("*")
+        .eq("contract_id", id)
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0),
     ]);
     const sc = data as ContractDetail | null;
     setContract(sc);
     setCustomers((cust as Customer[]) ?? []);
+    setStandingInvoices((inv as Invoice[]) ?? []);
     const covered = ((links as { equipment: CoveredEquipment | CoveredEquipment[] | null }[] | null) ?? [])
       .flatMap((row) => {
         const eq = row.equipment;
@@ -105,6 +126,8 @@ export default function ContractDetailPage() {
         renewal_option: sc.renewal_option ?? "",
         billing_method: sc.billing_method,
         contract_price: String(sc.contract_price ?? 0),
+        monthly_amount: String(sc.monthly_amount ?? resolvedMonthlyAmount(sc)),
+        deductible: String(sc.deductible ?? 0),
         payment_terms: sc.payment_terms ?? "",
         included_service_visits: String(sc.included_service_visits ?? 0),
         service_frequency: sc.service_frequency ?? "",
@@ -134,6 +157,13 @@ export default function ContractDetailPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const annual = Number(form.contract_price) || 0;
+    const monthly =
+      Number(form.monthly_amount) > 0
+        ? Number(form.monthly_amount)
+        : /monthly\s*recurring/i.test(form.billing_method)
+          ? monthlyFromAnnual(annual)
+          : 0;
     const payload = {
       customer_id: form.customer_id,
       name: form.name.trim(),
@@ -142,7 +172,9 @@ export default function ContractDetailPage() {
       end_date: form.end_date,
       renewal_option: form.renewal_option.trim() || null,
       billing_method: form.billing_method,
-      contract_price: Number(form.contract_price),
+      contract_price: annual,
+      monthly_amount: monthly,
+      deductible: Number(form.deductible) || 0,
       payment_terms: form.payment_terms.trim() || null,
       included_service_visits: Number(form.included_service_visits),
       service_frequency: form.service_frequency.trim() || null,
@@ -179,10 +211,30 @@ export default function ContractDetailPage() {
 
   async function approveRequest() {
     if (!isManager || !contract) return;
-    const price = Number(form.contract_price);
+    let price = Number(form.contract_price);
+    let monthly = Number(form.monthly_amount) || 0;
+    let deductible = Number(form.deductible) || 0;
     if (!Number.isFinite(price) || price <= 0) {
-      setError("Enter a contract price greater than $0 before approving.");
+      const fromPlan = resolveMoneyFromContractNotes(form.notes || contract.notes);
+      if (fromPlan && fromPlan.contract_price > 0) {
+        price = fromPlan.contract_price;
+        monthly = fromPlan.monthly_amount;
+        deductible = fromPlan.deductible;
+        setForm((prev) => ({
+          ...prev,
+          contract_price: String(price),
+          monthly_amount: String(monthly),
+          deductible: String(deductible),
+          billing_method: fromPlan.billing_method || prev.billing_method,
+        }));
+      }
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      setError("Enter a contract price greater than $0 before approving (or apply a plan preset).");
       return;
+    }
+    if (monthly <= 0 && /monthly\s*recurring/i.test(form.billing_method)) {
+      monthly = monthlyFromAnnual(price);
     }
     setActionBusy(true);
     setError(null);
@@ -195,6 +247,8 @@ export default function ContractDetailPage() {
       .update({
         status: "Active",
         contract_price: price,
+        monthly_amount: monthly,
+        deductible,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id);
@@ -346,7 +400,14 @@ export default function ContractDetailPage() {
               initialTierId={
                 parsePlanSnapshotFromNotes(form.notes || contract.notes)?.tierId ?? null
               }
-              onApply={(next) => setForm(next)}
+              onApply={(next) =>
+                setForm((prev) => ({
+                  ...prev,
+                  ...next,
+                  monthly_amount: next.monthly_amount ?? prev.monthly_amount,
+                  deductible: next.deductible ?? prev.deductible,
+                }))
+              }
             />
           ) : null}
 
@@ -483,7 +544,14 @@ export default function ContractDetailPage() {
                   step="0.01"
                   className="input input-bordered w-full"
                   value={form.contract_price}
-                  onChange={(e) => setForm({ ...form, contract_price: e.target.value })}
+                  onChange={(e) => {
+                    const price = e.target.value;
+                    const monthly =
+                      /monthly\s*recurring/i.test(form.billing_method) && Number(price) > 0
+                        ? String(monthlyFromAnnual(Number(price)))
+                        : form.monthly_amount;
+                    setForm({ ...form, contract_price: price, monthly_amount: monthly });
+                  }}
                 />
                 {Number(form.contract_price) > 0 ? (
                   <p className="text-xs opacity-60">
@@ -503,11 +571,58 @@ export default function ContractDetailPage() {
             )}
           </FormRow>
 
+          <FormRow label="Monthly fee">
+            {isManager ? (
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="input input-bordered w-full"
+                value={form.monthly_amount}
+                onChange={(e) => setForm({ ...form, monthly_amount: e.target.value })}
+              />
+            ) : (
+              <span>{formatMoney(resolvedMonthlyAmount(contract))}</span>
+            )}
+          </FormRow>
+
+          <FormRow label="Deductible">
+            {isManager ? (
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="input input-bordered w-full"
+                value={form.deductible}
+                onChange={(e) => setForm({ ...form, deductible: e.target.value })}
+              />
+            ) : (
+              <span>{formatMoney(resolvedDeductible(contract))}</span>
+            )}
+          </FormRow>
+
           {contract.contract_price > 0 ? (
             <div className="rounded-box border border-base-300 p-4">
               <ContractPricingSummary variant="contract" contract={contract} compact />
             </div>
           ) : null}
+
+          {(() => {
+            const standing = getContractPaymentStanding(contract, standingInvoices);
+            if (standing.id === "not_monthly") return null;
+            return (
+              <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="opacity-70">Monthly fee status</span>
+                  <span className={`badge badge-sm ${standingBadgeClass(standing.id)}`}>
+                    {standing.label}
+                  </span>
+                </div>
+                <p className="mt-1 opacity-70">{formatStandingDetail(standing)}</p>
+              </div>
+            );
+          })()}
+
 
           <div className="grid gap-3 sm:grid-cols-2">
             <FormRow label="Start date">
