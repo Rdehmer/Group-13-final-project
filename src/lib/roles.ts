@@ -72,6 +72,11 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["administrator", "billing"],
   },
   {
+    href: "/accounting/close",
+    label: "Period Close",
+    roles: ["administrator", "billing"],
+  },
+  {
     href: "/reports",
     label: "Reports",
     roles: ["administrator", "service_manager", "billing"],

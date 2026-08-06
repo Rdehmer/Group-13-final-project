@@ -382,6 +382,23 @@ export async function postBatch(_supabase: SupabaseClient, batchId: string, user
   if (batch.invoice_count + batch.payment_count === 0) {
     return { error: "Add at least one transaction before posting." };
   }
+
+  const detail = await loadBatchDetail(_supabase, batchId);
+  if (detail.error) return { error: detail.error };
+
+  const { postBatchJournal } = await import("@/lib/accounting/postings");
+  const je = postBatchJournal({
+    batch,
+    invoices: detail.invoices,
+    payments: detail.payments,
+    userId,
+  });
+  if (!je.ok) {
+    if (!je.error.includes("Already posted")) {
+      return { error: `Journal failed: ${je.error}` };
+    }
+  }
+
   return local.localSetStatus(batchId, "Posted", {
     posted_by: userId,
     posted_at: new Date().toISOString(),
