@@ -148,7 +148,8 @@ export default function PartsPage() {
   });
   const [form, setForm] = useState<PartForm>(EMPTY_FORM);
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
 
   async function loadTechnicianData(technicianId: string) {
     const [{ data: requests }, { data: assignedJobs }] = await Promise.all([
@@ -216,7 +217,10 @@ export default function PartsPage() {
     setParts((data as Part[]) ?? []);
     if (loadedProfile?.role === "technician") {
       await loadTechnicianData(loadedProfile.id);
-    } else if (loadedProfile?.role === "service_manager") {
+    } else if (
+      loadedProfile?.role === "administrator" ||
+      loadedProfile?.role === "service_manager"
+    ) {
       await loadManagerPos();
     }
     setLoading(false);
