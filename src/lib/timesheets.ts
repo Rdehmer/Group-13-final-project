@@ -230,8 +230,8 @@ export function splitWeeklyOt(
 
 export function hoursFromRange(clockIn: string, clockOut: string): number {
   const mins = differenceInMinutes(parseISO(clockOut), parseISO(clockIn));
-  if (!Number.isFinite(mins) || mins <= 0) return 0;
-  return num(mins / 60);
+  if (!Number.isFinite(mins) || mins <= 0) return 0.25;
+  return Math.max(0.25, num(mins / 60));
 }
 
 export function minutesFromRange(clockIn: string, clockOut: string): number {
