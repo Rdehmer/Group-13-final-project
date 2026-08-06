@@ -16,7 +16,7 @@ const sora = Sora({
 
 export const metadata: Metadata = {
   title: "EquipmentIQ",
-  description: "Smart equipment service management — field, operations, and billing in one place",
+  description: "Commercial equipment service management — from request to invoice",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

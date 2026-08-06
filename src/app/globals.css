@@ -648,6 +648,163 @@ a.link:hover,
   color: #006668;
 }
 
+/* Login welcome splash — stylized industrial hero */
+.login-hero {
+  background-color: oklch(28% 0.03 240);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% 45%, rgba(15, 23, 42, 0.35) 0%, transparent 70%),
+    linear-gradient(
+      135deg,
+      rgba(15, 23, 42, 0.95) 0%,
+      rgba(15, 80, 75, 0.88) 45%,
+      rgba(13, 120, 110, 0.82) 100%
+    ),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.06' stroke-width='1.5'%3E%3Cpath d='M0 100h200M100 0v200'/%3E%3Ccircle cx='100' cy='100' r='36'/%3E%3Ccircle cx='100' cy='100' r='18'/%3E%3Cpath d='M64 100h12M124 100h12M100 64v12M100 124v12'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover, cover, 200px 200px;
+  background-position: center;
+}
+
+/* Marketing home — dark industrial Ridley hero */
+.home-hero {
+  color: oklch(98% 0.01 185);
+  background-color: oklch(28% 0.03 240);
+  background-image:
+    radial-gradient(ellipse 90% 70% at 70% 40%, rgba(15, 118, 110, 0.28) 0%, transparent 65%),
+    linear-gradient(
+      125deg,
+      rgba(15, 23, 42, 0.97) 0%,
+      rgba(15, 80, 75, 0.9) 50%,
+      rgba(13, 120, 110, 0.85) 100%
+    ),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.07' stroke-width='1.5'%3E%3Cpath d='M0 100h200M100 0v200'/%3E%3Ccircle cx='100' cy='100' r='36'/%3E%3Ccircle cx='100' cy='100' r='18'/%3E%3Cpath d='M64 100h12M124 100h12M100 64v12M100 124v12'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover, cover, 200px 200px;
+  background-position: center;
+}
+
+.home-landing-header {
+  background: color-mix(in oklch, oklch(22% 0.025 240) 92%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+/* EquipmentIQ brand — thin white outline on mark only (dark surfaces) */
+.brand-logo-lockup {
+  line-height: 1;
+}
+
+.brand-logo-mark {
+  filter:
+    drop-shadow(0.4px 0 0 rgba(255, 255, 255, 0.7))
+    drop-shadow(-0.4px 0 0 rgba(255, 255, 255, 0.7))
+    drop-shadow(0 0.4px 0 rgba(255, 255, 255, 0.7))
+    drop-shadow(0 -0.4px 0 rgba(255, 255, 255, 0.7));
+}
+
+.brand-logo-full {
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.12));
+}
+
+.brand-logo-lockup-hero {
+  transform: translateY(-2px);
+}
+
+.brand-logo-lockup-hero .brand-logo-mark {
+  object-position: left center;
+}
+
+/* Hero mark PNG has internal padding — pull lockup left to align with copy */
+.home-hero .brand-logo-lockup-hero {
+  margin-left: -0.5rem;
+}
+
+@media (min-width: 640px) {
+  .home-hero .brand-logo-lockup-hero {
+    margin-left: -0.625rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .home-hero .brand-logo-lockup-hero {
+    margin-left: -0.75rem;
+  }
+}
+
+.home-landing-rise > * {
+  animation: home-landing-rise 0.55s ease-out both;
+}
+
+.home-landing-rise > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.home-landing-rise > *:nth-child(2) {
+  animation-delay: 60ms;
+}
+.home-landing-rise > *:nth-child(3) {
+  animation-delay: 120ms;
+}
+.home-landing-rise > *:nth-child(4) {
+  animation-delay: 180ms;
+}
+.home-landing-rise > *:nth-child(5) {
+  animation-delay: 240ms;
+}
+
+@keyframes home-landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.home-capability {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.home-capability:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklch, #14b8a6 35%, var(--color-base-300));
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--color-base-content) 8%, transparent);
+}
+
+.home-role-card {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.home-role-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklch, #14b8a6 35%, var(--color-base-300));
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--color-base-content) 8%, transparent);
+}
+
+.home-cta-primary {
+  background: #14b8a6;
+  color: #0f172a;
+}
+
+.home-cta-primary:hover {
+  background: #2dd4bf;
+}
+
+.home-cta-secondary {
+  border-color: rgb(255 255 255 / 0.7);
+  background: transparent;
+  color: white;
+}
+
+.home-cta-secondary:hover {
+  border-color: white;
+  background: rgb(255 255 255 / 0.1);
+}
+
 .hero-equipment,
 .dashboard-hero {
   background:
@@ -715,23 +872,15 @@ a.link:hover,
 .customer-welcome-content > * {
   animation: customer-welcome-rise 0.6s ease-out both;
 }
-.customer-welcome-logo-wrap {
+.customer-welcome-brand-block {
   animation-delay: 0ms;
 }
-.customer-welcome-brand {
-  animation-delay: 120ms;
-}
-.customer-welcome-title {
-  animation-delay: 220ms;
-}
+
 .customer-welcome-subtitle {
-  animation-delay: 320ms;
+  animation-delay: 160ms;
 }
 .customer-welcome-progress {
-  animation-delay: 420ms;
-}
-.customer-welcome-ring {
-  animation: customer-welcome-pulse 2s ease-in-out infinite;
+  animation-delay: 280ms;
 }
 .customer-welcome-progress-bar {
   animation: customer-welcome-progress 2s ease-in-out forwards;
@@ -794,8 +943,8 @@ a.link:hover,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .login-hero,
   .customer-welcome-content > *,
-  .customer-welcome-ring,
   .customer-welcome-progress-bar,
   .customer-welcome-exit,
   .customer-home-loading-ring,
