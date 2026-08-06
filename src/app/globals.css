@@ -185,8 +185,41 @@ h3,
 
 .home-capability:hover {
   transform: translateY(-2px);
-  border-color: color-mix(in oklch, var(--color-primary) 35%, var(--color-base-300));
+  border-color: color-mix(in oklch, #14b8a6 35%, var(--color-base-300));
   box-shadow: 0 8px 24px color-mix(in oklch, var(--color-base-content) 8%, transparent);
+}
+
+.home-role-card {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.home-role-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklch, #14b8a6 35%, var(--color-base-300));
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--color-base-content) 8%, transparent);
+}
+
+.home-cta-primary {
+  background: #14b8a6;
+  color: #0f172a;
+}
+
+.home-cta-primary:hover {
+  background: #2dd4bf;
+}
+
+.home-cta-secondary {
+  border-color: rgb(255 255 255 / 0.7);
+  background: transparent;
+  color: white;
+}
+
+.home-cta-secondary:hover {
+  border-color: white;
+  background: rgb(255 255 255 / 0.1);
 }
 
 /* Dashboard — industrial slate / teal band + light motion */

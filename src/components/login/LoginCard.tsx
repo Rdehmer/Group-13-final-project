@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Wrench } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DEMO_PASSWORD, DEMO_PERSONAS } from "@/lib/demo-personas";
+import { EquipmentIQLogo } from "@/components/brand/EquipmentIQLogo";
 
 type AuthMode = "login" | "signup";
 
@@ -71,11 +71,8 @@ export function LoginCard({ mode, onModeChange, showBrand = true, embedded = fal
     >
       {showBrand ? (
         <div className="mb-6 flex flex-col items-center text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <Wrench className="h-7 w-7" aria-hidden />
-          </div>
-          <p className="font-display text-2xl font-bold tracking-tight sm:text-3xl">EquipmentIQ</p>
-          <p className="mt-1.5 text-sm opacity-70">
+          <EquipmentIQLogo variant="auth" className="mx-auto" />
+          <p className="mt-4 text-sm text-slate-600">
             Commercial equipment service, from request to invoice
           </p>
         </div>

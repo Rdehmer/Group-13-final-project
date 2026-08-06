@@ -1,8 +1,8 @@
 "use client";
 
-import { Wrench } from "lucide-react";
 import { loadingSubtitleForRole, welcomeGreeting } from "@/lib/login-welcome";
 import type { UserRole } from "@/lib/types";
+import { EquipmentIQLogo } from "@/components/brand/EquipmentIQLogo";
 
 type Props = {
   exiting?: boolean;
@@ -27,18 +27,13 @@ export function LoginWelcomeSplash({ exiting = false, displayName, role }: Props
       <div className="customer-welcome-content flex w-full max-w-md flex-col items-center text-center">
         <div className="customer-welcome-logo-wrap relative mb-8">
           <span
-            className="customer-welcome-ring absolute inset-0 rounded-full border-2 border-white/25"
+            className="customer-welcome-ring absolute -inset-4 rounded-full border-2 border-white/25"
             aria-hidden
           />
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
-            <Wrench className="h-9 w-9" aria-hidden />
-          </div>
+          <EquipmentIQLogo variant="auth" onDark className="relative" />
         </div>
 
-        <p className="customer-welcome-brand text-xs font-semibold uppercase tracking-[0.2em] opacity-80">
-          EquipmentIQ
-        </p>
-        <h1 className="customer-welcome-title mt-2 text-2xl font-bold sm:text-3xl">{greeting}</h1>
+        <h1 className="customer-welcome-title text-2xl font-bold sm:text-3xl">{greeting}</h1>
         <p className="customer-welcome-subtitle mt-2 text-sm opacity-80 sm:text-base">{subtitle}</p>
 
         <div className="customer-welcome-progress mt-10 h-1 w-full max-w-xs overflow-hidden rounded-full bg-white/15">

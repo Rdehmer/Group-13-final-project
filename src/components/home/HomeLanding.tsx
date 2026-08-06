@@ -2,8 +2,6 @@
 
 import { useCallback, useState } from "react";
 import {
-  Wrench,
-  ClipboardList,
   FileText,
   Truck,
   Receipt,
@@ -13,15 +11,9 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { AuthModal } from "@/components/login/AuthModal";
+import { EquipmentIQLogo } from "@/components/brand/EquipmentIQLogo";
 
 type AuthMode = "login" | "signup";
-
-const OUTCOMES = [
-  { icon: ClipboardList, label: "Work orders" },
-  { icon: FileText, label: "Contracts" },
-  { icon: Truck, label: "Field dispatch" },
-  { icon: Receipt, label: "Billing & AR" },
-] as const;
 
 const ROLES = [
   {
@@ -77,19 +69,9 @@ export function HomeLanding() {
 
   return (
     <div className="home-landing flex min-h-screen flex-col bg-base-200">
-      <header className="home-landing-header sticky top-0 z-30 border-b border-white/10 text-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-teal-400/15 text-teal-200">
-              <Wrench className="h-5 w-5" aria-hidden />
-            </div>
-            <div>
-              <p className="font-display text-lg font-bold tracking-tight sm:text-xl">EquipmentIQ</p>
-              <p className="hidden text-[11px] font-medium uppercase tracking-[0.14em] text-white/55 sm:block">
-                Ridley Equipment Services
-              </p>
-            </div>
-          </div>
+      <header className="home-landing-header sticky top-0 z-30 border-b border-white/10">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <EquipmentIQLogo variant="header" onDark />
           <div className="flex items-center gap-2 sm:gap-3">
             <button
               type="button"
@@ -112,10 +94,8 @@ export function HomeLanding() {
       <main className="flex-1">
         <section className="home-hero relative overflow-hidden px-4 py-16 sm:px-6 sm:py-24 lg:py-28">
           <div className="home-landing-rise relative mx-auto max-w-6xl">
-            <p className="font-display text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
-              EquipmentIQ
-            </p>
-            <h1 className="mt-4 max-w-2xl text-2xl font-semibold leading-snug text-white/95 sm:text-3xl lg:text-4xl">
+            <EquipmentIQLogo variant="hero" onDark />
+            <h1 className="mt-8 max-w-2xl text-2xl font-semibold leading-snug text-white sm:text-3xl lg:text-4xl">
               Commercial equipment service, from request to invoice
             </h1>
             <p className="mt-5 max-w-xl text-base leading-relaxed text-white/75 sm:text-lg">
@@ -125,14 +105,14 @@ export function HomeLanding() {
             <div className="mt-9 flex flex-wrap gap-3">
               <button
                 type="button"
-                className="inline-flex min-h-12 items-center justify-center rounded-lg bg-teal-400 px-6 text-base font-semibold text-slate-950 shadow-sm transition hover:bg-teal-300"
+                className="home-cta-primary inline-flex min-h-12 items-center justify-center rounded-lg px-6 text-base font-semibold shadow-sm transition"
                 onClick={() => openAuth("login")}
               >
                 Sign In
               </button>
               <button
                 type="button"
-                className="inline-flex min-h-12 items-center justify-center rounded-lg border-2 border-white/70 bg-transparent px-6 text-base font-semibold text-white transition hover:border-white hover:bg-white/10"
+                className="home-cta-secondary inline-flex min-h-12 items-center justify-center rounded-lg border-2 px-6 text-base font-semibold transition"
                 onClick={() => openAuth("signup")}
               >
                 Create Account
@@ -141,23 +121,10 @@ export function HomeLanding() {
           </div>
         </section>
 
-        <section className="border-b border-base-300/60 bg-base-100 px-4 py-8 sm:px-6">
-          <div className="mx-auto grid max-w-6xl grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-6">
-            {OUTCOMES.map(({ icon: Icon, label }) => (
-              <div key={label} className="flex items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Icon className="h-5 w-5" aria-hidden />
-                </span>
-                <span className="text-sm font-semibold sm:text-base">{label}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
         <section className="px-4 py-14 sm:px-6 sm:py-16">
           <div className="mx-auto max-w-6xl">
-            <h2 className="font-display text-2xl font-bold sm:text-3xl">Who it’s for</h2>
-            <p className="mt-2 max-w-2xl text-base opacity-70">
+            <h2 className="font-display text-2xl font-bold text-slate-800 sm:text-3xl">Who it’s for</h2>
+            <p className="mt-2 max-w-2xl text-base text-slate-600">
               Built for the people who keep commercial equipment online—each role gets a clear path
               in.
             </p>
@@ -165,16 +132,16 @@ export function HomeLanding() {
               {ROLES.map(({ icon: Icon, title, description }) => (
                 <article
                   key={title}
-                  className="rounded-2xl border border-base-300/70 bg-base-100 p-5 sm:p-6"
+                  className="home-role-card rounded-2xl border border-base-300/70 bg-base-100 p-5 sm:p-6"
                 >
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-500/10 text-teal-700">
                     <Icon className="h-5 w-5" aria-hidden />
                   </div>
-                  <h3 className="mt-4 text-lg font-semibold">{title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed opacity-75">{description}</p>
+                  <h3 className="mt-4 text-lg font-semibold text-slate-800">{title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600">{description}</p>
                   <button
                     type="button"
-                    className="btn btn-link btn-sm mt-4 h-auto min-h-0 px-0 text-primary"
+                    className="btn btn-link btn-sm mt-4 h-auto min-h-0 px-0 text-teal-700"
                     onClick={() => openAuth("login")}
                   >
                     Sign In
@@ -188,8 +155,8 @@ export function HomeLanding() {
 
         <section className="border-t border-base-300/50 bg-base-100 px-4 py-14 sm:px-6 sm:py-16">
           <div className="mx-auto max-w-6xl">
-            <h2 className="font-display text-2xl font-bold sm:text-3xl">What you can run</h2>
-            <p className="mt-2 max-w-2xl text-base opacity-70">
+            <h2 className="font-display text-2xl font-bold text-slate-800 sm:text-3xl">What you can run</h2>
+            <p className="mt-2 max-w-2xl text-base text-slate-600">
               The core of the shop—coverage, field work, and getting paid—without extra clutter.
             </p>
             <div className="mt-8 grid gap-5 md:grid-cols-3">
@@ -198,11 +165,11 @@ export function HomeLanding() {
                   key={title}
                   className="home-capability rounded-2xl border border-base-300/70 bg-base-100 p-5 sm:p-6"
                 >
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-500/10 text-teal-700">
                     <Icon className="h-5 w-5" aria-hidden />
                   </div>
-                  <h3 className="mt-4 text-lg font-semibold">{title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed opacity-75">{description}</p>
+                  <h3 className="mt-4 text-lg font-semibold text-slate-800">{title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600">{description}</p>
                 </article>
               ))}
             </div>
@@ -211,13 +178,16 @@ export function HomeLanding() {
       </main>
 
       <footer className="border-t border-base-300/50 bg-base-100 px-4 py-6 sm:px-6">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 text-center text-sm opacity-70 sm:flex-row sm:text-left">
-          <p>EquipmentIQ for Ridley Equipment Services</p>
-          <div className="flex gap-4">
-            <button type="button" className="link link-hover" onClick={() => openAuth("login")}>
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-center sm:flex-row sm:text-left">
+          <div className="flex flex-col items-center gap-2 sm:items-start">
+            <EquipmentIQLogo variant="footer" />
+            <p className="text-sm text-slate-500">Powered by Ridley Equipment Services</p>
+          </div>
+          <div className="flex gap-4 text-sm">
+            <button type="button" className="link link-hover text-teal-700" onClick={() => openAuth("login")}>
               Sign In
             </button>
-            <button type="button" className="link link-hover" onClick={() => openAuth("signup")}>
+            <button type="button" className="link link-hover text-teal-700" onClick={() => openAuth("signup")}>
               Sign Up
             </button>
           </div>
