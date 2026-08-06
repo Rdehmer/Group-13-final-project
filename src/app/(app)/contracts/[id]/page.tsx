@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
-import { formatMoney } from "@/lib/calculations";
-import type { Customer, Profile, ServiceContract } from "@/lib/types";
+import { formatMoney, formatPct } from "@/lib/calculations";
+import type {
+  Customer,
+  Invoice,
+  Profile,
+  ServiceContract,
+  WorkOrder,
+} from "@/lib/types";
 import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
 import { ContractPricingSummary } from "@/components/ContractPricingSummary";
 import { monthlyPremiumFromContract, formatMonthlyPremium } from "@/lib/contract-pricing";
@@ -26,7 +32,12 @@ import {
   resolvedMonthlyAmount,
   standingBadgeClass,
 } from "@/lib/contract-billing";
-import type { Invoice } from "@/lib/types";
+import {
+  contractEconomicsInRange,
+  currentMonthRange,
+  periodLabel,
+  TECH_HOURLY_COST,
+} from "@/lib/contract-monthly-economics";
 
 type ContractDetail = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -49,6 +60,7 @@ export default function ContractDetailPage() {
   const [equipment, setEquipment] = useState<CoveredEquipment[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
@@ -82,10 +94,25 @@ export default function ContractDetailPage() {
     profile?.role === "service_manager" || profile?.role === "administrator";
   const isPending = contract?.status === "Pending Approval";
 
+  const monthRange = useMemo(() => currentMonthRange(new Date()), []);
+  const monthLabel = periodLabel(monthRange);
+  const monthEconomics = useMemo(() => {
+    if (!contract || !isManager) return null;
+    return contractEconomicsInRange(contract, workOrders, monthRange);
+  }, [contract, isManager, workOrders, monthRange]);
+
   async function load() {
     setLoading(true);
-    const [{ data }, { data: cust }, { data: { user } }, { data: links }, { data: inv }] =
-      await Promise.all([
+    const [
+      { data },
+      { data: cust },
+      {
+        data: { user },
+      },
+      { data: links },
+      { data: inv },
+      { data: wo },
+    ] = await Promise.all([
       supabase.from("service_contracts").select("*, customers(id, name)").eq("id", id).single(),
       supabase.from("customers").select("*").order("name"),
       supabase.auth.getUser(),
@@ -99,11 +126,16 @@ export default function ContractDetailPage() {
         .eq("contract_id", id)
         .is("work_order_id", null)
         .gt("recurring_service_charge", 0),
+      supabase
+        .from("work_orders")
+        .select("id, contract_id, status, completion_date, scheduled_date, created_at")
+        .eq("contract_id", id),
     ]);
     const sc = data as ContractDetail | null;
     setContract(sc);
     setCustomers((cust as Customer[]) ?? []);
     setStandingInvoices((inv as Invoice[]) ?? []);
+    setWorkOrders((wo as WorkOrder[]) ?? []);
     const covered = ((links as { equipment: CoveredEquipment | CoveredEquipment[] | null }[] | null) ?? [])
       .flatMap((row) => {
         const eq = row.equipment;
@@ -622,6 +654,67 @@ export default function ContractDetailPage() {
               </div>
             );
           })()}
+
+          {isManager && monthEconomics ? (
+            <div className="rounded-box border border-primary/25 bg-primary/5 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">This month · {monthLabel}</p>
+                <Link
+                  href={`/reports/contracts?from=contracts&focus=margin`}
+                  className="btn btn-ghost btn-xs"
+                >
+                  Open profitability
+                </Link>
+              </div>
+              <p className="mt-1 text-xs opacity-60">
+                Monthly fee vs planned cost: included labor hours × ${TECH_HOURLY_COST}/hr + parts
+                allowance, both ÷ 12. Visits track utilization.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <p className="text-xs opacity-60">Monthly fee</p>
+                  <p className="text-lg font-semibold tabular-nums">
+                    {formatMoney(monthEconomics.monthlyRevenue)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs opacity-60">Direct cost (monthly)</p>
+                  <p className="text-lg font-semibold tabular-nums">
+                    {formatMoney(monthEconomics.directCost)}
+                  </p>
+                  <p className="text-xs opacity-50">
+                    Labor {formatMoney(monthEconomics.laborCost)} · Parts{" "}
+                    {formatMoney(monthEconomics.partsCost)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs opacity-60">Gross profit</p>
+                  <p className="text-lg font-semibold tabular-nums">
+                    {formatMoney(monthEconomics.profit)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs opacity-60">Margin</p>
+                  <p
+                    className={`text-lg font-semibold tabular-nums ${
+                      monthEconomics.margin !== null && monthEconomics.margin < 0
+                        ? "text-error"
+                        : monthEconomics.margin !== null && monthEconomics.margin < 0.2
+                          ? "text-warning"
+                          : ""
+                    }`}
+                  >
+                    {formatPct(monthEconomics.margin)}
+                  </p>
+                  <p className="text-xs opacity-50">
+                    {monthEconomics.usedVisits}/{monthEconomics.includedVisits} visits ·{" "}
+                    {monthEconomics.includedLaborHours}h labor · parts{" "}
+                    {formatMoney(monthEconomics.includedPartsAllowance)}/yr
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
 
           <div className="grid gap-3 sm:grid-cols-2">

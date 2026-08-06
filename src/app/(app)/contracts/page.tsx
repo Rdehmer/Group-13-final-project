@@ -7,9 +7,15 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
-import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
-import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
-import type { Customer, Invoice, Profile, ServiceContract } from "@/lib/types";
+import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { formatMoney, formatPct } from "@/lib/calculations";
+import type {
+  Customer,
+  Invoice,
+  Profile,
+  ServiceContract,
+  WorkOrder,
+} from "@/lib/types";
 import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
 import {
   contractMatchesPlanFilters,
@@ -30,6 +36,13 @@ import {
   resolvedMonthlyAmount,
   standingBadgeClass,
 } from "@/lib/contract-billing";
+import {
+  contractEconomicsInRange,
+  currentMonthRange,
+  periodLabel,
+  sumEconomics,
+  TECH_HOURLY_COST,
+} from "@/lib/contract-monthly-economics";
 import { ClipboardList } from "lucide-react";
 import { formatMonthLabel } from "@/lib/billing";
 
@@ -115,6 +128,7 @@ export default function ContractsPage() {
     typeof window !== "undefined" ? listActivePacks(loadCatalog()) : [],
   );
   const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [genBusy, setGenBusy] = useState(false);
   const [genMessage, setGenMessage] = useState<string | null>(null);
 
@@ -131,7 +145,15 @@ export default function ContractsPage() {
   }, [statusFromUrl, typeFromUrl]);
 
   async function load() {
-    const [{ data: sc }, { data: cust }, { data: { user } }, { data: inv }] = await Promise.all([
+    const [
+      { data: sc },
+      { data: cust },
+      {
+        data: { user },
+      },
+      { data: inv },
+      { data: wo },
+    ] = await Promise.all([
       supabase
         .from("service_contracts")
         .select("*, customers(id, name)")
@@ -143,10 +165,12 @@ export default function ContractsPage() {
         .select("*")
         .is("work_order_id", null)
         .gt("recurring_service_charge", 0),
+      supabase.from("work_orders").select("id, contract_id, status, completion_date, scheduled_date, created_at"),
     ]);
     setContracts((sc as ContractRow[]) ?? []);
     setCustomers((cust as Customer[]) ?? []);
     setStandingInvoices((inv as Invoice[]) ?? []);
+    setWorkOrders((wo as WorkOrder[]) ?? []);
     if (user) {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -282,15 +306,29 @@ export default function ContractsPage() {
     );
   }
 
-  const totalRevenue = contracts
-    .filter((c) => c.status === "Active")
-    .reduce((s, c) => s + Number(c.contract_price), 0);
-  const estCostPerVisit = 350;
-  const estDirectCost = contracts
-    .filter((c) => c.status === "Active")
-    .reduce((s, c) => s + c.included_service_visits * estCostPerVisit, 0);
-  const profit = grossProfit(totalRevenue, estDirectCost);
-  const margin = profitMargin(totalRevenue, profit);
+  const monthRange = useMemo(() => currentMonthRange(new Date()), []);
+  const monthLabel = periodLabel(monthRange);
+
+  const economicsByContract = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof contractEconomicsInRange>>();
+    for (const c of contracts) {
+      map.set(c.id, contractEconomicsInRange(c, workOrders, monthRange));
+    }
+    return map;
+  }, [contracts, workOrders, monthRange]);
+
+  const activeMonthSummary = useMemo(() => {
+    const rows = contracts
+      .filter((c) => c.status === "Active")
+      .map((c) => economicsByContract.get(c.id)!)
+      .filter(Boolean);
+    return sumEconomics(rows);
+  }, [contracts, economicsByContract]);
+
+  const totalRevenue = activeMonthSummary.monthlyRevenue;
+  const directCost = activeMonthSummary.directCost;
+  const profit = activeMonthSummary.profit;
+  const margin = activeMonthSummary.margin;
 
   async function onCreateCustomer(e?: React.FormEvent | React.MouseEvent) {
     e?.preventDefault();
@@ -655,46 +693,31 @@ export default function ContractsPage() {
         </div>
       ) : null}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        {isManager ? (
-          <>
-            <ClickableStatCard
-              label="Active Contract Revenue"
-              value={formatMoney(totalRevenue)}
-              href="/reports/contracts?from=contracts&focus=revenue"
-              ariaLabel="View active contract revenue on reports"
-            />
-            <ClickableStatCard
-              label="Est. Direct Cost"
-              value={formatMoney(estDirectCost)}
-              hint="Assumes $350/visit avg"
-              href="/reports/contracts?from=contracts&focus=cost"
-              ariaLabel="View estimated direct cost on reports"
-            />
-            <ClickableStatCard
-              label="Est. Gross Margin"
-              value={formatPct(margin)}
-              hint={`Profit ${formatMoney(profit)}`}
-              href="/reports/contracts?from=contracts&focus=margin"
-              ariaLabel="View estimated gross margin on reports"
-            />
-          </>
-        ) : (
-          <>
-            <StatCard label="Active Contract Revenue" value={formatMoney(totalRevenue)} />
-            <StatCard
-              label="Est. Direct Cost"
-              value={formatMoney(estDirectCost)}
-              hint="Assumes $350/visit avg"
-            />
-            <StatCard
-              label="Est. Gross Margin"
-              value={formatPct(margin)}
-              hint={`Profit ${formatMoney(profit)}`}
-            />
-          </>
-        )}
-      </div>
+      {isManager ? (
+        <div className="mb-6 grid gap-4 sm:grid-cols-3">
+          <ClickableStatCard
+            label="Monthly Fee Revenue"
+            value={formatMoney(totalRevenue)}
+            hint={`${monthLabel} · sum of monthly fees`}
+            href="/reports/contracts?from=contracts&focus=revenue"
+            ariaLabel="View monthly fee revenue on reports"
+          />
+          <ClickableStatCard
+            label="Monthly Direct Cost"
+            value={formatMoney(directCost)}
+            hint={`Labor @ $${TECH_HOURLY_COST}/hr + parts ÷ 12`}
+            href="/reports/contracts?from=contracts&focus=cost"
+            ariaLabel="View monthly direct cost on reports"
+          />
+          <ClickableStatCard
+            label="Monthly Gross Margin"
+            value={formatPct(margin)}
+            hint={`Profit ${formatMoney(profit)} · ${monthLabel}`}
+            href="/reports/contracts?from=contracts&focus=margin"
+            ariaLabel="View monthly gross margin on reports"
+          />
+        </div>
+      ) : null}
 
       {showForm ? (
         <dialog className="modal modal-open">
@@ -1020,7 +1043,13 @@ export default function ContractsPage() {
                     <th>Customer</th>
                     <th>Type</th>
                     <th>Annual</th>
-                    <th>Monthly</th>
+                    <th>Monthly fee</th>
+                    {isManager ? (
+                      <>
+                        <th>Direct cost ({monthLabel.split(" ")[0]})</th>
+                        <th>Margin</th>
+                      </>
+                    ) : null}
                     <th>Deductible</th>
                     <th>Fee status</th>
                     <th>Status</th>
@@ -1044,6 +1073,8 @@ export default function ContractsPage() {
                       <th className="font-normal">
                         <ColumnFilterSelect column="price" label="price" options={filterOptions.price} />
                       </th>
+                      <th />
+                      <th />
                       <th />
                       <th />
                       <th />
@@ -1074,7 +1105,7 @@ export default function ContractsPage() {
                 <tbody>
                   {filteredContracts.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="p-6">
+                      <td colSpan={isManager ? 11 : 9} className="p-6">
                         <EmptyState
                           title="No matching contracts"
                           description="Try clearing one or more column filters."
@@ -1091,6 +1122,7 @@ export default function ContractsPage() {
                   ) : (
                     filteredContracts.map((c) => {
                       const standing = getContractPaymentStanding(c, standingInvoices);
+                      const econ = economicsByContract.get(c.id);
                       return (
                       <tr key={c.id}>
                         <td className="align-top">
@@ -1134,6 +1166,35 @@ export default function ContractsPage() {
                         <td className="align-top tabular-nums">
                           {formatMoney(resolvedMonthlyAmount(c))}
                         </td>
+                        {isManager ? (
+                          <>
+                            <td className="align-top tabular-nums">
+                              <span>{formatMoney(econ?.directCost ?? 0)}</span>
+                              {econ ? (
+                                <p className="mt-0.5 text-[11px] opacity-60">
+                                  {econ.includedLaborHours}h × ${TECH_HOURLY_COST} + parts{" "}
+                                  {formatMoney(econ.includedPartsAllowance)} ÷ 12
+                                  {econ.includedVisits > 0
+                                    ? ` · ${econ.usedVisits}/${econ.includedVisits} visits`
+                                    : ""}
+                                </p>
+                              ) : null}
+                            </td>
+                            <td className="align-top tabular-nums">
+                              <span
+                                className={
+                                  econ && econ.margin !== null && econ.margin < 0.2
+                                    ? econ.margin < 0
+                                      ? "text-error font-medium"
+                                      : "text-warning font-medium"
+                                    : undefined
+                                }
+                              >
+                                {formatPct(econ?.margin ?? null)}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
                         <td className="align-top tabular-nums">
                           {formatMoney(resolvedDeductible(c))}
                         </td>
