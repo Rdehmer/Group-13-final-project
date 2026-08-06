@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
-import { NAV_ITEMS, type NavItem } from "@/lib/roles";
+import { type NavItem } from "@/lib/roles";
+import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
@@ -33,8 +34,9 @@ function navLabel(item: NavItem, role: Profile["role"]): string {
 
 function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
   const label = navLabel(item, role);
-  if (label === item.label) return item;
-  return { ...item, label };
+  const children = item.children?.map((child) => labeledNavItem(child, role));
+  if (label === item.label && !children) return item;
+  return { ...item, label, ...(children ? { children } : {}) };
 }
 
 function GatedNavLink({
@@ -78,13 +80,11 @@ function GatedNavLink({
 function NavDetailsGroup({
   item,
   pathname,
-  profile,
   isGateActive,
   blockNavigation,
 }: {
   item: NavItem;
   pathname: string;
-  profile: Profile;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
@@ -113,18 +113,16 @@ function NavDetailsGroup({
         </Link>
       )}
       <ul>
-        {item.children!
-          .filter((child) => child.roles.includes(profile.role))
-          .map((child) => (
-            <li key={`${child.href}-${child.label}`}>
-              <GatedNavLink
-                item={child}
-                pathname={pathname}
-                isGateActive={isGateActive}
-                blockNavigation={blockNavigation}
-              />
-            </li>
-          ))}
+        {item.children!.map((child) => (
+          <li key={`${child.href}-${child.label}`}>
+            <GatedNavLink
+              item={child}
+              pathname={pathname}
+              isGateActive={isGateActive}
+              blockNavigation={blockNavigation}
+            />
+          </li>
+        ))}
       </ul>
     </li>
   );
@@ -141,9 +139,7 @@ export function AppShell({
   const router = useRouter();
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
-  const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role)).map((item) =>
-    labeledNavItem(item, profile.role),
-  );
+  const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
 
   useEffect(() => {
     setMounted(true);
@@ -219,7 +215,6 @@ export function AppShell({
                   key={item.href}
                   item={item}
                   pathname={pathname}
-                  profile={profile}
                   isGateActive={gateActive}
                   blockNavigation={blockNavigation}
                 />

@@ -143,6 +143,18 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/settings",
     label: "Settings",
     roles: ["administrator"],
+    children: [
+      {
+        href: "/settings/employees",
+        label: "Employees",
+        roles: ["administrator"],
+      },
+      {
+        href: "/settings/gl-accounts",
+        label: "GL Accounts",
+        roles: ["administrator"],
+      },
+    ],
   },
 ];
 

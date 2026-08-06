@@ -5,6 +5,31 @@ export type UserRole =
   | "billing"
   | "customer";
 
+/** ServiceTitan-style module keys used for employee permission matrices. */
+export type PermissionKey =
+  | "dashboard"
+  | "customers"
+  | "equipment"
+  | "contracts"
+  | "work_orders"
+  | "technician"
+  | "time_off"
+  | "dispatch"
+  | "parts"
+  | "billing"
+  | "payments"
+  | "batches"
+  | "period_close"
+  | "reports"
+  | "invoice_cash"
+  | "users"
+  | "settings"
+  | "settings_gl"
+  | "settings_employees";
+
+/** Explicit allow/deny overrides on top of the role template (true/false). */
+export type PermissionOverrides = Partial<Record<PermissionKey, boolean>>;
+
 export type Profile = {
   id: string;
   email: string;
@@ -13,6 +38,15 @@ export type Profile = {
   customer_id: string | null;
   hourly_cost_rate: number | null;
   hourly_billing_rate: number | null;
+  /** Optional staff fields (employee HR-lite / settings). */
+  job_title?: string | null;
+  phone?: string | null;
+  employee_number?: string | null;
+  /**
+   * Module permission overrides. Empty = use role defaults only.
+   * true grants, false denies even when role would allow.
+   */
+  permission_overrides?: PermissionOverrides | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -421,6 +455,34 @@ export type TimeOffRequest = {
   created_at: string;
   updated_at: string;
   technician?: { id: string; full_name: string | null; email: string } | null;
+};
+
+/** Chart of accounts classification. */
+export type GlAccountType = "asset" | "liability" | "equity" | "revenue" | "expense";
+export type GlNormalBalance = "debit" | "credit";
+
+export type GlAccount = {
+  id: string;
+  account_code: string;
+  account_name: string;
+  account_type: GlAccountType;
+  normal_balance: GlNormalBalance;
+  description: string | null;
+  is_active: boolean;
+  is_system: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Maps operational posting purpose → GL account (for export / reports). */
+export type GlPostingDefault = {
+  id: string;
+  purpose: string;
+  gl_account_id: string | null;
+  label: string;
+  description: string | null;
+  updated_at: string;
 };
 
 export const ROLE_LABELS: Record<UserRole, string> = {
