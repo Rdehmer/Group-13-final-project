@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Columns2 } from "lucide-react";
 import {
   getContractTier,
   listContractTiersForUi,
@@ -47,6 +48,7 @@ export function ContractTierCards({
   const activePack = packs.find((p) => p.id === selectedPackId) ?? packs[0];
   const activeTier = getContractTier(selectedTier, selectedPackId);
   const tiers = listContractTiersForUi(selectedPackId);
+  const selectedTierDetails = tiers.find((t) => t.id === selectedTier) ?? tiers[0];
 
   if (collapsed) {
     return (
@@ -67,107 +69,108 @@ export function ContractTierCards({
 
   return (
     <div className="mb-6 space-y-6">
-      <div>
-        <p className="mb-2 text-sm font-medium">What kind of coverage do you need?</p>
-        <p className="mb-3 text-sm opacity-70">
-          Choose your industry type first. Gold, Silver, and Bronze options update to match that
-          industry.
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {packs.map((pack) => {
-            const selected = selectedPackId === pack.id;
-            return (
-              <button
-                key={pack.id}
-                type="button"
-                onClick={() => onSelectPack(pack.id)}
-                className={`rounded-box border px-4 py-3 text-left transition ${
-                  selected
-                    ? "border-primary bg-primary/10 ring-2 ring-primary"
-                    : "border-base-300 bg-base-100 hover:border-primary/40"
-                }`}
-              >
-                <span className="font-semibold">{pack.name}</span>
-                <span className="mt-1 block text-xs opacity-70">{pack.description}</span>
-              </button>
-            );
-          })}
+      <div className="space-y-3">
+        <div>
+          <p className="mb-1 text-sm font-medium">What kind of coverage do you need?</p>
+          <p className="text-sm opacity-70">
+            Pick an industry and coverage level from the menus. Details update for your selection.
+          </p>
         </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="form-control w-full">
+            <span className="label-text text-sm font-medium">Industry</span>
+            <select
+              className="select select-bordered w-full"
+              value={selectedPackId}
+              onChange={(e) => onSelectPack(e.target.value)}
+            >
+              {packs.map((pack) => (
+                <option key={pack.id} value={pack.id}>
+                  {pack.name}
+                </option>
+              ))}
+            </select>
+            {activePack ? (
+              <span className="label-text-alt mt-1 opacity-70">{activePack.description}</span>
+            ) : null}
+          </label>
+
+          <label className="form-control w-full">
+            <span className="label-text text-sm font-medium">Coverage level</span>
+            <select
+              className="select select-bordered w-full"
+              value={selectedTier}
+              onChange={(e) => onSelectTier(e.target.value as ContractTierId)}
+            >
+              {tiers.map((tier) => (
+                <option key={tier.id} value={tier.id}>
+                  {tier.name}
+                  {recommendedTier === tier.id ? " (recommended)" : ""}
+                  {tier.recommended && recommendedTier !== tier.id ? " (popular)" : ""}
+                </option>
+              ))}
+            </select>
+            {selectedTierDetails ? (
+              <span className="label-text-alt mt-1 opacity-70">{selectedTierDetails.tagline}</span>
+            ) : null}
+          </label>
+        </div>
+
+        <button
+          type="button"
+          className={`btn btn-lg w-full gap-2 sm:w-auto ${
+            showCompare ? "btn-primary" : "btn-secondary"
+          }`}
+          onClick={() => setShowCompare((v) => !v)}
+          aria-expanded={showCompare}
+        >
+          <Columns2 className="h-5 w-5" />
+          {showCompare ? "Hide plan comparison" : "Compare Gold, Silver & Bronze"}
+        </button>
       </div>
 
-      <div>
-        <p className="mb-4 text-sm opacity-70">
-          Choose a coverage level
-          {activePack ? (
-            <>
-              {" "}
-              for <span className="font-medium">{activePack.name}</span>
-            </>
-          ) : null}
-          . Ridley will confirm final pricing before activation.
-        </p>
-
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="btn btn-outline btn-sm"
-            onClick={() => setShowCompare((v) => !v)}
-          >
-            {showCompare ? "Hide compare plans" : "Compare plans"}
-          </button>
+      {showCompare ? (
+        <div className="rounded-box border-2 border-secondary/40 bg-secondary/5 p-4">
+          <p className="mb-3 text-sm font-semibold">
+            Side-by-side for {activePack?.name ?? "this industry"}
+          </p>
+          <ContractTierCompare recommendedTier={recommendedTier} packId={selectedPackId} />
         </div>
+      ) : null}
 
-        {showCompare ? (
-          <div className="mb-4">
-            <ContractTierCompare recommendedTier={recommendedTier} packId={selectedPackId} />
+      {selectedTierDetails ? (
+        <div
+          className={`card bg-base-100 shadow ring-1 ring-base-300 ${
+            selectedTierDetails.id === "gold" ? "border-t-4 border-warning" : ""
+          }`}
+        >
+          <div className="card-body gap-3 p-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`badge badge-sm ${TIER_BADGE[selectedTierDetails.id]}`}>
+                {selectedTierDetails.name}
+              </span>
+              {activePack ? (
+                <span className="badge badge-sm badge-outline">{activePack.name}</span>
+              ) : null}
+              {recommendedTier === selectedTierDetails.id ? (
+                <span className="badge badge-primary badge-sm">Recommended</span>
+              ) : null}
+            </div>
+            <h3 className="font-bold">{selectedTierDetails.tagline}</h3>
+            <ul className="space-y-1 text-sm opacity-80">
+              {selectedTierDetails.coverages.map((c) => (
+                <li key={c}>• {c}</li>
+              ))}
+            </ul>
           </div>
-        ) : null}
-
-        <div className="grid gap-4 lg:grid-cols-3">
-          {tiers.map((tier) => {
-            const selected = selectedTier === tier.id;
-            const recommended = recommendedTier === tier.id;
-            return (
-              <button
-                key={tier.id}
-                type="button"
-                onClick={() => onSelectTier(tier.id)}
-                className={`card bg-base-100 text-left shadow transition-all hover:shadow-md ${
-                  selected ? "ring-2 ring-primary" : "ring-1 ring-base-300"
-                } ${tier.id === "gold" ? "border-t-4 border-warning" : ""}`}
-              >
-                <div className="card-body p-5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className={`badge badge-sm ${TIER_BADGE[tier.id]}`}>{tier.name}</span>
-                      {recommended ? (
-                        <span className="badge badge-primary badge-sm ml-2">Recommended</span>
-                      ) : null}
-                      {tier.recommended && !recommended ? (
-                        <span className="badge badge-ghost badge-sm ml-2">Popular</span>
-                      ) : null}
-                    </div>
-                    {selected ? (
-                      <span className="badge badge-primary badge-sm">Selected</span>
-                    ) : null}
-                  </div>
-                  <h3 className="mt-2 font-bold">{tier.tagline}</h3>
-                  <ul className="mt-3 space-y-1 text-sm opacity-80">
-                    {tier.coverages.slice(0, 5).map((c) => (
-                      <li key={c}>• {c}</li>
-                    ))}
-                  </ul>
-                </div>
-              </button>
-            );
-          })}
         </div>
+      ) : null}
 
-        <div className="mt-4 flex justify-end">
-          <button type="button" className="btn btn-primary" onClick={onContinue}>
-            Continue with {activePack?.name ?? "this"} {activeTier.name}
-          </button>
-        </div>
+      <div className="flex justify-end">
+        <button type="button" className="btn btn-primary" onClick={onContinue}>
+          Continue with {activePack?.name ?? "this"} {activeTier.name}
+        </button>
       </div>
     </div>
   );

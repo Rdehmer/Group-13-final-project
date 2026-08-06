@@ -157,15 +157,32 @@ export function ApplyContractPlanPreset<T extends ManagerContractFormFields>({
       </div>
 
       {preview ? (
-        <p className="text-xs opacity-70">
-          Resolves to <span className="font-medium">{preview.band.label}</span> band (
-          {formatBandRange(preview.band)}) ·{" "}
-          <span className="font-medium tabular-nums">
-            {formatMoney(preview.thresholds.annual_price)}
-          </span>
-          /yr · {preview.thresholds.included_service_visits} visits ·{" "}
-          {preview.thresholds.included_labor_hours} labor hrs
-        </p>
+        <div className="space-y-1 text-xs opacity-70">
+          <p>
+            Resolves to <span className="font-medium">{preview.band.label}</span> band (
+            {formatBandRange(preview.band)}) ·{" "}
+            <span className="font-medium tabular-nums">
+              {formatMoney(preview.thresholds.annual_price)}
+            </span>
+            /yr · {preview.thresholds.included_service_visits} visits ·{" "}
+            {preview.thresholds.included_labor_hours} labor hrs
+            {preview.thresholds.extras.max_units_covered != null ? (
+              <>
+                {" "}
+                · up to{" "}
+                <span className="font-medium">
+                  {String(preview.thresholds.extras.max_units_covered)}
+                </span>{" "}
+                units
+              </>
+            ) : null}
+          </p>
+          <ul className="list-inside list-disc space-y-0.5">
+            {preview.level.coverages.slice(0, 4).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">

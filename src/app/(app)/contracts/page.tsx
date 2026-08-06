@@ -497,7 +497,7 @@ export default function ContractsPage() {
                 <div>
                   <p className="font-semibold">Contract plans</p>
                   <p className="text-sm opacity-70">
-                    Browse industry packs and filter the list by plan tag (industry × Gold/Silver/Bronze).
+                    Choose an industry plan and coverage level from the menus to filter contracts.
                   </p>
                 </div>
               </div>
@@ -508,31 +508,9 @@ export default function ContractsPage() {
               ) : null}
             </div>
 
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-              {planPacks.map((pack) => (
-                <button
-                  key={pack.id}
-                  type="button"
-                  className={`rounded-box border px-3 py-2 text-left text-sm transition ${
-                    planIndustry === pack.id
-                      ? "border-primary bg-primary/10"
-                      : "border-base-300 bg-base-200/40 hover:border-primary/40"
-                  }`}
-                  onClick={() =>
-                    setPlanIndustry((prev) => (prev === pack.id ? "all" : pack.id))
-                  }
-                >
-                  <span className="font-medium">{pack.name}</span>
-                  <span className="mt-0.5 block text-xs opacity-60">
-                    Gold Mid from {formatMoney(packGoldMidPrice(pack))}/yr
-                  </span>
-                </button>
-              ))}
-            </div>
-
             <div className="flex flex-wrap items-end gap-3">
               <label className="form-control w-full max-w-xs">
-                <span className="label-text text-xs">Filter by industry</span>
+                <span className="label-text text-xs">Industry plan</span>
                 <select
                   className="select select-bordered select-sm"
                   value={planIndustry}
@@ -542,13 +520,13 @@ export default function ContractsPage() {
                   <option value="unlabeled">Unlabeled (no plan tag)</option>
                   {planPacks.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name}
+                      {p.name} — Gold Mid from {formatMoney(packGoldMidPrice(p))}/yr
                     </option>
                   ))}
                 </select>
               </label>
               <label className="form-control w-full max-w-xs">
-                <span className="label-text text-xs">Filter by level</span>
+                <span className="label-text text-xs">Coverage level</span>
                 <select
                   className="select select-bordered select-sm"
                   value={planTier}

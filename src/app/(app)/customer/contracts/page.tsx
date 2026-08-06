@@ -161,7 +161,7 @@ function CustomerContractsPageInner() {
       {contracts.length === 0 ? (
         <EmptyState
           title="No contracts yet"
-          description="Submit a contract request to start a new agreement. Choose Gold, Silver, or Bronze coverage on the request form."
+          description="Submit a contract request to start a new agreement. Choose your industry and Gold, Silver, or Bronze coverage on the request form."
           action={
             <Link href="/customer/request-contract" className="btn btn-primary btn-sm">
               Request Contract

@@ -205,27 +205,27 @@ export default function ContractPlansSettingsPage() {
         </span>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
         <aside className="card bg-base-100 shadow">
           <div className="card-body gap-3 p-4">
-            <p className="text-sm font-semibold">Industry packs</p>
-            <ul className="menu menu-sm rounded-box bg-base-200 p-1">
-              {catalog.packs
-                .slice()
-                .sort((a, b) => a.sort_order - b.sort_order)
-                .map((p) => (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      className={packId === p.id ? "active" : ""}
-                      onClick={() => setPackId(p.id)}
-                    >
-                      <span className="truncate">{p.name}</span>
-                      {!p.active ? <span className="badge badge-ghost badge-xs">Off</span> : null}
-                    </button>
-                  </li>
-                ))}
-            </ul>
+            <label className="form-control w-full">
+              <span className="label-text text-sm font-semibold">Industry pack</span>
+              <select
+                className="select select-bordered w-full"
+                value={packId}
+                onChange={(e) => setPackId(e.target.value)}
+              >
+                {catalog.packs
+                  .slice()
+                  .sort((a, b) => a.sort_order - b.sort_order)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {!p.active ? " (inactive)" : ""}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <div className="flex gap-1">
               <input
                 className="input input-bordered input-sm flex-1"
@@ -274,22 +274,29 @@ export default function ContractPlansSettingsPage() {
                   </div>
                 </div>
 
-                <div className="tabs tabs-boxed w-fit">
-                  {TIERS.map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      className={`tab ${tierId === t ? "tab-active" : ""}`}
-                      onClick={() => setTierId(t)}
-                    >
-                      {t.charAt(0).toUpperCase() + t.slice(1)}
-                    </button>
-                  ))}
-                </div>
+                <label className="form-control w-full max-w-xs">
+                  <span className="label-text text-sm">Coverage level</span>
+                  <select
+                    className="select select-bordered"
+                    value={tierId}
+                    onChange={(e) => setTierId(e.target.value as ServiceLevelId)}
+                  >
+                    {TIERS.map((t) => (
+                      <option key={t} value={t}>
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
                 {level ? (
                   <>
                     <p className="text-sm opacity-70">{level.tagline}</p>
+                    <ul className="space-y-0.5 text-xs opacity-80">
+                      {level.coverages.slice(0, 6).map((line) => (
+                        <li key={line}>• {line}</li>
+                      ))}
+                    </ul>
                     <div className="flex flex-wrap gap-2">
                       {level.bands.map((b) => (
                         <button
@@ -300,6 +307,12 @@ export default function ContractPlansSettingsPage() {
                         >
                           {b.label}{" "}
                           <span className="opacity-70 font-normal">({formatBandRange(b)})</span>
+                          {b.thresholds.extras.max_units_covered != null ? (
+                            <span className="opacity-70 font-normal">
+                              {" "}
+                              · {String(b.thresholds.extras.max_units_covered)} units
+                            </span>
+                          ) : null}
                         </button>
                       ))}
                     </div>
@@ -342,6 +355,16 @@ function BandEditor({
     <div className="space-y-4 rounded-box border border-base-300 bg-base-200/30 p-4">
       <p className="font-semibold">
         {band.label} band · from {formatMoney(t.annual_price)}/yr
+        {t.extras.max_units_covered != null ? (
+          <span className="font-normal opacity-70">
+            {" "}
+            · up to {String(t.extras.max_units_covered)} pieces of equipment
+          </span>
+        ) : null}
+      </p>
+      <p className="text-xs opacity-60">
+        Edit <code className="text-xs">max_units_covered</code> in extras below to change the unit
+        cap for this band.
       </p>
       <div className="grid gap-3 sm:grid-cols-3">
         <FormRow label="Band label">
