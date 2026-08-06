@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Profile } from "@/lib/types";
 import { TechnicianMyDay } from "@/components/technician/TechnicianMyDay";
 import TechnicianSchedulePage from "./TechnicianSchedulePage";
 
-export default function TechnicianPage() {
+function TechnicianPageInner() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
@@ -47,4 +47,19 @@ export default function TechnicianPage() {
   }
 
   return <TechnicianSchedulePage />;
+}
+
+export default function TechnicianPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-4 p-2">
+          <div className="skeleton h-10 w-48" />
+          <div className="skeleton h-40 w-full rounded-2xl" />
+        </div>
+      }
+    >
+      <TechnicianPageInner />
+    </Suspense>
+  );
 }

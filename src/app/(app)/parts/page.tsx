@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -9,8 +9,9 @@ import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
 import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
+import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
 import { formatMoney, formatPct } from "@/lib/calculations";
-import type { Part, Profile, TechPartOrderRequest, TruckInventory, WorkOrder } from "@/lib/types";
+import type { Part, Profile, TechPartOrderRequest, WorkOrder } from "@/lib/types";
 
 type PartForm = {
   part_number: string;
@@ -49,7 +50,6 @@ type FilterColumn =
   | "margin"
   | "status";
 
-type TruckStockRow = TruckInventory & { parts?: Part };
 type PurchaseOrderRow = TechPartOrderRequest & {
   parts?: Pick<Part, "id" | "part_number" | "name" | "quantity_on_hand"> | null;
   technician?: Pick<Profile, "id" | "full_name" | "email"> | null;
@@ -112,7 +112,6 @@ export default function PartsPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [parts, setParts] = useState<Part[]>([]);
-  const [truckStock, setTruckStock] = useState<TruckStockRow[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
   const [managerPos, setManagerPos] = useState<PurchaseOrderRow[]>([]);
   const [jobs, setJobs] = useState<JobOption[]>([]);
@@ -152,30 +151,21 @@ export default function PartsPage() {
   const isManager = profile?.role === "service_manager";
 
   async function loadTechnicianData(technicianId: string) {
-    const [{ data: stock, error: stockError }, { data: requests }, { data: assignedJobs }] =
-      await Promise.all([
-        supabase
-          .from("truck_inventory")
-          .select("*, parts(*)")
-          .eq("technician_id", technicianId)
-          .gt("quantity_on_hand", 0)
-          .order("quantity_on_hand"),
-        supabase
-          .from("purchase_orders")
-          .select("*, parts(part_number, name)")
-          .eq("technician_id", technicianId)
-          .neq("status", "fulfilled")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("work_orders")
-          .select("id, work_order_number, problem_description")
-          .eq("assigned_technician_id", technicianId)
-          .neq("status", "Canceled")
-          .order("scheduled_date", { ascending: false }),
-      ]);
+    const [{ data: requests }, { data: assignedJobs }] = await Promise.all([
+      supabase
+        .from("purchase_orders")
+        .select("*, parts(part_number, name)")
+        .eq("technician_id", technicianId)
+        .neq("status", "fulfilled")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("work_orders")
+        .select("id, work_order_number, problem_description")
+        .eq("assigned_technician_id", technicianId)
+        .neq("status", "Canceled")
+        .order("scheduled_date", { ascending: false }),
+    ]);
 
-    if (stockError) setError(stockError.message);
-    setTruckStock((stock as TruckStockRow[]) ?? []);
     setPurchaseOrders((requests as PurchaseOrderRow[]) ?? []);
     setJobs((assignedJobs as JobOption[]) ?? []);
   }
@@ -405,10 +395,10 @@ export default function PartsPage() {
       >
         <option value="">All</option>
         <option value="__sort_asc">
-          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
+          Sort Aâ€“Z{sortingThis && sort.direction === "asc" ? " âœ“" : ""}
         </option>
         <option value="__sort_desc">
-          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
+          Sort Zâ€“A{sortingThis && sort.direction === "desc" ? " âœ“" : ""}
         </option>
         {options.map((opt) => (
           <option key={opt} value={opt}>
@@ -632,7 +622,7 @@ export default function PartsPage() {
       action: "bulk_reorder_level",
       recordType: "part",
       recordId: ids[0],
-      newValue: `${ids.length} parts → reorder ${value}`,
+      newValue: `${ids.length} parts â†’ reorder ${value}`,
     });
     setBulkSelected(new Set());
     setBulkReorderValue("");
@@ -710,7 +700,6 @@ export default function PartsPage() {
     setError(null);
     const qty = Number(row.quantity_requested);
     const partId = row.part_id;
-    const techId = row.technician_id;
     const warehouseQty = row.parts?.quantity_on_hand ?? parts.find((p) => p.id === partId)?.quantity_on_hand ?? 0;
 
     if (warehouseQty < qty) {
@@ -725,44 +714,6 @@ export default function PartsPage() {
       data: { user },
     } = await supabase.auth.getUser();
     const now = new Date().toISOString();
-
-    const { data: existingTruck } = await supabase
-      .from("truck_inventory")
-      .select("*")
-      .eq("technician_id", techId)
-      .eq("part_id", partId)
-      .maybeSingle();
-
-    if (existingTruck) {
-      const { error: truckError } = await supabase
-        .from("truck_inventory")
-        .update({
-          quantity_on_hand: Number(existingTruck.quantity_on_hand) + qty,
-          last_restocked_at: now,
-          updated_at: now,
-        })
-        .eq("technician_id", techId)
-        .eq("part_id", partId);
-      if (truckError) {
-        setError(truckError.message);
-        setPoBusyId(null);
-        return;
-      }
-    } else {
-      const { error: truckError } = await supabase.from("truck_inventory").insert({
-        technician_id: techId,
-        part_id: partId,
-        quantity_on_hand: qty,
-        typical_job_quantity: 2,
-        last_restocked_at: now,
-        updated_at: now,
-      });
-      if (truckError) {
-        setError(truckError.message);
-        setPoBusyId(null);
-        return;
-      }
-    }
 
     const nextWarehouse = Math.max(0, warehouseQty - qty);
     const { error: partError } = await supabase
@@ -793,10 +744,10 @@ export default function PartsPage() {
       action: "purchase_order_fulfilled",
       recordType: "purchase_order",
       recordId: row.id,
-      newValue: `${row.parts?.part_number ?? partId} × ${qty}`,
+      newValue: `${row.parts?.part_number ?? partId} Ã— ${qty}`,
     });
     await loadManagerPos();
-    setSuccess("Purchase order fulfilled — truck stocked and warehouse reduced.");
+    setSuccess("Purchase order fulfilled â€” warehouse stock reduced.");
     setPoBusyId(null);
   }
 
@@ -833,7 +784,7 @@ export default function PartsPage() {
   ];
 
   if (loading) {
-    return <div className="p-8 text-center opacity-60">Loading inventory…</div>;
+    return <div className="p-8 text-center opacity-60">Loading inventoryâ€¦</div>;
   }
 
   if (!profile) {
@@ -844,155 +795,21 @@ export default function PartsPage() {
 
   if (profile?.role === "technician") {
     return (
-      <div>
-        <PageHeader
-          title="My truck inventory"
-          description="Parts currently on your truck"
-          actions={
-            <>
-              <button
-                type="button"
-                className="btn btn-primary min-h-12"
-                onClick={() => {
-                  setSuccess(null);
-                  setShowPurchaseOrder(true);
-                }}
-              >
-                Request purchase order
-              </button>
-              <button
-                type="button"
-                className="btn btn-warning min-h-12"
-                onClick={() => {
-                  setSuccess(null);
-                  setShowEmergencyPurchase(true);
-                }}
-              >
-                I bought a part today
-              </button>
-            </>
-          }
-        />
-
-        {success ? (
-          <div role="status" className="alert alert-success mb-4">
-            <span>{success}</span>
-          </div>
-        ) : null}
-        {error ? (
-          <div role="alert" className="alert alert-error mb-4">
-            <span>{error}</span>
-          </div>
-        ) : null}
-
-        <div className="card bg-base-100 shadow">
-          <div className="card-body p-0">
-            {truckStock.length === 0 ? (
-              <div className="p-6">
-                <EmptyState
-                  title="No parts currently on your truck"
-                  description="Request a purchase order for planned restocking, or log an emergency purchase made today."
-                />
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Part #</th>
-                      <th>Name</th>
-                      <th>Qty on truck</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {truckStock.map((stock) => {
-                      const quantity = Number(stock.quantity_on_hand);
-                      const typical = Number(stock.typical_job_quantity);
-                      const status =
-                        quantity === 0
-                          ? { label: "Out", tone: "error" as const }
-                          : quantity <= typical
-                            ? { label: "Low", tone: "warning" as const }
-                            : { label: "Sufficient", tone: "success" as const };
-                      return (
-                        <tr key={`${stock.technician_id}-${stock.part_id}`}>
-                          <td>{stock.parts?.part_number ?? "—"}</td>
-                          <td className="font-medium">{stock.parts?.name ?? "Unknown part"}</td>
-                          <td className="text-lg font-semibold">{quantity}</td>
-                          <td>
-                            <StatusBadge label={status.label} tone={status.tone} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="card mt-5 bg-base-100 shadow">
-          <div className="card-body">
-            <h2 className="card-title text-lg">Pending requests</h2>
-            {purchaseOrders.length === 0 ? (
-              <p className="text-sm opacity-60">No open purchase-order requests.</p>
-            ) : (
-              <ul className="space-y-3">
-                {purchaseOrders.map((request) => (
-                  <li
-                    key={request.id}
-                    className="flex flex-col gap-2 rounded-box bg-base-200 p-4 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-semibold">
-                        {request.parts?.part_number ?? "Part"} —{" "}
-                        {request.parts?.name ?? "Catalog item"}
-                      </p>
-                      <p className="text-sm opacity-70">
-                        Qty {request.quantity_requested}
-                        {request.note ? ` · ${request.note}` : ""}
-                      </p>
-                    </div>
-                    <StatusBadge
-                      label={request.status}
-                      tone={request.status === "approved" ? "info" : "warning"}
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
-        {showPurchaseOrder ? (
-          <PurchaseOrderRequest
-            technicianId={profile.id}
-            parts={parts.filter((part) => part.is_active)}
-            onClose={() => setShowPurchaseOrder(false)}
-            onSubmitted={async () => {
-              setShowPurchaseOrder(false);
-              setSuccess("Purchase-order request submitted");
-              await loadTechnicianData(profile.id);
-            }}
-          />
-        ) : null}
-
-        {showEmergencyPurchase ? (
-          <EmergencyPurchaseLog
-            technicianId={profile.id}
-            parts={parts.filter((part) => part.is_active)}
-            jobs={jobs}
-            onClose={() => setShowEmergencyPurchase(false)}
-            onSubmitted={async () => {
-              setShowEmergencyPurchase(false);
-              setSuccess("Emergency purchase logged and truck inventory updated");
-              await loadTechnicianData(profile.id);
-            }}
-          />
-        ) : null}
-      </div>
+      <TechnicianPartsHub
+        profile={profile}
+        parts={parts}
+        purchaseOrders={purchaseOrders}
+        jobs={jobs}
+        success={success}
+        error={error}
+        onDismissMessages={() => {
+          setSuccess(null);
+          setError(null);
+        }}
+        onReloadTechData={async () => {
+          await loadTechnicianData(profile.id);
+        }}
+      />
     );
   }
 
@@ -1045,7 +862,7 @@ export default function PartsPage() {
           aria-pressed={lowStockOnly}
         >
           <span>
-            {lowStockCount} part(s) at or below reorder level — click to{" "}
+            {lowStockCount} part(s) at or below reorder level â€” click to{" "}
             {lowStockOnly ? "clear" : "filter"}
           </span>
         </button>
@@ -1059,7 +876,7 @@ export default function PartsPage() {
         <section className="card mb-4 bg-base-100 shadow">
           <div className="card-body">
             <h2 className="card-title text-base">
-              Truck restock requests
+              Restock requests
               <span className="badge badge-warning">{managerPos.length}</span>
             </h2>
             <ul className="space-y-3">
@@ -1070,14 +887,14 @@ export default function PartsPage() {
                 >
                   <div>
                     <p className="font-semibold">
-                      {row.parts?.part_number ?? "Part"} — {row.parts?.name ?? "Catalog item"}
+                      {row.parts?.part_number ?? "Part"} â€” {row.parts?.name ?? "Catalog item"}
                     </p>
                     <p className="text-sm opacity-70">
-                      Qty {row.quantity_requested} · {techLabel(row.technician)}
-                      {row.note ? ` · ${row.note}` : ""}
+                      Qty {row.quantity_requested} Â· {techLabel(row.technician)}
+                      {row.note ? ` Â· ${row.note}` : ""}
                     </p>
                     <p className="text-xs opacity-60">
-                      Warehouse on hand: {row.parts?.quantity_on_hand ?? "—"}
+                      Warehouse on hand: {row.parts?.quantity_on_hand ?? "â€”"}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1101,7 +918,7 @@ export default function PartsPage() {
                       disabled={poBusyId === row.id}
                       onClick={() => void fulfillPo(row)}
                     >
-                      {poBusyId === row.id ? "Working…" : "Fulfill"}
+                      {poBusyId === row.id ? "Workingâ€¦" : "Fulfill"}
                     </button>
                     {row.parts?.id ? (
                       <Link href={`/parts/${row.parts.id}`} className="btn btn-ghost btn-xs">
@@ -1212,7 +1029,7 @@ export default function PartsPage() {
               className="input input-bordered input-sm w-full"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Part #, name, category, supplier…"
+              placeholder="Part #, name, category, supplierâ€¦"
               aria-label="Search parts"
             />
           </label>
@@ -1324,7 +1141,7 @@ export default function PartsPage() {
                               {header.label}
                               {sort.key === header.key ? (
                                 <span aria-hidden="true">
-                                  {sort.direction === "asc" ? "▲" : "▼"}
+                                  {sort.direction === "asc" ? "â–²" : "â–¼"}
                                 </span>
                               ) : null}
                             </button>
@@ -1483,8 +1300,8 @@ export default function PartsPage() {
                           </td>
                           {isManager ? (
                             <>
-                              <td className="align-top">{p.category ?? "—"}</td>
-                              <td className="align-top">{p.supplier ?? "—"}</td>
+                              <td className="align-top">{p.category ?? "â€”"}</td>
+                              <td className="align-top">{p.supplier ?? "â€”"}</td>
                             </>
                           ) : null}
                           <td className="align-top">
