@@ -16,6 +16,11 @@ import {
   type ContractTierId,
   type CustomerContract,
 } from "@/lib/contracts";
+import {
+  DEFAULT_CUSTOMER_PACK_ID,
+  listActivePacks,
+  loadCatalog,
+} from "@/lib/contract-plans";
 import type { Equipment, Profile } from "@/lib/types";
 
 export default function RequestContractPage() {
@@ -25,6 +30,7 @@ export default function RequestContractPage() {
   const [customerName, setCustomerName] = useState("Customer");
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
+  const [selectedPackId, setSelectedPackId] = useState(DEFAULT_CUSTOMER_PACK_ID);
   const [selectedTier, setSelectedTier] = useState<ContractTierId>("silver");
   const [tiersCollapsed, setTiersCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -63,9 +69,17 @@ export default function RequestContractPage() {
       const parsed = parseCustomerContracts(sc ?? []);
       setContracts(parsed);
 
+      const packs = listActivePacks(loadCatalog());
       const draft = loadContractDraft(p.customer_id);
       const activeContractCount = parsed.filter((c) => contractFilterTab(c, "active")).length;
       const recommended = suggestTier(equipmentList.length, activeContractCount > 0);
+
+      const draftPack =
+        draft?.packId && packs.some((x) => x.id === draft.packId)
+          ? draft.packId
+          : packs[0]?.id ?? DEFAULT_CUSTOMER_PACK_ID;
+      setSelectedPackId(draftPack);
+
       if (draft?.tierId) {
         setSelectedTier(draft.tierId);
         setTiersCollapsed(true);
@@ -102,7 +116,7 @@ export default function RequestContractPage() {
     <div>
       <PageHeader
         title="Request a Service Contract"
-        description="Choose your coverage level, tell us what to protect, and submit for Ridley's review—pricing confirmed before activation."
+        description="Choose your industry and coverage level, tell us what to protect, and submit for Ridley's review—pricing confirmed before activation."
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
@@ -121,9 +135,14 @@ export default function RequestContractPage() {
       </div>
 
       <ContractTierCards
+        selectedPackId={selectedPackId}
         selectedTier={selectedTier}
         recommendedTier={recommendedTier}
         collapsed={tiersCollapsed}
+        onSelectPack={(packId) => {
+          setSelectedPackId(packId);
+          setTiersCollapsed(false);
+        }}
         onSelectTier={(tierId) => {
           setSelectedTier(tierId);
         }}
@@ -141,6 +160,7 @@ export default function RequestContractPage() {
               equipment={equipment}
               activeContracts={contracts}
               selectedTier={selectedTier}
+              selectedPackId={selectedPackId}
               onSuccess={({ id }) => {
                 router.push(`/customer/contracts?filter=pending&highlight=${id}`);
               }}

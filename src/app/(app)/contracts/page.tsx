@@ -10,6 +10,16 @@ import { ClickableStatCard } from "@/components/ClickableStatCard";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
 import type { Customer, Profile, ServiceContract } from "@/lib/types";
+import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
+import {
+  contractMatchesPlanFilters,
+  listActivePacks,
+  loadCatalog,
+  packGoldMidPrice,
+  parsePlanSnapshotFromNotes,
+  type ServiceLevelId,
+} from "@/lib/contract-plans";
+import { ClipboardList } from "lucide-react";
 
 type ContractRow = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -32,6 +42,13 @@ const emptyContractForm = {
   contract_price: "0",
   included_service_visits: "4",
   included_labor_hours: "8",
+  included_replacement_parts: "0",
+  service_frequency: "Quarterly",
+  emergency_response_commitment: "Next business day",
+  payment_terms: "Net 30",
+  renewal_option: "Manual renewal",
+  approval_requirements: "",
+  notes: "",
   status: "Draft",
 };
 
@@ -78,9 +95,19 @@ export default function ContractsPage() {
   }>({ column: "name", direction: "asc" });
   const [approvePrices, setApprovePrices] = useState<Record<string, string>>({});
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [planIndustry, setPlanIndustry] = useState<"all" | "unlabeled" | string>("all");
+  const [planTier, setPlanTier] = useState<"all" | ServiceLevelId>("all");
+  const [planPacks, setPlanPacks] = useState(() =>
+    typeof window !== "undefined" ? listActivePacks(loadCatalog()) : [],
+  );
 
   const isManager =
     profile?.role === "service_manager" || profile?.role === "administrator";
+  const isAdmin = profile?.role === "administrator";
+
+  useEffect(() => {
+    setPlanPacks(listActivePacks(loadCatalog()));
+  }, []);
 
   useEffect(() => {
     setFilters((prev) => ({ ...prev, status: statusFromUrl }));
@@ -134,6 +161,7 @@ export default function ContractsPage() {
       if (filters.price && formatMoney(c.contract_price) !== filters.price) return false;
       if (filters.status && c.status !== filters.status) return false;
       if (filters.end && c.end_date !== filters.end) return false;
+      if (!contractMatchesPlanFilters(c.notes, planIndustry, planTier)) return false;
       return true;
     });
 
@@ -163,12 +191,17 @@ export default function ContractsPage() {
       const cmp = valueFor(a).localeCompare(valueFor(b), undefined, { sensitivity: "base" });
       return sort.direction === "asc" ? cmp : -cmp;
     });
-  }, [contracts, filters, sort]);
+  }, [contracts, filters, sort, planIndustry, planTier]);
 
-  const hasActiveFilters = Object.values(filters).some((v) => v.trim() !== "");
+  const hasActiveFilters =
+    Object.values(filters).some((v) => v.trim() !== "") ||
+    planIndustry !== "all" ||
+    planTier !== "all";
 
   function clearFilters() {
     setFilters({ name: "", customer: "", type: "", price: "", status: "", end: "" });
+    setPlanIndustry("all");
+    setPlanTier("all");
     if (searchParams.toString()) {
       router.replace(pathname);
     }
@@ -279,10 +312,23 @@ export default function ContractsPage() {
       data: { user },
     } = await supabase.auth.getUser();
     const payload = {
-      ...form,
+      customer_id: form.customer_id,
+      name: form.name,
+      contract_type: form.contract_type,
+      start_date: form.start_date,
+      end_date: form.end_date,
+      billing_method: form.billing_method,
       contract_price: Number(form.contract_price),
       included_service_visits: Number(form.included_service_visits),
       included_labor_hours: Number(form.included_labor_hours),
+      included_replacement_parts: Number(form.included_replacement_parts) || 0,
+      service_frequency: form.service_frequency || null,
+      emergency_response_commitment: form.emergency_response_commitment || null,
+      payment_terms: form.payment_terms || null,
+      renewal_option: form.renewal_option || null,
+      approval_requirements: form.approval_requirements || null,
+      notes: form.notes || null,
+      status: form.status,
       created_by: user?.id ?? null,
     };
     const { data, error: insertError } = await supabase
@@ -442,6 +488,98 @@ export default function ContractsPage() {
         }
       />
 
+      {isManager ? (
+        <div className="mb-6 card bg-base-100 shadow">
+          <div className="card-body gap-4 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <ClipboardList className="mt-0.5 h-5 w-5 shrink-0 opacity-70" />
+                <div>
+                  <p className="font-semibold">Contract plans</p>
+                  <p className="text-sm opacity-70">
+                    Browse industry packs and filter the list by plan tag (industry × Gold/Silver/Bronze).
+                  </p>
+                </div>
+              </div>
+              {isAdmin ? (
+                <Link href="/settings/contract-plans" className="btn btn-outline btn-sm gap-1">
+                  <ClipboardList className="h-4 w-4" /> Edit plans
+                </Link>
+              ) : null}
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              {planPacks.map((pack) => (
+                <button
+                  key={pack.id}
+                  type="button"
+                  className={`rounded-box border px-3 py-2 text-left text-sm transition ${
+                    planIndustry === pack.id
+                      ? "border-primary bg-primary/10"
+                      : "border-base-300 bg-base-200/40 hover:border-primary/40"
+                  }`}
+                  onClick={() =>
+                    setPlanIndustry((prev) => (prev === pack.id ? "all" : pack.id))
+                  }
+                >
+                  <span className="font-medium">{pack.name}</span>
+                  <span className="mt-0.5 block text-xs opacity-60">
+                    Gold Mid from {formatMoney(packGoldMidPrice(pack))}/yr
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="form-control w-full max-w-xs">
+                <span className="label-text text-xs">Filter by industry</span>
+                <select
+                  className="select select-bordered select-sm"
+                  value={planIndustry}
+                  onChange={(e) => setPlanIndustry(e.target.value)}
+                >
+                  <option value="all">All industries</option>
+                  <option value="unlabeled">Unlabeled (no plan tag)</option>
+                  {planPacks.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-control w-full max-w-xs">
+                <span className="label-text text-xs">Filter by level</span>
+                <select
+                  className="select select-bordered select-sm"
+                  value={planTier}
+                  onChange={(e) => setPlanTier(e.target.value as "all" | ServiceLevelId)}
+                >
+                  <option value="all">All levels</option>
+                  <option value="gold">Gold</option>
+                  <option value="silver">Silver</option>
+                  <option value="bronze">Bronze</option>
+                </select>
+              </label>
+              {planIndustry !== "all" || planTier !== "all" ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setPlanIndustry("all");
+                    setPlanTier("all");
+                  }}
+                >
+                  Clear plan filters
+                </button>
+              ) : null}
+              <p className="pb-1 text-xs opacity-60">
+                Showing {filteredContracts.length} of {contracts.length} contracts
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         {isManager ? (
           <>
@@ -489,6 +627,20 @@ export default function ContractsPage() {
             <h3 className="text-lg font-bold">New Contract</h3>
             {error ? <div className="alert alert-error mt-3 text-sm">{error}</div> : null}
             <form onSubmit={onCreate} className="mt-4 space-y-3">
+              {isManager ? (
+                <ApplyContractPlanPreset
+                  form={form}
+                  compact
+                  updateName
+                  customerName={
+                    customers.find((c) => c.id === form.customer_id)?.name ||
+                    customerForm.name.trim() ||
+                    undefined
+                  }
+                  onApply={(next) => setForm(next)}
+                />
+              ) : null}
+
               <FormRow label="Customer" required>
                 <select
                   className="select select-bordered w-full"
@@ -848,13 +1000,23 @@ export default function ContractsPage() {
                       <tr key={c.id}>
                         <td className="align-top">
                           {isManager ? (
-                            <Link
-                              href={`/contracts/${c.id}`}
-                              className="link link-primary font-medium break-words"
-                              aria-label={`Open contract ${c.name}`}
-                            >
-                              {c.name}
-                            </Link>
+                            <>
+                              <Link
+                                href={`/contracts/${c.id}`}
+                                className="link link-primary font-medium break-words"
+                                aria-label={`Open contract ${c.name}`}
+                              >
+                                {c.name}
+                              </Link>
+                              {parsePlanSnapshotFromNotes(c.notes) ? (
+                                <p className="mt-0.5 text-[11px] opacity-60">
+                                  {(() => {
+                                    const snap = parsePlanSnapshotFromNotes(c.notes)!;
+                                    return `${snap.packName} · ${snap.tierName} · ${snap.bandLabel}`;
+                                  })()}
+                                </p>
+                              ) : null}
+                            </>
                           ) : (
                             <span className="font-medium break-words">{c.name}</span>
                           )}

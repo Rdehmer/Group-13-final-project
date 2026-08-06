@@ -9,6 +9,12 @@ import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import type { Customer, Profile, ServiceContract } from "@/lib/types";
+import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
+import {
+  parsePlanSnapshotFromNotes,
+  resolvePackIdFromSnapshot,
+  sumEquipmentAssetValue,
+} from "@/lib/contract-plans";
 
 type ContractDetail = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -16,6 +22,7 @@ type CoveredEquipment = {
   id: string;
   name: string;
   location: string | null;
+  replacement_cost?: number | null;
 };
 
 /**
@@ -68,7 +75,7 @@ export default function ContractDetailPage() {
       supabase.auth.getUser(),
       supabase
         .from("contract_equipment")
-        .select("equipment ( id, name, location )")
+        .select("equipment ( id, name, location, replacement_cost )")
         .eq("contract_id", id),
     ]);
     const sc = data as ContractDetail | null;
@@ -298,7 +305,8 @@ export default function ContractDetailPage() {
             <div className="rounded-box border border-warning/40 bg-warning/5 p-4">
               <p className="font-medium">Customer request awaiting approval</p>
               <p className="mt-1 text-sm opacity-70">
-                Set the annual/contract price below, then Approve to activate or Reject to cancel.
+                Apply an industry plan preset (or set price manually), then Approve to activate or
+                Reject to cancel.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
@@ -318,6 +326,35 @@ export default function ContractDetailPage() {
                   Reject request
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {isManager ? (
+            <ApplyContractPlanPreset
+              form={form}
+              suggestedAssetValue={sumEquipmentAssetValue(equipment)}
+              customerName={customers.find((c) => c.id === form.customer_id)?.name}
+              updateName={false}
+              initialPackId={
+                (() => {
+                  const snap = parsePlanSnapshotFromNotes(form.notes || contract.notes);
+                  return snap ? resolvePackIdFromSnapshot(snap) : null;
+                })()
+              }
+              initialTierId={
+                parsePlanSnapshotFromNotes(form.notes || contract.notes)?.tierId ?? null
+              }
+              onApply={(next) => setForm(next)}
+            />
+          ) : null}
+
+          {parsePlanSnapshotFromNotes(form.notes || contract.notes) ? (
+            <div className="badge badge-outline badge-lg gap-1">
+              Plan:{" "}
+              {(() => {
+                const snap = parsePlanSnapshotFromNotes(form.notes || contract.notes)!;
+                return `${snap.packName} · ${snap.tierName} · ${snap.bandLabel}`;
+              })()}
             </div>
           ) : null}
 

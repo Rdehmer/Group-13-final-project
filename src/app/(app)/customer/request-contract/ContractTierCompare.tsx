@@ -1,19 +1,21 @@
 "use client";
 
-import { CONTRACT_TIERS, type ContractTierId } from "@/lib/contracts";
+import { listContractTiersForUi, type ContractTierId } from "@/lib/contracts";
 
 type Props = {
   recommendedTier: ContractTierId;
+  packId: string;
 };
 
-export function ContractTierCompare({ recommendedTier }: Props) {
+export function ContractTierCompare({ recommendedTier, packId }: Props) {
+  const tiers = listContractTiersForUi(packId);
   return (
     <div className="overflow-x-auto rounded-box border border-base-300">
       <table className="table table-sm">
         <thead>
           <tr>
             <th>Feature</th>
-            {CONTRACT_TIERS.map((tier) => (
+            {tiers.map((tier) => (
               <th key={tier.id} className="text-center">
                 {tier.name}
                 {tier.id === recommendedTier ? (
@@ -26,7 +28,7 @@ export function ContractTierCompare({ recommendedTier }: Props) {
         <tbody>
           <tr>
             <td>Visits / year</td>
-            {CONTRACT_TIERS.map((tier) => (
+            {tiers.map((tier) => (
               <td key={tier.id} className="text-center">
                 {tier.formDefaults.included_service_visits ?? "—"}
               </td>
@@ -34,7 +36,7 @@ export function ContractTierCompare({ recommendedTier }: Props) {
           </tr>
           <tr>
             <td>Frequency</td>
-            {CONTRACT_TIERS.map((tier) => (
+            {tiers.map((tier) => (
               <td key={tier.id} className="text-center">
                 {tier.formDefaults.service_frequency ?? "—"}
               </td>
@@ -42,7 +44,7 @@ export function ContractTierCompare({ recommendedTier }: Props) {
           </tr>
           <tr>
             <td>Labor hours</td>
-            {CONTRACT_TIERS.map((tier) => (
+            {tiers.map((tier) => (
               <td key={tier.id} className="text-center">
                 {tier.formDefaults.included_labor_hours ?? "—"}
               </td>
@@ -50,7 +52,7 @@ export function ContractTierCompare({ recommendedTier }: Props) {
           </tr>
           <tr>
             <td>Parts allowance</td>
-            {CONTRACT_TIERS.map((tier) => (
+            {tiers.map((tier) => (
               <td key={tier.id} className="text-center">
                 {tier.formDefaults.included_replacement_parts
                   ? `$${Number(tier.formDefaults.included_replacement_parts).toLocaleString()}`
@@ -60,11 +62,22 @@ export function ContractTierCompare({ recommendedTier }: Props) {
           </tr>
           <tr>
             <td>Emergency SLA</td>
-            {CONTRACT_TIERS.map((tier) => (
+            {tiers.map((tier) => (
               <td key={tier.id} className="text-center text-xs">
                 {tier.formDefaults.emergency_response_commitment ?? "—"}
               </td>
             ))}
+          </tr>
+          <tr>
+            <td>From (Mid band)</td>
+            {tiers.map((tier) => {
+              const priceLine = tier.coverages.find((c) => c.startsWith("From $"));
+              return (
+                <td key={tier.id} className="text-center text-xs">
+                  {priceLine?.replace(/\s*\([^)]*final price set by Ridley\)/, "") ?? "—"}
+                </td>
+              );
+            })}
           </tr>
         </tbody>
       </table>

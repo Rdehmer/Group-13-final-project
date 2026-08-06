@@ -154,6 +154,11 @@ export const NAV_ITEMS: NavItem[] = [
         label: "GL Accounts",
         roles: ["administrator"],
       },
+      {
+        href: "/settings/contract-plans",
+        label: "Contract Plans",
+        roles: ["administrator"],
+      },
     ],
   },
 ];

@@ -2,7 +2,15 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { applyInvoicePayment, type AllocatableInvoice } from "@/lib/payments";
 import { logActivity } from "@/lib/activity";
-import { decodeAllocations, getStripe, isStripeConfigured } from "@/lib/stripe";
+import {
+  decodeAllocations,
+  getDemoPaymentIntent,
+  getStripe,
+  isDemoPaymentIntentId,
+  isStripeConfigured,
+  isStripeDemoMode,
+  markDemoPaymentSucceeded,
+} from "@/lib/stripe";
 
 export const runtime = "nodejs";
 
@@ -12,11 +20,11 @@ type Body = {
 
 /**
  * POST /api/stripe/complete-payment
- * After Stripe confirms the PaymentIntent, apply amounts to invoices in Supabase.
+ * After Stripe (or local demo checkout) confirms, apply amounts to invoices in Supabase.
  */
 export async function POST(req: Request) {
   try {
-    if (!isStripeConfigured()) {
+    if (!isStripeConfigured() && !isStripeDemoMode()) {
       return NextResponse.json({ error: "Stripe is not configured." }, { status: 503 });
     }
 
@@ -42,6 +50,95 @@ export async function POST(req: Request) {
 
     if (!profile?.customer_id) {
       return NextResponse.json({ error: "No customer account linked." }, { status: 403 });
+    }
+
+    if (isDemoPaymentIntentId(paymentIntentId)) {
+      if (!isStripeDemoMode()) {
+        return NextResponse.json({ error: "Demo payments are disabled." }, { status: 503 });
+      }
+
+      const demo = getDemoPaymentIntent(paymentIntentId);
+      if (!demo) {
+        return NextResponse.json(
+          { error: "Demo payment expired. Start checkout again." },
+          { status: 400 },
+        );
+      }
+      if (demo.userId !== user.id || demo.customerId !== profile.customer_id) {
+        return NextResponse.json({ error: "Payment does not belong to this user." }, { status: 403 });
+      }
+
+      markDemoPaymentSucceeded(paymentIntentId);
+
+      const methodLabel = "Demo card ···· 4242";
+      const reference = demo.id;
+      const memo = demo.memo;
+      const paymentNumbers: string[] = [];
+      const invoiceLabels: string[] = [];
+      let totalPaid = 0;
+
+      for (const alloc of demo.allocations) {
+        const { data: inv, error: invErr } = await supabase
+          .from("invoices")
+          .select(
+            "id, invoice_number, remaining_balance, amount_paid, invoice_total, due_date, customer_id, status",
+          )
+          .eq("id", alloc.invoiceId)
+          .eq("customer_id", profile.customer_id)
+          .maybeSingle();
+
+        if (invErr || !inv) {
+          return NextResponse.json(
+            { error: invErr?.message ?? `Invoice ${alloc.invoiceId} not found.` },
+            { status: 400 },
+          );
+        }
+
+        const invRow = inv as AllocatableInvoice;
+        const result = await applyInvoicePayment(supabase, {
+          invoiceId: invRow.id,
+          customerId: profile.customer_id,
+          invoiceTotal: Number(invRow.invoice_total),
+          amountPaidSoFar: Number(invRow.amount_paid),
+          remaining: Number(invRow.remaining_balance),
+          amount: alloc.amount,
+          paymentMethod: methodLabel,
+          referenceNumber: reference,
+          notes: memo || `Demo portal payment ${demo.id}`,
+          userId: user.id,
+        });
+
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: 400 });
+        }
+
+        paymentNumbers.push(result.paymentNumber);
+        invoiceLabels.push(invRow.invoice_number);
+        totalPaid += alloc.amount;
+
+        await logActivity(supabase, {
+          userId: user.id,
+          action: "demo_stripe_payment",
+          recordType: "payment",
+          recordId: invRow.id,
+          newValue: `${result.paymentNumber}|${demo.id}`,
+        });
+      }
+
+      return NextResponse.json({
+        ok: true,
+        demo: true,
+        paymentIntentId: demo.id,
+        paymentNumbers,
+        invoiceLabels,
+        totalPaid: Math.round(totalPaid * 100) / 100,
+        method: methodLabel,
+        paidAt: new Date().toISOString(),
+      });
+    }
+
+    if (!isStripeConfigured()) {
+      return NextResponse.json({ error: "Stripe is not configured." }, { status: 503 });
     }
 
     const stripe = getStripe();
@@ -105,7 +202,6 @@ export async function POST(req: Request) {
       }
 
       const invRow = inv as AllocatableInvoice;
-      // Re-read current balance; allow idempotent re-apply via reference
       const result = await applyInvoicePayment(supabase, {
         invoiceId: invRow.id,
         customerId: profile.customer_id,
@@ -120,8 +216,6 @@ export async function POST(req: Request) {
       });
 
       if (!result.ok) {
-        // if balance already reduced by concurrent apply but ref exists, ok path covered
-        // when amount > remaining because already applied partially without ref — surface error
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
 
@@ -140,6 +234,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
+      demo: false,
       paymentIntentId: intent.id,
       paymentNumbers,
       invoiceLabels,

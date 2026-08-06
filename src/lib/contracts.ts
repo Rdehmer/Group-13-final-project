@@ -1,4 +1,13 @@
 import type { ServiceContract } from "@/lib/types";
+import {
+  DEFAULT_CUSTOMER_PACK_ID,
+  formatPlanSnapshot,
+  getCatalogDrivenTier,
+  getPack,
+  listCatalogDrivenTiers,
+  mergePlanSnapshotIntoNotes,
+  resolvePlan,
+} from "@/lib/contract-plans";
 
 export const CONTRACT_TYPES = [
   "Preventive Maintenance",
@@ -160,17 +169,36 @@ export const CONTRACT_TIERS: ContractTier[] = [
   },
 ];
 
-export function getContractTier(tierId: ContractTierId): ContractTier {
+export function getContractTier(tierId: ContractTierId, packId?: string): ContractTier {
+  if (typeof window !== "undefined") {
+    try {
+      return getCatalogDrivenTier(tierId, packId ?? DEFAULT_CUSTOMER_PACK_ID) as ContractTier;
+    } catch {
+      /* fall through to static */
+    }
+  }
   const tier = CONTRACT_TIERS.find((t) => t.id === tierId);
   if (!tier) throw new Error(`Unknown contract tier: ${tierId}`);
   return tier;
 }
 
+export function listContractTiersForUi(packId?: string): ContractTier[] {
+  if (typeof window !== "undefined") {
+    try {
+      return listCatalogDrivenTiers(packId ?? DEFAULT_CUSTOMER_PACK_ID) as ContractTier[];
+    } catch {
+      /* fall through */
+    }
+  }
+  return CONTRACT_TIERS;
+}
+
 export function applyTierToFormState(
   tierId: ContractTierId,
   form: ContractRequestFormState,
+  packId?: string,
 ): ContractRequestFormState {
-  const tier = getContractTier(tierId);
+  const tier = getContractTier(tierId, packId);
   return {
     ...form,
     ...tier.formDefaults,
@@ -227,15 +255,19 @@ export function makeRequestCode(): string {
 export function buildCustomerRequestContractName(input: {
   customerName: string;
   tierId?: ContractTierId;
+  packId?: string;
   startDate: string;
   requestCode?: string;
 }): string {
   const customer = input.customerName.trim() || "Customer";
-  const tier = input.tierId ? getContractTier(input.tierId).name : "Custom";
+  const pack = input.packId ? getPack(input.packId) : null;
+  const packLabel = pack?.name;
+  const tier = input.tierId ? getContractTier(input.tierId, input.packId).name : "Custom";
   const date =
     input.startDate.slice(0, 10) || new Date().toISOString().slice(0, 10);
   const code = (input.requestCode ?? makeRequestCode()).toUpperCase();
-  return `[Request] ${customer} · ${tier} · ${date} · REQ-${code}`;
+  const middle = packLabel ? `${packLabel} · ${tier}` : tier;
+  return `[Request] ${customer} · ${middle} · ${date} · REQ-${code}`;
 }
 
 type BuildSubmissionInput = {
@@ -244,15 +276,38 @@ type BuildSubmissionInput = {
   userId: string | null;
   form: ContractRequestFormState;
   tierId?: ContractTierId;
+  packId?: string;
+  /** Covered asset value for plan band snapshot (defaults Mid-ish $100k). */
+  assetValue?: number;
 };
 
 export function buildContractSubmission(input: BuildSubmissionInput) {
-  const { customerId, customerName, userId, form, tierId } = input;
+  const { customerId, customerName, userId, form, tierId, packId } = input;
+  const assetValue =
+    input.assetValue != null && Number.isFinite(input.assetValue) && input.assetValue > 0
+      ? input.assetValue
+      : 100_000;
+
+  let notes = form.notes || null;
+  if (packId && tierId) {
+    const resolved = resolvePlan(packId, tierId, assetValue);
+    if (resolved) {
+      const tag = formatPlanSnapshot({
+        pack: resolved.pack,
+        level: resolved.level,
+        band: resolved.band,
+        assetValue: resolved.assetValue,
+      });
+      notes = mergePlanSnapshotIntoNotes(notes, tag);
+    }
+  }
+
   return {
     customer_id: customerId,
     name: buildCustomerRequestContractName({
       customerName,
       tierId,
+      packId,
       startDate: form.start_date,
     }),
     contract_type: form.contract_type,
@@ -271,7 +326,7 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
     cancellation_terms: null,
     approval_requirements: form.approval_requirements || null,
     status: "Pending Approval",
-    notes: form.notes || null,
+    notes,
     created_by: userId,
   };
 }
@@ -549,15 +604,18 @@ export function buildContractPreview(
   tierId: ContractTierId,
   equipment: PreviewEquipment[],
   customerName?: string,
+  packId?: string,
 ): ContractRequestPreviewData {
-  const tier = getContractTier(tierId);
+  const tier = getContractTier(tierId, packId);
   const selected = equipment.filter((eq) => form.equipment_ids.includes(eq.id));
   const visits = Number(form.included_service_visits) || 0;
   const labor = Number(form.included_labor_hours) || 0;
 
   return {
     tierName: tier.name,
-    tierTagline: tier.tagline,
+    tierTagline: packId
+      ? `${getPack(packId)?.name ?? "Industry"} · ${tier.tagline}`
+      : tier.tagline,
     contractName: contractNamePreview(form, tierId, customerName),
     contractType: form.contract_type,
     term: formatContractTerm(form.start_date, form.end_date),
@@ -579,7 +637,14 @@ export function buildContractPreview(
 
 const DRAFT_KEY_PREFIX = "esm-contract-draft-";
 
-export function saveContractDraft(customerId: string, data: { form: ContractRequestFormState; tierId: ContractTierId; step: number }) {
+export type ContractDraft = {
+  form: ContractRequestFormState;
+  tierId: ContractTierId;
+  step: number;
+  packId?: string;
+};
+
+export function saveContractDraft(customerId: string, data: ContractDraft) {
   try {
     sessionStorage.setItem(`${DRAFT_KEY_PREFIX}${customerId}`, JSON.stringify(data));
   } catch {
@@ -587,11 +652,11 @@ export function saveContractDraft(customerId: string, data: { form: ContractRequ
   }
 }
 
-export function loadContractDraft(customerId: string): { form: ContractRequestFormState; tierId: ContractTierId; step: number } | null {
+export function loadContractDraft(customerId: string): ContractDraft | null {
   try {
     const raw = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}${customerId}`);
     if (!raw) return null;
-    return JSON.parse(raw) as { form: ContractRequestFormState; tierId: ContractTierId; step: number };
+    return JSON.parse(raw) as ContractDraft;
   } catch {
     return null;
   }
