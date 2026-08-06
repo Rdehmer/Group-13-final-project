@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { Camera, Check, PenLine, RotateCcw, Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { humanizeFieldError } from "@/lib/technician-field";
 
 export type CompletionProofRequirement =
   | "photo_or_signature"
@@ -322,11 +323,15 @@ export function ProofOfCompletion({
 
       await onCompleted();
     } catch (completionError) {
-      setError(
+      const raw =
         completionError instanceof Error
           ? completionError.message
-          : "Unable to complete this job. Please try again.",
-      );
+          : typeof completionError === "object" &&
+              completionError &&
+              "message" in completionError
+            ? String((completionError as { message: string }).message)
+            : "Unable to complete this job. Please try again.";
+      setError(humanizeFieldError(raw));
     } finally {
       setSubmitting(false);
     }

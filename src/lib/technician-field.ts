@@ -8,7 +8,14 @@ import {
 } from "@/lib/technician-schedule";
 
 export type FieldJob = ScheduleWo & {
-  customers?: { id?: string; name: string; service_address?: string | null; city?: string | null; state?: string | null } | null;
+  customers?: {
+    id?: string;
+    name: string;
+    phone?: string | null;
+    service_address?: string | null;
+    city?: string | null;
+    state?: string | null;
+  } | null;
 };
 
 export type QueueSection = "now" | "later" | "closeout";
@@ -143,6 +150,48 @@ export function jobAddress(job: FieldJob): string {
   if (!c) return "";
   const parts = [c.service_address, c.city, c.state].filter(Boolean);
   return parts.join(", ");
+}
+
+export function jobPhone(job: FieldJob): string | null {
+  const raw = job.customers?.phone?.trim();
+  return raw || null;
+}
+
+/** tel: link digits (keep leading + for international). */
+export function telHref(phone: string): string {
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  return cleaned ? `tel:${cleaned}` : `tel:${phone}`;
+}
+
+/** Open route in maps app / Google Maps. */
+export function mapsDirectionsUrl(address: string): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+}
+
+/** Friendlier messages for common field errors (storage, RLS, proof, network). */
+export function humanizeFieldError(message: string | null | undefined): string {
+  const raw = (message ?? "").trim();
+  if (!raw) return "Something went wrong. Try again.";
+  const lower = raw.toLowerCase();
+  if (lower.includes("does not exist") || lower.includes("schema cache")) {
+    return "This feature is not set up in the database yet. Ask a manager to apply the latest migrations.";
+  }
+  if (lower.includes("photo") || lower.includes("signature") || lower.includes("proof")) {
+    return "Completion needs a finished-work photo or customer signature. Capture proof and try again.";
+  }
+  if (lower.includes("bucket") || lower.includes("storage") || lower.includes("object not found")) {
+    return "Could not upload the completion photo. Check camera permissions and try a smaller image.";
+  }
+  if (lower.includes("permission") || lower.includes("row-level") || lower.includes("policy") || lower.includes("jwt")) {
+    return "You do not have permission for that action, or your session expired. Sign out and back in.";
+  }
+  if (lower.includes("network") || lower.includes("fetch") || lower.includes("failed to fetch")) {
+    return "Network issue — check signal and tap retry. Changes may not have saved.";
+  }
+  if (lower.includes("not authenticated") || lower.includes("session")) {
+    return "Your session expired. Sign in again, then retry.";
+  }
+  return raw;
 }
 
 export function jobTimeLabel(job: FieldJob): string {

@@ -32,6 +32,38 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+function NoteField({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  rows = 3,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  rows?: number;
+}) {
+  return (
+    <div className="flex w-full flex-col gap-1.5">
+      <label htmlFor={id} className="text-sm font-semibold leading-none">
+        {label}
+      </label>
+      <textarea
+        id={id}
+        rows={rows}
+        className="textarea textarea-bordered w-full resize-y text-base leading-relaxed"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
 export function VoiceDiagnosticNotes({ symptom, cause, action, onChange, onSave, busy }: Props) {
   const [listening, setListening] = useState(false);
   const [target, setTarget] = useState<"symptom" | "cause" | "action">("symptom");
@@ -86,15 +118,20 @@ export function VoiceDiagnosticNotes({ symptom, cause, action, onChange, onSave,
   }
 
   return (
-    <section className="space-y-3" aria-labelledby="diagnostic-notes-heading">
-      <div className="flex items-center justify-between gap-2">
-        <h3 id="diagnostic-notes-heading" className="text-base font-semibold">
-          Diagnostic notes
-        </h3>
+    <section className="space-y-4" aria-labelledby="diagnostic-notes-heading">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 id="diagnostic-notes-heading" className="text-base font-semibold leading-tight">
+            Diagnostic notes
+          </h3>
+          <p className="mt-0.5 text-sm opacity-70">
+            Symptom → Cause → Action. Saves to the work order (managers see the same notes).
+          </p>
+        </div>
         {speechSupported ? (
           <button
             type="button"
-            className={`btn btn-sm min-h-12 gap-2 ${listening ? "btn-error" : "btn-outline"}`}
+            className={`btn btn-sm shrink-0 gap-2 ${listening ? "btn-error" : "btn-outline"}`}
             aria-pressed={listening}
             onClick={() => (listening ? stopListening() : startListening())}
           >
@@ -104,57 +141,74 @@ export function VoiceDiagnosticNotes({ symptom, cause, action, onChange, onSave,
         ) : null}
       </div>
 
-      {!speechSupported ? (
-        <p className="text-sm opacity-70">Voice-to-text is unavailable here — type notes below.</p>
-      ) : (
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Voice target field">
-          {(["symptom", "cause", "action"] as const).map((key) => (
+      {speechSupported ? (
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Voice target field">
+          <span className="text-xs font-medium uppercase tracking-wide opacity-60">Dictate into</span>
+          {(
+            [
+              { key: "symptom", label: "Symptom" },
+              { key: "cause", label: "Cause" },
+              { key: "action", label: "Action" },
+            ] as const
+          ).map((item) => (
             <button
-              key={key}
+              key={item.key}
               type="button"
-              className={`btn btn-xs min-h-10 capitalize ${target === key ? "btn-neutral" : "btn-ghost"}`}
-              aria-pressed={target === key}
-              onClick={() => setTarget(key)}
+              className={`btn btn-sm capitalize ${target === item.key ? "btn-primary" : "btn-ghost"}`}
+              aria-pressed={target === item.key}
+              onClick={() => setTarget(item.key)}
             >
-              {key}
+              {item.label}
             </button>
           ))}
         </div>
+      ) : (
+        <p className="text-sm opacity-70">Voice-to-text is unavailable here — type notes below.</p>
       )}
 
-      {speechError ? <p className="text-sm text-error">{speechError}</p> : null}
+      {speechError ? (
+        <p className="rounded-lg bg-error/10 px-3 py-2 text-sm text-error" role="alert">
+          {speechError}
+        </p>
+      ) : null}
       {listening ? (
-        <p className="text-sm text-info" aria-live="polite">
+        <p className="rounded-lg bg-info/10 px-3 py-2 text-sm text-info" aria-live="polite">
           Listening for {target}…
         </p>
       ) : null}
 
-      <label className="form-control w-full">
-        <span className="label-text font-medium">Symptom</span>
-        <textarea
-          className="textarea textarea-bordered min-h-20 text-base"
+      <div className="grid gap-4">
+        <NoteField
+          id="diag-symptom"
+          label="Symptom"
           value={symptom}
-          onChange={(e) => onChange({ symptom: e.target.value, cause, action })}
+          placeholder="What the customer reported / what you observed"
+          onChange={(value) => onChange({ symptom: value, cause, action })}
         />
-      </label>
-      <label className="form-control w-full">
-        <span className="label-text font-medium">Cause</span>
-        <textarea
-          className="textarea textarea-bordered min-h-20 text-base"
+        <NoteField
+          id="diag-cause"
+          label="Cause"
           value={cause}
-          onChange={(e) => onChange({ symptom, cause: e.target.value, action })}
+          placeholder="Root cause or diagnosis"
+          onChange={(value) => onChange({ symptom, cause: value, action })}
         />
-      </label>
-      <label className="form-control w-full">
-        <span className="label-text font-medium">Action taken</span>
-        <textarea
-          className="textarea textarea-bordered min-h-20 text-base"
+        <NoteField
+          id="diag-action"
+          label="Action taken"
           value={action}
-          onChange={(e) => onChange({ symptom, cause, action: e.target.value })}
+          placeholder="Work performed / parts installed / next steps"
+          rows={4}
+          onChange={(value) => onChange({ symptom, cause, action: value })}
         />
-      </label>
-      <button type="button" className="btn btn-primary min-h-12 w-full" disabled={busy} onClick={() => void onSave()}>
-        Save notes
+      </div>
+
+      <button
+        type="button"
+        className="btn btn-primary min-h-12 w-full sm:w-auto sm:min-w-[12rem]"
+        disabled={busy}
+        onClick={() => void onSave()}
+      >
+        {busy ? "Saving…" : "Save notes"}
       </button>
     </section>
   );

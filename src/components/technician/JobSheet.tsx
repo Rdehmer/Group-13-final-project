@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { format } from "date-fns";
 import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   Clock3,
+  ExternalLink,
   MapPin,
   Package,
+  Phone,
   Play,
   Timer,
 } from "lucide-react";
@@ -26,14 +29,19 @@ import {
   formatTimesheetNotes,
   hoursBetween,
   hoursFromTimeRange,
+  humanizeFieldError,
+  isOpenJob,
   isOutOfScope,
   jobAddress,
+  jobPhone,
   jobTimeLabel,
+  mapsDirectionsUrl,
   nextChecklistStep,
   nowTimeInput,
   parseDiagnosticNotes,
   priorityBarClass,
   splitRegularOt,
+  telHref,
   timesheetActivityLabel,
   toDbTime,
   todayIso,
@@ -48,12 +56,18 @@ type TruckRow = {
   parts?: Part | null;
 };
 
+type PartSource = "warehouse" | "truck";
+
 type Props = {
   job: FieldJob;
   profile: Profile;
+  /** Shared Parts catalog (managers / Parts tab). */
+  catalogParts: Part[];
   truckParts: TruckRow[];
   usedParts: (WorkOrderPart & { parts?: Part | null })[];
   laborRows: TechnicianLabor[];
+  /** Other open jobs (for dual Working warning). */
+  otherOpenJobs?: FieldJob[];
   onBack: () => void;
   onRefresh: () => Promise<void>;
 };
@@ -95,9 +109,11 @@ function laborPayload(
 export function JobSheet({
   job,
   profile,
+  catalogParts,
   truckParts,
   usedParts,
   laborRows,
+  otherOpenJobs = [],
   onBack,
   onRefresh,
 }: Props) {
@@ -106,6 +122,15 @@ export function JobSheet({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showProof, setShowProof] = useState(false);
+  const address = jobAddress(job);
+  const phone = jobPhone(job);
+  const dualWorking = otherOpenJobs.filter(
+    (j) =>
+      isOpenJob(j) &&
+      (j.dispatch_status === "Working" ||
+        (Boolean(j.started_at) && nextChecklistStep(j) === "complete")),
+  );
+  const [partSource, setPartSource] = useState<PartSource>("warehouse");
   const [partId, setPartId] = useState("");
   const [qty, setQty] = useState("1");
   const [partSearch, setPartSearch] = useState("");
@@ -124,6 +149,15 @@ export function JobSheet({
   const step = nextChecklistStep(job);
   const workingOpen = Boolean(job.started_at) && step === "complete";
   const spanHours = laborEnd ? hoursFromTimeRange(laborStart, laborEnd) : null;
+
+  const truckQtyByPart = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of truckParts) {
+      map.set(row.part_id, row.quantity_on_hand);
+    }
+    return map;
+  }, [truckParts]);
+
   const filteredTruck = useMemo(() => {
     const q = partSearch.trim().toLowerCase();
     return truckParts
@@ -138,6 +172,22 @@ export function JobSheet({
         );
       });
   }, [truckParts, partSearch]);
+
+  const filteredCatalog = useMemo(() => {
+    const q = partSearch.trim().toLowerCase();
+    return catalogParts.filter((p) => {
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.part_number.toLowerCase().includes(q) ||
+        (p.category ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [catalogParts, partSearch]);
+
+  useEffect(() => {
+    setPartId("");
+  }, [partSource]);
 
   useEffect(() => {
     if (!workingOpen) return;
@@ -177,9 +227,15 @@ export function JobSheet({
       updates.dispatch_updated_at = now;
     }
 
+    if (action === "working" && dualWorking.length > 0) {
+      setMessage(
+        `Note: you still have Working open on ${dualWorking.map((j) => j.work_order_number).join(", ")}. Complete those to keep timesheets accurate.`,
+      );
+    }
+
     const { error: updateError } = await supabase.from("work_orders").update(updates).eq("id", job.id);
     if (updateError) {
-      setError(updateError.message);
+      setError(humanizeFieldError(updateError.message));
       setBusy(false);
       return;
     }
@@ -197,7 +253,9 @@ export function JobSheet({
     setMessage(
       action === "arrived"
         ? "Arrived stamped."
-        : "Working timesheet started — Complete clocks you out.",
+        : dualWorking.length > 0
+          ? `Working started. Note: still open on ${dualWorking.map((j) => j.work_order_number).join(", ")}.`
+          : "Working timesheet started — Complete clocks you out.",
     );
     await onRefresh();
     setBusy(false);
@@ -233,7 +291,7 @@ export function JobSheet({
     );
 
     if (insertError) {
-      setError(insertError.message);
+      setError(humanizeFieldError(insertError.message));
       setBusy(false);
       return;
     }
@@ -247,7 +305,80 @@ export function JobSheet({
     setBusy(false);
   }
 
-  async function burnPart(acknowledged: boolean) {
+  async function logWarehousePart(acknowledged: boolean) {
+    const part = catalogParts.find((p) => p.id === partId);
+    if (!part) {
+      setError("Choose a part from the Parts catalog.");
+      return;
+    }
+    const quantity = Number(qty);
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      setError("Enter a quantity of at least 1.");
+      return;
+    }
+    if (part.quantity_on_hand < quantity) {
+      setError(
+        `Not enough warehouse stock for ${part.name} (on hand: ${part.quantity_on_hand}). Check Parts or use truck stock.`,
+      );
+      return;
+    }
+    if (isOutOfScope(job, "part") && !acknowledged) {
+      setScopePending("part");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    const billable = part.standard_customer_price * quantity;
+    const { error: insertError } = await supabase.from("work_order_parts").insert({
+      work_order_id: job.id,
+      part_id: part.id,
+      quantity_used: quantity,
+      unit_cost: part.unit_cost,
+      customer_price: part.standard_customer_price,
+      warranty_covered_amount: 0,
+      billable_amount: billable,
+      invoiced: false,
+      date_used: todayIso(),
+    });
+    if (insertError) {
+      setError(humanizeFieldError(insertError.message));
+      setBusy(false);
+      return;
+    }
+    const { error: stockError } = await supabase
+      .from("parts")
+      .update({ quantity_on_hand: part.quantity_on_hand - quantity })
+      .eq("id", part.id);
+    if (stockError) {
+      setError(
+        humanizeFieldError(
+          `Part logged but stock update failed: ${stockError.message}. Tell a manager to check inventory.`,
+        ),
+      );
+      setBusy(false);
+      await onRefresh();
+      return;
+    }
+
+    await logActivity(supabase, {
+      userId: profile.id,
+      action: "part_used",
+      recordType: "work_order",
+      recordId: job.id,
+      newValue: `${part.name} × ${quantity} (warehouse)`,
+    });
+
+    setPartId("");
+    setQty("1");
+    setScopePending(null);
+    setScopeAck(false);
+    setMessage(`${part.name} logged from warehouse stock — same catalog as Parts.`);
+    await onRefresh();
+    setBusy(false);
+  }
+
+  async function logTruckPart(acknowledged: boolean) {
     if (!partId) {
       setError("Choose a truck part first.");
       return;
@@ -276,7 +407,7 @@ export function JobSheet({
       if (rpcError.message.includes("OUT_OF_SCOPE")) {
         setScopePending("part");
       } else {
-        setError(rpcError.message);
+        setError(humanizeFieldError(rpcError.message));
       }
       setBusy(false);
       return;
@@ -286,9 +417,17 @@ export function JobSheet({
     setQty("1");
     setScopePending(null);
     setScopeAck(false);
-    setMessage("Part burned from truck inventory.");
+    setMessage("Part burned from your truck inventory.");
     await onRefresh();
     setBusy(false);
+  }
+
+  async function burnPart(acknowledged: boolean) {
+    if (partSource === "truck") {
+      await logTruckPart(acknowledged);
+    } else {
+      await logWarehousePart(acknowledged);
+    }
   }
 
   async function saveNotes() {
@@ -300,7 +439,7 @@ export function JobSheet({
       .update({ ...payload, updated_at: new Date().toISOString() })
       .eq("id", job.id);
     if (updateError) {
-      setError(updateError.message);
+      setError(humanizeFieldError(updateError.message));
       setBusy(false);
       return;
     }
@@ -347,12 +486,33 @@ export function JobSheet({
             <Clock3 className="h-4 w-4 shrink-0" />
             {jobTimeLabel(job)}
           </p>
-          {jobAddress(job) ? (
+          {address ? (
             <p className="flex items-start gap-2 text-sm opacity-80">
               <MapPin className="h-4 w-4 shrink-0 mt-0.5" />
-              {jobAddress(job)}
+              {address}
             </p>
           ) : null}
+          {(phone || address) && (
+            <div className="flex flex-wrap gap-2">
+              {phone ? (
+                <a href={telHref(phone)} className="btn btn-outline btn-sm min-h-11 gap-1">
+                  <Phone className="h-4 w-4" />
+                  Call customer
+                </a>
+              ) : null}
+              {address ? (
+                <a
+                  href={mapsDirectionsUrl(address)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-primary btn-sm min-h-11 gap-1"
+                >
+                  <MapPin className="h-4 w-4" />
+                  Directions
+                </a>
+              ) : null}
+            </div>
+          )}
           <p className="text-base leading-snug">
             {job.problem_description || job.requested_service || "No problem description."}
           </p>
@@ -373,6 +533,16 @@ export function JobSheet({
           {error ?? message}
         </div>
       )}
+
+      {dualWorking.length > 0 && step !== "done" ? (
+        <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm" role="status">
+          Another job is still Working:{" "}
+          <span className="font-semibold">
+            {dualWorking.map((j) => j.work_order_number).join(", ")}
+          </span>
+          . Complete it first when you can so labor hours stay clean.
+        </div>
+      ) : null}
 
       {scopePending ? (
         <div className="rounded-2xl border-2 border-warning bg-warning/10 p-4" role="alert">
@@ -633,31 +803,86 @@ export function JobSheet({
       </section>
 
       <section className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4" aria-labelledby="parts-heading">
-        <div className="flex items-center gap-2">
-          <Package className="h-5 w-5" />
-          <h3 id="parts-heading" className="text-base font-semibold">
-            Parts from truck
-          </h3>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Package className="h-5 w-5 shrink-0" />
+            <div>
+              <h3 id="parts-heading" className="text-base font-semibold">
+                Parts
+              </h3>
+              <p className="text-xs opacity-70">
+                Same inventory managers see under Parts — logging updates job usage and stock.
+              </p>
+            </div>
+          </div>
+          <Link href="/parts" className="btn btn-ghost btn-sm min-h-10 gap-1">
+            Open Parts
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
         </div>
+
+        <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="Part source">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={partSource === "warehouse"}
+            className={`btn btn-sm min-h-11 ${partSource === "warehouse" ? "btn-primary" : "btn-outline"}`}
+            onClick={() => setPartSource("warehouse")}
+          >
+            Warehouse catalog
+            <span className="badge badge-ghost badge-sm">{catalogParts.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={partSource === "truck"}
+            className={`btn btn-sm min-h-11 ${partSource === "truck" ? "btn-primary" : "btn-outline"}`}
+            onClick={() => setPartSource("truck")}
+          >
+            My truck
+            <span className="badge badge-ghost badge-sm">
+              {truckParts.filter((r) => r.quantity_on_hand > 0).length}
+            </span>
+          </button>
+        </div>
+
         <input
           className="input input-bordered min-h-12 w-full"
-          placeholder="Search truck stock…"
+          placeholder={
+            partSource === "warehouse" ? "Search Parts catalog…" : "Search truck stock…"
+          }
           value={partSearch}
           onChange={(e) => setPartSearch(e.target.value)}
-          aria-label="Search truck parts"
+          aria-label="Search parts"
         />
         <select
           className="select select-bordered min-h-12 w-full"
           value={partId}
           onChange={(e) => setPartId(e.target.value)}
-          aria-label="Truck part"
+          aria-label={partSource === "warehouse" ? "Warehouse part" : "Truck part"}
         >
-          <option value="">Select part…</option>
-          {filteredTruck.map((row) => (
-            <option key={row.part_id} value={row.part_id}>
-              {row.parts?.part_number} — {row.parts?.name} (qty {row.quantity_on_hand})
-            </option>
-          ))}
+          <option value="">
+            {partSource === "warehouse"
+              ? catalogParts.length === 0
+                ? "No parts loaded — open Parts tab"
+                : "Select part…"
+              : "Select truck part…"}
+          </option>
+          {partSource === "warehouse"
+            ? filteredCatalog.map((p) => {
+                const truckQty = truckQtyByPart.get(p.id);
+                return (
+                  <option key={p.id} value={p.id} disabled={p.quantity_on_hand <= 0}>
+                    {p.part_number} — {p.name} (whse {p.quantity_on_hand}
+                    {truckQty != null && truckQty > 0 ? ` · truck ${truckQty}` : ""})
+                  </option>
+                );
+              })
+            : filteredTruck.map((row) => (
+                <option key={row.part_id} value={row.part_id}>
+                  {row.parts?.part_number} — {row.parts?.name} (qty {row.quantity_on_hand})
+                </option>
+              ))}
         </select>
         <div className="flex gap-2">
           <input
@@ -671,7 +896,11 @@ export function JobSheet({
           <button
             type="button"
             className="btn btn-secondary min-h-12 flex-1"
-            disabled={busy || !partId}
+            disabled={
+              busy ||
+              !partId ||
+              (partSource === "warehouse" && catalogParts.length === 0)
+            }
             onClick={() => void burnPart(false)}
           >
             Log part used
@@ -691,12 +920,27 @@ export function JobSheet({
         ) : (
           <p className="text-sm opacity-60">No parts logged on this job yet.</p>
         )}
-        {filteredTruck.length === 0 ? (
-          <p className="text-sm opacity-60">No matching truck stock. Restock from Parts if needed.</p>
+        {partSource === "warehouse" && catalogParts.length === 0 ? (
+          <p className="text-sm opacity-60">
+            Catalog empty or blocked. Open{" "}
+            <Link href="/parts" className="link link-primary">
+              Parts
+            </Link>{" "}
+            or ask a manager — My Day uses the same list.
+          </p>
+        ) : null}
+        {partSource === "truck" && filteredTruck.length === 0 ? (
+          <p className="text-sm opacity-60">
+            No matching truck stock. Use Warehouse catalog above, or restock from{" "}
+            <Link href="/parts" className="link link-primary">
+              Parts
+            </Link>
+            .
+          </p>
         ) : null}
       </section>
 
-      <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
+      <section className="rounded-2xl border border-base-300 bg-base-100 p-4">
         <VoiceDiagnosticNotes
           symptom={notes.symptom}
           cause={notes.cause}
@@ -705,7 +949,28 @@ export function JobSheet({
           onSave={saveNotes}
           busy={busy}
         />
-      </div>
+      </section>
+
+      <nav
+        className="rounded-2xl border border-base-300 bg-base-100 p-4"
+        aria-label="Related areas"
+      >
+        <p className="mb-2 text-sm font-semibold">Related</p>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/parts" className="btn btn-outline btn-sm min-h-10">
+            Parts catalog
+          </Link>
+          <Link href="/dispatch" className="btn btn-outline btn-sm min-h-10">
+            Dispatch board
+          </Link>
+          <Link href="/time-off" className="btn btn-outline btn-sm min-h-10">
+            Time off
+          </Link>
+          <Link href="/technician" className="btn btn-outline btn-sm min-h-10">
+            My Day list
+          </Link>
+        </div>
+      </nav>
 
       {showProof ? (
         <ProofOfCompletion

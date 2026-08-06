@@ -72,6 +72,12 @@ import {
   daysPastScheduled,
 } from "@/lib/technician-schedule";
 import { statusAfterPlacingOnSchedule } from "@/lib/work-order-status";
+import {
+  approvedTimeOffOnDay,
+  formatTimeOffLabel,
+  technicianOnApprovedTimeOff,
+  type TimeOffRange,
+} from "@/lib/time-off";
 
 /**
  * Field execution gap risk when technicians lack a single workspace.
@@ -199,6 +205,7 @@ export default function TechnicianSchedulePage() {
   const [closeoutBusyId, setCloseoutBusyId] = useState<string | null>(null);
   const [closeoutMessage, setCloseoutMessage] = useState<string | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
+  const [timeOffRanges, setTimeOffRanges] = useState<TimeOffRange[]>([]);
   const [scheduleForm, setScheduleForm] = useState({
     scheduled_date: "",
     startHour: "9",
@@ -289,9 +296,26 @@ export default function TechnicianSchedulePage() {
     [supabase, technicians],
   );
 
+  const loadTimeOff = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("time_off_requests")
+      .select("id, technician_id, start_date, end_date, status, reason")
+      .eq("status", "Approved");
+    if (error) {
+      setTimeOffRanges([]);
+      return;
+    }
+    setTimeOffRanges((data as TimeOffRange[]) ?? []);
+  }, [supabase]);
+
   const reloadAll = useCallback(async () => {
-    if (profile) await loadWorkOrders(profile.id, profile.role, technicians);
-  }, [loadWorkOrders, profile, technicians]);
+    if (profile) {
+      await Promise.all([
+        loadWorkOrders(profile.id, profile.role, technicians),
+        loadTimeOff(),
+      ]);
+    }
+  }, [loadWorkOrders, loadTimeOff, profile, technicians]);
 
   const loadInventory = useCallback(async () => {
     // Match Parts tab: load full inventory, then prefer active / in-stock items for the picker.
@@ -333,12 +357,14 @@ export default function TechnicianSchedulePage() {
       const roster = (techData as Profile[]) ?? [];
       if (!cancelled) setTechnicians(roster);
       if (p) await loadWorkOrders(p.id, p.role, roster);
-      if (!cancelled) await loadInventory();
+      if (!cancelled) {
+        await Promise.all([loadInventory(), loadTimeOff()]);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadProfile, loadWorkOrders, loadInventory, supabase]);
+  }, [loadProfile, loadWorkOrders, loadInventory, loadTimeOff, supabase]);
 
   useEffect(() => {
     if (selectedId) {
@@ -912,6 +938,25 @@ export default function TechnicianSchedulePage() {
       setScheduleError("Complete-by time must be after the start time (check AM/PM).");
       setBusy(false);
       return;
+    }
+
+    if (
+      technicianOnApprovedTimeOff(
+        timeOffRanges,
+        scheduleForm.assigned_technician_id || null,
+        scheduleForm.scheduled_date,
+      )
+    ) {
+      const techNameLabel =
+        technicians.find((t) => t.id === scheduleForm.assigned_technician_id)?.full_name ||
+        "This technician";
+      const ok = window.confirm(
+        `${techNameLabel} has approved time off on ${scheduleForm.scheduled_date}. Schedule the job anyway?`,
+      );
+      if (!ok) {
+        setBusy(false);
+        return;
+      }
     }
 
     const hours = Math.round(((endMin - startMin) / 60) * 100) / 100;
@@ -1809,6 +1854,7 @@ export default function TechnicianSchedulePage() {
               {monthCells.map((day) => {
                 const key = format(day, "yyyy-MM-dd");
                 const list = ordersByDayKey.get(key) ?? [];
+                const offList = approvedTimeOffOnDay(timeOffRanges, key);
                 const inMonth = isSameMonth(day, monthCursor);
                 const isSelectedDay = isSameDay(day, selectedDay);
                 return (
@@ -1829,16 +1875,27 @@ export default function TechnicianSchedulePage() {
                     onDrop={(e) => void handleMonthCellDrop(e, day)}
                     className={`min-h-[5.5rem] cursor-pointer rounded-box border p-1 text-left transition hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
                       inMonth ? "border-base-300 bg-base-100" : "border-transparent bg-base-200/40 opacity-50"
-                    } ${isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""} ${isToday(day) ? "bg-base-200/80" : ""}`}
-                    aria-label={`${format(day, "MMMM d, yyyy")}: ${list.length} work orders. Click to open day details.`}
+                    } ${isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""} ${isToday(day) ? "bg-base-200/80" : ""} ${
+                      offList.length > 0 ? "bg-warning/10 border-warning/40" : ""
+                    }`}
+                    aria-label={`${format(day, "MMMM d, yyyy")}: ${list.length} work orders${
+                      offList.length ? `, ${offList.length} on time off` : ""
+                    }. Click to open day details.`}
                   >
                     <div className="mb-1 flex items-center justify-between px-0.5">
                       <span className={`text-xs font-semibold ${isToday(day) ? "text-primary" : ""}`}>
                         {format(day, "d")}
                       </span>
-                      {list.length > 0 ? (
-                        <span className="badge badge-ghost badge-xs tabular-nums">{list.length}</span>
-                      ) : null}
+                      <span className="flex items-center gap-0.5">
+                        {offList.length > 0 ? (
+                          <span className="badge badge-warning badge-xs" title="Approved time off">
+                            PTO
+                          </span>
+                        ) : null}
+                        {list.length > 0 ? (
+                          <span className="badge badge-ghost badge-xs tabular-nums">{list.length}</span>
+                        ) : null}
+                      </span>
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {list.slice(0, 3).map((wo) => {
@@ -1884,6 +1941,28 @@ export default function TechnicianSchedulePage() {
             <p className="text-sm opacity-70">
               {dayOrders.length} work order{dayOrders.length === 1 ? "" : "s"} scheduled
             </p>
+            {(() => {
+              const dayKey = format(selectedDay, "yyyy-MM-dd");
+              const off = approvedTimeOffOnDay(timeOffRanges, dayKey);
+              if (off.length === 0) return null;
+              return (
+                <div className="mt-3 rounded-box border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+                  <p className="font-semibold">Approved time off</p>
+                  <ul className="mt-1 list-inside list-disc opacity-80">
+                    {off.map((r) => {
+                      const name =
+                        technicians.find((t) => t.id === r.technician_id)?.full_name ||
+                        r.technician_id.slice(0, 8);
+                      return (
+                        <li key={r.id}>
+                          {name}: {formatTimeOffLabel(r.start_date, r.end_date)}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })()}
             {dayOrders.length === 0 ? (
               <p className="mt-4 text-sm opacity-60">Nothing scheduled on this date.</p>
             ) : (
