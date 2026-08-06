@@ -9,8 +9,8 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import type { Profile } from "@/lib/types";
 
-/** Main path — tech only sees the next step after completing the current one. */
-const DISPATCH_FLOW = ["En Route", "In Progress", "Ready for Review", "Done"] as const;
+/** Main path — always starts at Not Started, first action is En Route. */
+const DISPATCH_FLOW = ["Not Started", "En Route", "In Progress", "Ready for Review", "Done"] as const;
 
 type DispatchStatus = (typeof DISPATCH_FLOW)[number] | "Paused";
 
@@ -25,13 +25,22 @@ type DispatchWorkOrder = {
   dispatch_status: string;
   dispatch_note: string | null;
   dispatch_updated_at: string | null;
-  customers?: { name: string }[];
+  customers?: { name: string }[] | { name: string } | null;
 };
 
 type DispatchTechnician = Pick<Profile, "id" | "full_name" | "email" | "is_active">;
 
-function normalizeStatus(status: string): string {
+/** DB uses Working; UI shows In Progress. Arrived counts as En Route step done. */
+function normalizeStatus(status: string | null | undefined): string {
+  if (!status) return "Not Started";
   if (status === "Working") return "In Progress";
+  if (status === "Arrived") return "En Route";
+  return status;
+}
+
+/** Values allowed by work_orders_dispatch_status_check. */
+function toDbDispatchStatus(status: DispatchStatus): string {
+  if (status === "In Progress") return "Working";
   return status;
 }
 
@@ -51,7 +60,7 @@ function getNextStatus(status: string): DispatchStatus | null {
   return DISPATCH_FLOW[index + 1];
 }
 
-/** Previous step for mis-clicks. */
+/** Previous step for mis-clicks (can undo back to Not Started). */
 function getPreviousStatus(status: string): DispatchStatus | null {
   const normalized = normalizeStatus(status);
   if (normalized === "Paused") return "In Progress";
@@ -62,6 +71,13 @@ function getPreviousStatus(status: string): DispatchStatus | null {
 
 function canPause(status: string): boolean {
   return normalizeStatus(status) === "In Progress";
+}
+
+function customerName(workOrder: DispatchWorkOrder): string {
+  const c = workOrder.customers;
+  if (!c) return "Unknown customer";
+  if (Array.isArray(c)) return c[0]?.name ?? "Unknown customer";
+  return c.name ?? "Unknown customer";
 }
 
 function dispatchTone(status: string): "success" | "warning" | "error" | "info" | "neutral" {
@@ -100,7 +116,7 @@ function WorkOrderCard({
         <div>
           <p className="font-semibold">{workOrder.work_order_number}</p>
           <p className="text-sm opacity-70">
-            {workOrder.customers?.[0]?.name ?? "Unknown customer"}
+            {customerName(workOrder)}
             {workOrder.scheduled_date ? ` · ${workOrder.scheduled_date}` : ""}
             {workOrder.scheduled_start_time ? ` at ${workOrder.scheduled_start_time.slice(0, 5)}` : ""}
           </p>
@@ -149,14 +165,18 @@ function WorkOrderCard({
               {previousStatus ? (
                 <button
                   type="button"
-                  className="btn btn-ghost min-h-12 gap-2"
+                  className="btn btn-ghost min-h-12 gap-2 border border-base-300"
                   disabled={saving}
                   onClick={() => onStatusChange(previousStatus)}
                 >
                   <ArrowLeft className="h-4 w-4" aria-hidden />
                   Go back to {previousStatus}
                 </button>
-              ) : null}
+              ) : (
+                <p className="text-xs opacity-60">
+                  Starts with En Route — no earlier status to undo.
+                </p>
+              )}
             </div>
           </div>
 
@@ -281,28 +301,44 @@ export default function DispatchPage() {
     setError(null);
     setMessage(null);
 
+    const dbStatus = toDbDispatchStatus(status);
+    const updates: Record<string, string> = {
+      dispatch_status: dbStatus,
+      dispatch_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // Only sync WO status values known to pass work_orders_status_check.
+    if (status === "In Progress" || status === "Paused") {
+      updates.status = "In Progress";
+    } else if (status === "Ready for Review") {
+      updates.status = "Ready for Review";
+    }
+
     const { error: updateError } = await supabase
       .from("work_orders")
-      .update({
-        dispatch_status: status,
-        dispatch_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .update(updates)
       .eq("id", workOrder.id);
 
     if (updateError) {
       setError(updateError.message);
     } else {
-      setWorkOrders((current) => current.map((order) => order.id === workOrder.id ? { ...order, dispatch_status: status } : order));
+      setWorkOrders((current) =>
+        current.map((order) =>
+          order.id === workOrder.id
+            ? { ...order, dispatch_status: dbStatus, dispatch_updated_at: updates.dispatch_updated_at }
+            : order,
+        ),
+      );
       await logActivity(supabase, {
         userId: profile.id,
         action: "dispatch_status_change",
         recordType: "work_order",
         recordId: workOrder.id,
         previousValue: workOrder.dispatch_status,
-        newValue: status,
+        newValue: dbStatus,
       });
-      setMessage(`${workOrder.work_order_number} status updated`);
+      setMessage(`${workOrder.work_order_number} → ${normalizeStatus(dbStatus)}`);
     }
     setSavingId(null);
   }

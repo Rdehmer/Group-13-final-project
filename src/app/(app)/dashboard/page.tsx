@@ -12,7 +12,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
-import { StatCard, StatusBadge, statusTone, EmptyState } from "@/components/ui";
+import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
 import {
   DashboardCharts,
@@ -400,24 +400,41 @@ export default async function DashboardPage() {
           </>
         ) : (
           <>
-            <StatCard label="Active Customers" value={customerCount ?? 0} />
-            <StatCard
+            <ClickableStatCard
+              label="Active Customers"
+              value={customerCount ?? 0}
+              href="/customers"
+              ariaLabel="View active customers"
+            />
+            <ClickableStatCard
               label="Open Work Orders"
               value={openWoCount ?? 0}
               hint={`${criticalCount ?? 0} high/critical`}
+              href="/work-orders?filter=open"
+              ariaLabel="View open work orders"
             />
-            <StatCard
+            <ClickableStatCard
               label="Active Contracts"
               value={activeContracts}
               hint={`${expiringSoonCount} expiring soon`}
+              href="/contracts?status=Active"
+              ariaLabel="View service contracts"
             />
-            <StatCard
+            <ClickableStatCard
               label="Pending Approvals"
               value={pendingApprovals}
               hint={pendingApprovals > 0 ? "Customer requests awaiting review" : "No requests waiting"}
+              href="/contracts?status=Pending%20Approval"
               danger={pendingApprovals > 0}
+              ariaLabel="View contracts pending approval"
             />
-            <StatCard label="Open AR" value={formatMoney(arBalance)} danger={arBalance > 0} />
+            <ClickableStatCard
+              label="Open AR"
+              value={formatMoney(arBalance)}
+              href="/billing"
+              danger={arBalance > 0}
+              ariaLabel="View accounts receivable"
+            />
           </>
         )}
       </div>

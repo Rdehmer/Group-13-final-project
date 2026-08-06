@@ -25,7 +25,7 @@ import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { formatMoney } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
-import { workOrderLaborHours } from "@/lib/timesheets";
+import { workOrderLaborHours, timesheetHref } from "@/lib/timesheets";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
@@ -905,7 +905,23 @@ export default function JobDetailPage() {
           <div className="grid grid-cols-2 gap-3 text-sm sm:min-w-[16rem]">
             <div className="rounded-box bg-base-200/60 p-3">
               <p className="opacity-60">Technician</p>
-              <p className="font-medium">{techName}</p>
+              {wo.assigned_technician_id && profile?.role !== "customer" ? (
+                <div className="space-y-1">
+                  <p className="font-medium">{techName}</p>
+                  <Link
+                    href={timesheetHref({
+                      tech: wo.assigned_technician_id,
+                      wo: wo.id,
+                      week: wo.scheduled_date || undefined,
+                    })}
+                    className="link link-primary text-xs"
+                  >
+                    View timesheet
+                  </Link>
+                </div>
+              ) : (
+                <p className="font-medium">{techName}</p>
+              )}
             </div>
             <div className="rounded-box bg-base-200/60 p-3">
               <p className="opacity-60">Service vendor</p>
@@ -1283,11 +1299,33 @@ export default function JobDetailPage() {
                     ) : null}
                   </p>
                   <p className="text-xs opacity-60">
-                    From approved/complete <code>time_entries</code> (also mirrored for invoice prep).{" "}
-                    <Link href="/timesheets" className="link link-primary">
-                      Open timesheets
-                    </Link>
+                    From approved/complete time entries (also mirrored for invoice prep).
                   </p>
+                  {profile?.role !== "customer" ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Link
+                        href={timesheetHref({
+                          wo: id,
+                          tech: wo?.assigned_technician_id,
+                          week: wo?.scheduled_date || wo?.completion_date || undefined,
+                        })}
+                        className="btn btn-primary btn-xs"
+                      >
+                        Open job timesheet
+                      </Link>
+                      {wo?.assigned_technician_id ? (
+                        <Link
+                          href={timesheetHref({
+                            tech: wo.assigned_technician_id,
+                            week: wo.scheduled_date || undefined,
+                          })}
+                          className="btn btn-outline btn-xs"
+                        >
+                          Tech timesheet
+                        </Link>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 {canEditLines ? (
                   <form onSubmit={addLabor} className="mb-4 grid gap-3 sm:grid-cols-2">
@@ -1348,6 +1386,7 @@ export default function JobDetailPage() {
                           <th>Rate</th>
                           <th className="text-right">Billable</th>
                           <th>Notes</th>
+                          {profile?.role !== "customer" ? <th>Timesheet</th> : null}
                           {canEditLines ? <th>Actions</th> : null}
                         </tr>
                       </thead>
@@ -1432,6 +1471,20 @@ export default function JobDetailPage() {
                                 )}
                                 {locked ? <span className="badge badge-ghost badge-xs ml-1">Invoiced</span> : null}
                               </td>
+                              {profile?.role !== "customer" ? (
+                                <td>
+                                  <Link
+                                    href={timesheetHref({
+                                      wo: id,
+                                      tech: l.technician_id || wo?.assigned_technician_id,
+                                      week: l.work_date,
+                                    })}
+                                    className="link link-primary text-xs"
+                                  >
+                                    Open
+                                  </Link>
+                                </td>
+                              ) : null}
                               {canEditLines ? (
                                 <td>
                                   {locked ? (
@@ -1470,7 +1523,11 @@ export default function JobDetailPage() {
                             Labor total
                           </td>
                           <td className="text-right font-bold">{formatMoney(laborTotal)}</td>
-                          <td colSpan={canEditLines ? 2 : 1} />
+                          <td
+                            colSpan={
+                              (profile?.role !== "customer" ? 1 : 0) + (canEditLines ? 1 : 0) + 1
+                            }
+                          />
                         </tr>
                       </tfoot>
                     </table>
