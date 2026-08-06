@@ -14,6 +14,7 @@ export type PermissionKey =
   | "work_orders"
   | "technician"
   | "time_off"
+  | "timesheets"
   | "dispatch"
   | "parts"
   | "billing"
@@ -484,6 +485,132 @@ export type GlPostingDefault = {
   label: string;
   description: string | null;
   updated_at: string;
+};
+
+/**
+ * ServiceTitan-style payroll timesheet workflow for one employee × pay period.
+ * Hours still come from live field labor; this records sign-off / approval state.
+ * @deprecated Prefer TimeEntry + time_entries table. Kept for transitional imports.
+ */
+export type TimesheetWorkflowStatus =
+  | "open"
+  | "released"
+  | "employee_approved"
+  | "disputed"
+  | "manager_approved"
+  | "locked";
+
+export type EmployeeTimesheet = {
+  id: string;
+  technician_id: string;
+  period_start: string;
+  period_end: string;
+  status: TimesheetWorkflowStatus;
+  released_at: string | null;
+  released_by: string | null;
+  employee_signed_at: string | null;
+  employee_signature_name: string | null;
+  dispute_note: string | null;
+  disputed_at: string | null;
+  manager_id: string | null;
+  manager_approved_at: string | null;
+  locked_at: string | null;
+  last_synced_at: string | null;
+  manager_note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Non-job hours (shop, training, admin) layered onto the synced timesheet. */
+export type TimesheetAdjustment = {
+  id: string;
+  technician_id: string;
+  work_date: string;
+  activity_code: string;
+  regular_hours: number;
+  overtime_hours: number;
+  start_time: string | null;
+  end_time: string | null;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Field-service time entry categories (ServiceTitan-style). */
+export type TimeActivityType =
+  | "regular_work"
+  | "overtime"
+  | "travel"
+  | "shop"
+  | "training"
+  | "meeting"
+  | "break"
+  | "admin_nonbillable";
+
+export type TimeBillableStatus = "billable" | "nonbillable" | "contract_included";
+
+export type TimeApprovalStatus =
+  | "active"
+  | "complete"
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "locked";
+
+/** Canonical timesheet row stored in Supabase `time_entries`. */
+export type TimeEntry = {
+  id: string;
+  technician_id: string;
+  work_order_id: string | null;
+  customer_id: string | null;
+  equipment_id: string | null;
+  service_location: string | null;
+  entry_date: string;
+  clock_in_at: string | null;
+  clock_out_at: string | null;
+  total_minutes: number;
+  activity_type: TimeActivityType;
+  billable_status: TimeBillableStatus;
+  regular_hours: number;
+  overtime_hours: number;
+  hourly_cost_rate: number;
+  overtime_cost_rate: number;
+  billing_rate: number;
+  labor_cost: number;
+  billable_amount: number;
+  notes: string | null;
+  manual_entry_reason: string | null;
+  is_manual: boolean;
+  approval_status: TimeApprovalStatus;
+  approved_by: string | null;
+  approved_at: string | null;
+  rejection_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  locked_at: string | null;
+  locked_by: string | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
+  technician_labor_id: string | null;
+  created_at: string;
+  updated_at: string;
+  technician?: { id: string; full_name: string | null; email: string } | null;
+  work_orders?: {
+    id: string;
+    work_order_number: string | null;
+    work_order_type?: string | null;
+    problem_description?: string | null;
+    customers?: {
+      id: string;
+      name: string;
+      service_address?: string | null;
+      city?: string | null;
+      state?: string | null;
+    } | null;
+    equipment?: { id: string; name: string | null; serial_number?: string | null } | null;
+  } | null;
+  customers?: { id: string; name: string } | null;
 };
 
 /** Weekly preferred availability window (0=Sun … 6=Sat). */

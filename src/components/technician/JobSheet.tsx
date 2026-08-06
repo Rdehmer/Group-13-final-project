@@ -48,7 +48,16 @@ import {
   type FieldJob,
   type TimesheetActivity,
 } from "@/lib/technician-field";
-import type { Part, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
+import type { Part, Profile, TechnicianLabor, TimeActivityType, TimeEntry, WorkOrderPart } from "@/lib/types";
+import {
+  clockIn,
+  clockOut,
+  createManualEntry,
+  getActiveClock,
+  isTimesheetMissingTable,
+  localDateTimeToIso,
+  ACTIVITY_TYPES,
+} from "@/lib/timesheets";
 
 type Props = {
   job: FieldJob;
@@ -115,6 +124,8 @@ export function JobSheet({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showProof, setShowProof] = useState(false);
+  const [activeClock, setActiveClock] = useState<TimeEntry | null>(null);
+  const [teActivity, setTeActivity] = useState<TimeActivityType>("regular_work");
   const address = jobAddress(job);
   const phone = jobPhone(job);
   const dualWorking = otherOpenJobs.filter(
@@ -168,6 +179,17 @@ export function JobSheet({
     return () => window.clearInterval(id);
   }, [workingOpen]);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const row = await getActiveClock(supabase, profile.id);
+        setActiveClock(row);
+      } catch {
+        setActiveClock(null);
+      }
+    })();
+  }, [supabase, profile.id, job.id, job.started_at]);
+
   function resetAddEntryForm() {
     setActivity("Working");
     setLaborDate(job.scheduled_date || todayIso());
@@ -213,6 +235,27 @@ export function JobSheet({
       return;
     }
 
+    if (action === "working") {
+      try {
+        const entry = await clockIn(supabase, {
+          profile,
+          workOrderId: job.id,
+          activityType: teActivity,
+          notes: "Field clock-in",
+        });
+        setActiveClock(entry);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Clock-in failed.";
+        if (!isTimesheetMissingTable(msg)) {
+          // WO still started; surface clock error so tech can resolve double-active
+          setError(humanizeFieldError(msg));
+          setBusy(false);
+          await onRefresh();
+          return;
+        }
+      }
+    }
+
     await logActivity(supabase, {
       userId: profile.id,
       action: action === "arrived" ? "arrival" : "start",
@@ -227,8 +270,8 @@ export function JobSheet({
       action === "arrived"
         ? "Arrived stamped."
         : dualWorking.length > 0
-          ? `Working started. Note: still open on ${dualWorking.map((j) => j.work_order_number).join(", ")}.`
-          : "Working timesheet started — Complete clocks you out.",
+          ? `Clocked in / Working. Note: still open on ${dualWorking.map((j) => j.work_order_number).join(", ")}.`
+          : "Currently clocked in — Complete or Clock out to finish.",
     );
     await onRefresh();
     setBusy(false);
@@ -248,32 +291,58 @@ export function JobSheet({
       return;
     }
 
-    const { regular_hours, overtime_hours } = splitRegularOt(spanHours);
-
     setBusy(true);
     setError(null);
-    const { error: insertError } = await supabase.from("technician_labor").insert(
-      laborPayload(profile, job, {
-        work_date: laborDate || todayIso(),
-        start_time: toDbTime(laborStart),
-        end_time: toDbTime(laborEnd),
-        regular_hours,
-        overtime_hours,
-        notes: formatTimesheetNotes(activity, laborNotes),
-      }),
-    );
-
-    if (insertError) {
-      setError(humanizeFieldError(insertError.message));
-      setBusy(false);
-      return;
+    try {
+      // Map legacy field activities to time_entries categories
+      const map: Record<TimesheetActivity, TimeActivityType> = {
+        Working: "regular_work",
+        Travel: "travel",
+        "Meal Break": "break",
+        Other: "admin_nonbillable",
+      };
+      await createManualEntry(supabase, {
+        profile,
+        workOrderId: job.id,
+        entryDate: laborDate || todayIso(),
+        clockInLocal: localDateTimeToIso(laborDate || todayIso(), laborStart),
+        clockOutLocal: localDateTimeToIso(laborDate || todayIso(), laborEnd),
+        activityType: map[activity] ?? "regular_work",
+        notes: laborNotes || formatTimesheetNotes(activity, laborNotes),
+        reason: "Manual entry from field Job Sheet",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not save entry.";
+      // Fallback to legacy technician_labor if table missing
+      if (isTimesheetMissingTable(msg)) {
+        const { regular_hours, overtime_hours } = splitRegularOt(spanHours);
+        const { error: insertError } = await supabase.from("technician_labor").insert(
+          laborPayload(profile, job, {
+            work_date: laborDate || todayIso(),
+            start_time: toDbTime(laborStart),
+            end_time: toDbTime(laborEnd),
+            regular_hours,
+            overtime_hours,
+            notes: formatTimesheetNotes(activity, laborNotes),
+          }),
+        );
+        if (insertError) {
+          setError(humanizeFieldError(insertError.message));
+          setBusy(false);
+          return;
+        }
+      } else {
+        setError(humanizeFieldError(msg));
+        setBusy(false);
+        return;
+      }
     }
 
     resetAddEntryForm();
     setShowAddEntry(false);
     setScopePending(null);
     setScopeAck(false);
-    setMessage("Timesheet entry saved.");
+    setMessage("Timesheet entry saved (pending approval if manual).");
     await onRefresh();
     setBusy(false);
   }
@@ -400,11 +469,38 @@ export function JobSheet({
   async function runComplete() {
     setBusy(true);
     setError(null);
-    const laborErr = await finalizeWorkingLabor();
-    if (laborErr) {
-      setError(`Could not close Working timesheet: ${laborErr}`);
-      setBusy(false);
-      return;
+    try {
+      // Prefer modern time_entries clock-out
+      const open = await getActiveClock(supabase, profile.id);
+      if (open && open.work_order_id === job.id) {
+        await clockOut(supabase, { profile, entryId: open.id });
+        setActiveClock(null);
+      } else if (job.started_at) {
+        const laborErr = await finalizeWorkingLabor();
+        if (laborErr) {
+          setError(`Could not close Working timesheet: ${laborErr}`);
+          setBusy(false);
+          return;
+        }
+      } else {
+        setError("Clock in (In Progress) before completing labor.");
+        setBusy(false);
+        return;
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Clock-out failed.";
+      if (isTimesheetMissingTable(msg) && job.started_at) {
+        const laborErr = await finalizeWorkingLabor();
+        if (laborErr) {
+          setError(laborErr);
+          setBusy(false);
+          return;
+        }
+      } else {
+        setError(humanizeFieldError(msg));
+        setBusy(false);
+        return;
+      }
     }
     await onRefresh();
     setBusy(false);
@@ -633,7 +729,36 @@ export function JobSheet({
           ) : null}
         </div>
 
-        {workingOpen && job.started_at ? (
+        {activeClock && activeClock.work_order_id === job.id ? (
+          <div className="rounded-xl border border-success/50 bg-success/10 px-3 py-3" role="status" aria-live="polite">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-success">Currently Clocked In</p>
+                <p className="text-lg font-semibold">
+                  {ACTIVITY_TYPES.find((a) => a.value === activeClock.activity_type)?.label ?? "Work"}
+                </p>
+                <p className="text-sm opacity-70">
+                  Since {activeClock.clock_in_at ? formatLaborClock(toLocalTime(activeClock.clock_in_at)) : "—"}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-2xl font-bold tabular-nums">
+                  {activeClock.clock_in_at
+                    ? formatElapsedLabel(activeClock.clock_in_at, elapsedTick)
+                    : "—"}
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-warning btn-sm mt-1"
+                  disabled={busy}
+                  onClick={() => void runComplete()}
+                >
+                  Clock out
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : workingOpen && job.started_at ? (
           <div className="rounded-xl border border-primary/40 bg-primary/10 px-3 py-3" role="status" aria-live="polite">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -648,6 +773,23 @@ export function JobSheet({
               </p>
             </div>
           </div>
+        ) : null}
+
+        {step === "working" ? (
+          <label className="form-control">
+            <span className="label-text text-xs">Clock-in activity</span>
+            <select
+              className="select select-bordered select-sm"
+              value={teActivity}
+              onChange={(e) => setTeActivity(e.target.value as TimeActivityType)}
+            >
+              {ACTIVITY_TYPES.filter((a) => a.value !== "break").map((a) => (
+                <option key={a.value} value={a.value}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </label>
         ) : null}
 
         {laborRows.length > 0 ? (
