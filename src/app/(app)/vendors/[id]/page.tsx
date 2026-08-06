@@ -28,6 +28,7 @@ import {
   canDeleteVendor,
   canEditVendorMaster,
   canEnterBillsForVendor,
+  canRecordVendorPayment,
   isVendorSchemaError,
   openBalanceForBills,
   overdueBalanceForBills,
@@ -336,7 +337,16 @@ export default function VendorDetailPage() {
       .single();
 
     if (insertError || !bill) {
-      setError(insertError?.message ?? "Could not create bill.");
+      const msg = insertError?.message ?? "Could not create bill.";
+      const duplicate =
+        /duplicate|unique|vendor_bills_vendor_bill_number/i.test(msg);
+      setError(
+        duplicate
+          ? `Bill # ${billForm.bill_number.trim()} already exists for this supplier.`
+          : /policy|row-level security|approved|active/i.test(msg)
+            ? "Vendor must be approved and active before entering bills."
+            : msg,
+      );
       setBusy(false);
       return;
     }
@@ -368,6 +378,10 @@ export default function VendorDetailPage() {
   }
 
   function openPayBill(bill: VendorBill) {
+    if (!profile || !canRecordVendorPayment(profile.role)) {
+      setError("Only managers and administrators can record vendor payments.");
+      return;
+    }
     const balance = billBalance(bill);
     setPayForm({
       payment_date: todayIso(),
@@ -383,6 +397,10 @@ export default function VendorDetailPage() {
   async function submitPayment(e: React.FormEvent) {
     e.preventDefault();
     if (!vendor || !profile || !showPay) return;
+    if (!canRecordVendorPayment(profile.role)) {
+      setError("Only managers and administrators can record vendor payments.");
+      return;
+    }
     const amount = Number(payForm.amount);
     const balance = billBalance(showPay);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -410,7 +428,12 @@ export default function VendorDetailPage() {
       .single();
 
     if (payErr || !payment) {
-      setError(payErr?.message ?? "Could not record payment.");
+      const msg = payErr?.message ?? "Could not record payment.";
+      setError(
+        /policy|row-level security|permission/i.test(msg)
+          ? "Only managers and administrators can record vendor payments."
+          : msg,
+      );
       setBusy(false);
       return;
     }
@@ -511,6 +534,7 @@ export default function VendorDetailPage() {
   const isManager = canApproveVendors(profile.role);
   const canEditMaster = canEditVendorMaster(profile.role);
   const canDelete = canDeleteVendor(profile.role);
+  const canPay = canRecordVendorPayment(profile.role);
 
   return (
     <div>
@@ -767,6 +791,11 @@ export default function VendorDetailPage() {
                 Enter bill
               </button>
             </div>
+            {!canPay ? (
+              <p className="mb-2 text-xs opacity-60">
+                Billing can enter bills. Managers or administrators record payments.
+              </p>
+            ) : null}
 
             {bills.length === 0 ? (
               <EmptyState
@@ -820,7 +849,7 @@ export default function VendorDetailPage() {
                           </td>
                           <td className="text-right">
                             <div className="flex flex-wrap justify-end gap-1">
-                              {balance > 0 && bill.status !== "Void" ? (
+                              {canPay && balance > 0 && bill.status !== "Void" ? (
                                 <button
                                   type="button"
                                   className="btn btn-primary btn-xs"
