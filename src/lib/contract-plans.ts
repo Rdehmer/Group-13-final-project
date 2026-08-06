@@ -84,6 +84,8 @@ export type ManagerContractFormFields = {
   contract_type: string;
   billing_method: string;
   contract_price: string;
+  monthly_amount?: string;
+  deductible?: string;
   included_service_visits: string;
   included_labor_hours: string;
   included_replacement_parts?: string;
@@ -1429,12 +1431,23 @@ export function applyPlanToContractForm<T extends ManagerContractFormFields>(
       ? `${options.customerName} · ${resolved.pack.name} · ${resolved.level.name}`
       : form.name;
 
+  const annual = Number(t.annual_price) || 0;
+  const isMonthly = /monthly\s*recurring/i.test(t.billing_method);
+  const deductibleRaw = t.extras.deductible;
+  const deductible =
+    typeof deductibleRaw === "number"
+      ? deductibleRaw
+      : Number(deductibleRaw);
+  const monthly = isMonthly ? Math.round((annual / 12) * 100) / 100 : 0;
+
   return {
     ...form,
     ...(name != null ? { name } : {}),
     contract_type: t.contract_type,
     billing_method: t.billing_method,
-    contract_price: String(t.annual_price),
+    contract_price: String(annual),
+    monthly_amount: String(monthly),
+    deductible: String(Number.isFinite(deductible) && deductible >= 0 ? deductible : 0),
     included_service_visits: String(t.included_service_visits),
     included_labor_hours: String(t.included_labor_hours),
     included_replacement_parts: String(t.included_replacement_parts),

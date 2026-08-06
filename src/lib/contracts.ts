@@ -289,6 +289,8 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
       : 100_000;
 
   let notes = form.notes || null;
+  let monthlyAmount = 0;
+  let deductible = 0;
   if (packId && tierId) {
     const resolved = resolvePlan(packId, tierId, assetValue);
     if (resolved) {
@@ -298,7 +300,24 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
         band: resolved.band,
         assetValue: resolved.assetValue,
       });
-      notes = mergePlanSnapshotIntoNotes(notes, tag);
+      const extrasLine =
+        Object.keys(resolved.thresholds.extras).length > 0
+          ? `[Extras: ${Object.entries(resolved.thresholds.extras)
+              .map(([k, v]) => `${k}=${String(v)}`)
+              .join("; ")}]`
+          : "";
+      notes = mergePlanSnapshotIntoNotes(
+        notes,
+        extrasLine ? `${tag}\n${extrasLine}` : tag,
+      );
+      // RLS requires contract_price = 0 on customer insert; still store suggested monthly + deductible.
+      const annual = Number(resolved.thresholds.annual_price) || 0;
+      if (/monthly\s*recurring/i.test(resolved.thresholds.billing_method)) {
+        monthlyAmount = Math.round((annual / 12) * 100) / 100;
+      }
+      const d = resolved.thresholds.extras.deductible;
+      const dn = typeof d === "number" ? d : Number(d);
+      deductible = Number.isFinite(dn) && dn >= 0 ? dn : 0;
     }
   }
 
@@ -316,6 +335,8 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
     renewal_option: form.renewal_option || null,
     billing_method: form.billing_method,
     contract_price: 0,
+    monthly_amount: monthlyAmount,
+    deductible,
     payment_terms: form.payment_terms || null,
     included_service_visits: Number(form.included_service_visits) || 0,
     service_frequency: form.service_frequency || null,
