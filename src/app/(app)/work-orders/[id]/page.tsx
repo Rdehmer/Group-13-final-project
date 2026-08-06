@@ -202,8 +202,10 @@ export default function JobDetailPage() {
     load();
   }, [id]);
 
-  const isServiceManager = profile?.role === "service_manager";
-  const isManager = profile?.role === "administrator" || isServiceManager;
+  // Admin matches service manager WO detail UX (status↔schedule sync, hover edits).
+  const isServiceManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
+  const isManager = isServiceManager;
   const isBillingRole = profile?.role === "billing";
   const isBilling = isBillingRole || profile?.role === "administrator";
   const isTech =

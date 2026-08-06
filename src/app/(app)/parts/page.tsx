@@ -10,6 +10,7 @@ import { EmptyState, StatusBadge } from "@/components/ui";
 import { PurchaseOrderRequest } from "@/components/PurchaseOrderRequest";
 import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
+import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import type { Part, Profile, TechPartOrderRequest, WorkOrder } from "@/lib/types";
 
@@ -114,6 +115,7 @@ export default function PartsPage() {
   const [parts, setParts] = useState<Part[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
   const [managerPos, setManagerPos] = useState<PurchaseOrderRow[]>([]);
+  const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchaseReviewRow[]>([]);
   const [jobs, setJobs] = useState<JobOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showPurchaseOrder, setShowPurchaseOrder] = useState(false);
@@ -148,10 +150,11 @@ export default function PartsPage() {
   });
   const [form, setForm] = useState<PartForm>(EMPTY_FORM);
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
 
   async function loadTechnicianData(technicianId: string) {
-    const [{ data: requests }, { data: assignedJobs }] = await Promise.all([
+    const [{ data: requests }, { data: assignedJobs }, purchasesResult] = await Promise.all([
       supabase
         .from("purchase_orders")
         .select("*, parts(part_number, name)")
@@ -164,10 +167,32 @@ export default function PartsPage() {
         .eq("assigned_technician_id", technicianId)
         .neq("status", "Canceled")
         .order("scheduled_date", { ascending: false }),
+      supabase
+        .from("emergency_purchases")
+        .select(
+          `
+          *,
+          parts:parts!emergency_purchases_part_id_fkey(id, part_number, name),
+          work_orders:work_orders!emergency_purchases_job_id_fkey(id, work_order_number, problem_description)
+        `,
+        )
+        .eq("technician_id", technicianId)
+        .order("purchased_at", { ascending: false }),
     ]);
 
     setPurchaseOrders((requests as PurchaseOrderRow[]) ?? []);
     setJobs((assignedJobs as JobOption[]) ?? []);
+
+    if (purchasesResult.error) {
+      const { data: flat } = await supabase
+        .from("emergency_purchases")
+        .select("*")
+        .eq("technician_id", technicianId)
+        .order("purchased_at", { ascending: false });
+      setEmergencyPurchases((flat as EmergencyPurchaseReviewRow[]) ?? []);
+    } else {
+      setEmergencyPurchases((purchasesResult.data as EmergencyPurchaseReviewRow[]) ?? []);
+    }
   }
 
   async function loadManagerPos() {
@@ -216,7 +241,10 @@ export default function PartsPage() {
     setParts((data as Part[]) ?? []);
     if (loadedProfile?.role === "technician") {
       await loadTechnicianData(loadedProfile.id);
-    } else if (loadedProfile?.role === "service_manager") {
+    } else if (
+      loadedProfile?.role === "administrator" ||
+      loadedProfile?.role === "service_manager"
+    ) {
       await loadManagerPos();
     }
     setLoading(false);
@@ -799,6 +827,7 @@ export default function PartsPage() {
         profile={profile}
         parts={parts}
         purchaseOrders={purchaseOrders}
+        emergencyPurchases={emergencyPurchases}
         jobs={jobs}
         success={success}
         error={error}
