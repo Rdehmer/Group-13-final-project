@@ -14,8 +14,8 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Equipment Service Manager",
-  description: "Commercial equipment service management for Ridley Equipment Services",
+  title: "EquipmentIQ",
+  description: "Commercial equipment service management — from request to invoice",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

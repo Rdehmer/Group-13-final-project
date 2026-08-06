@@ -16,7 +16,7 @@ export function LoginWelcomeSplash({ exiting = false, displayName, role }: Props
 
   return (
     <div
-      className={`customer-welcome-splash hero-equipment fixed inset-0 z-50 flex flex-col items-center justify-center px-6 text-primary-content ${
+      className={`customer-welcome-splash login-hero fixed inset-0 z-50 flex flex-col items-center justify-center px-6 text-primary-content ${
         exiting ? "customer-welcome-exit" : ""
       }`}
       role="status"
@@ -36,7 +36,7 @@ export function LoginWelcomeSplash({ exiting = false, displayName, role }: Props
         </div>
 
         <p className="customer-welcome-brand text-xs font-semibold uppercase tracking-[0.2em] opacity-80">
-          Ridley Equipment Services
+          EquipmentIQ
         </p>
         <h1 className="customer-welcome-title mt-2 text-2xl font-bold sm:text-3xl">{greeting}</h1>
         <p className="customer-welcome-subtitle mt-2 text-sm opacity-80 sm:text-base">{subtitle}</p>

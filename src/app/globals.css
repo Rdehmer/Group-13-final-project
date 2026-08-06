@@ -107,6 +107,34 @@ h3,
   background-size: cover, 160px 160px;
 }
 
+/* Login welcome splash — stylized industrial hero */
+.login-hero {
+  background-color: oklch(28% 0.03 240);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% 45%, rgba(15, 23, 42, 0.35) 0%, transparent 70%),
+    linear-gradient(
+      135deg,
+      rgba(15, 23, 42, 0.95) 0%,
+      rgba(15, 80, 75, 0.88) 45%,
+      rgba(13, 120, 110, 0.82) 100%
+    ),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.06' stroke-width='1.5'%3E%3Cpath d='M0 100h200M100 0v200'/%3E%3Ccircle cx='100' cy='100' r='36'/%3E%3Ccircle cx='100' cy='100' r='18'/%3E%3Cpath d='M64 100h12M124 100h12M100 64v12M100 124v12'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover, cover, 200px 200px;
+  background-position: center;
+}
+
+/* Marketing home — light hero band */
+.home-hero {
+  background-image:
+    linear-gradient(
+      160deg,
+      color-mix(in oklch, var(--color-primary) 8%, var(--color-base-100)) 0%,
+      var(--color-base-100) 55%
+    ),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%230f766e' stroke-opacity='0.06' stroke-width='1.5'%3E%3Cpath d='M0 60h120M60 0v120'/%3E%3Ccircle cx='60' cy='60' r='20'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover, 120px 120px;
+}
+
 /* Dashboard — industrial slate / teal band + light motion */
 .dashboard-hero {
   background-image:
@@ -255,6 +283,7 @@ h3,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .login-hero,
   .customer-welcome-content > *,
   .customer-welcome-ring,
   .customer-welcome-progress-bar,
