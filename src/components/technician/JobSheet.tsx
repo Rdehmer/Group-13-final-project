@@ -26,14 +26,15 @@ import {
   formatElapsedLabel,
   formatLaborClock,
   formatTimesheetNotes,
-  hoursBetween,
   hoursFromTimeRange,
   humanizeFieldError,
   isOpenJob,
   isOutOfScope,
   jobAddress,
+  formatCustomerPhone,
   jobPhone,
   jobTimeLabel,
+  laborClockRange,
   mapsDirectionsUrl,
   nextChecklistStep,
   nextStepLabel,
@@ -123,6 +124,7 @@ export function JobSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [showCustomerPhone, setShowCustomerPhone] = useState(false);
   const [showProof, setShowProof] = useState(false);
   const [activeClock, setActiveClock] = useState<TimeEntry | null>(null);
   const [teActivity, setTeActivity] = useState<TimeActivityType>("regular_work");
@@ -168,6 +170,7 @@ export function JobSheet({
     setScopeAck(false);
     setShowAddEntry(false);
     setShowProof(false);
+    setShowCustomerPhone(false);
     setNotes(parseDiagnosticNotes(job));
     resetAddEntryForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally when job.id changes
@@ -450,20 +453,29 @@ export function JobSheet({
 
   async function finalizeWorkingLabor(): Promise<string | null> {
     if (!job.started_at) return null;
-    const now = new Date().toISOString();
-    const hours = hoursBetween(job.started_at, now);
-    const split = splitRegularOt(hours);
+    const clock = laborClockRange(job.started_at);
+    const split = splitRegularOt(clock.hours);
     const { error: insertError } = await supabase.from("technician_labor").insert(
       laborPayload(profile, job, {
-        work_date: todayIso(),
-        start_time: toLocalTime(job.started_at),
-        end_time: toLocalTime(now),
+        work_date: clock.work_date,
+        start_time: clock.start_time,
+        end_time: clock.end_time,
         regular_hours: split.regular_hours,
         overtime_hours: split.overtime_hours,
         notes: "Working",
       }),
     );
-    return insertError ? humanizeFieldError(insertError.message) : null;
+    if (insertError) return humanizeFieldError(insertError.message);
+
+    // Clear open Working stamp so a second Complete does not re-insert the same window.
+    const { error: clearError } = await supabase
+      .from("work_orders")
+      .update({
+        started_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    return clearError ? humanizeFieldError(clearError.message) : null;
   }
 
   async function runComplete() {
@@ -535,12 +547,38 @@ export function JobSheet({
             </p>
           ) : null}
           {(phone || address) && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {phone ? (
-                <a href={telHref(phone)} className="btn btn-outline btn-sm min-h-11 gap-1">
-                  <Phone className="h-4 w-4" />
-                  Call customer
-                </a>
+                showCustomerPhone ? (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2">
+                    <Phone className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide opacity-60">Customer number</p>
+                      <a
+                        href={telHref(phone)}
+                        className="block whitespace-nowrap text-base font-semibold tabular-nums tracking-wide text-primary underline-offset-2 hover:underline"
+                      >
+                        {formatCustomerPhone(phone)}
+                      </a>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setShowCustomerPhone(false)}
+                    >
+                      Hide
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm min-h-11 gap-1"
+                    onClick={() => setShowCustomerPhone(true)}
+                  >
+                    <Phone className="h-4 w-4" />
+                    Call customer
+                  </button>
+                )
               ) : null}
               {address ? (
                 <a
@@ -702,7 +740,7 @@ export function JobSheet({
         <p className="text-xs opacity-60" aria-live="polite">
           {step === "arrived" && "Tap Arrived when you reach the site."}
           {step === "working" && "Tap In Progress to start a Working timesheet (clock runs until Complete)."}
-          {step === "complete" && "Tap Complete to clock out Working and capture customer sign-off."}
+          {step === "complete" && "Tap Complete — customer must sign off with initials or a signature."}
           {step === "done" && "This job is closed out."}
         </p>
       </section>
@@ -826,51 +864,69 @@ export function JobSheet({
         )}
 
         {showAddEntry ? (
-          <div className="space-y-3 border-t border-base-300 pt-3">
+          <div className="space-y-4 border-t border-base-300 pt-3">
             <p className="text-sm font-semibold">Add Entry</p>
-            <label className="form-control">
-              <span className="label-text font-medium">Activity</span>
-              <select
-                className="select select-bordered min-h-12"
-                value={activity}
-                onChange={(e) => setActivity(e.target.value as TimesheetActivity)}
+
+            <div className="flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Activity</span>
+              <div
+                className="grid grid-cols-2 gap-2"
+                role="radiogroup"
+                aria-label="Activity"
               >
-                {TIMESHEET_ACTIVITIES.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="form-control">
-              <span className="label-text font-medium">Date</span>
+                {TIMESHEET_ACTIVITIES.map((item) => {
+                  const selected = activity === item;
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      className={`flex h-12 w-full items-center justify-center rounded-xl border text-sm font-semibold transition-colors ${
+                        selected
+                          ? "border-primary bg-primary text-primary-content"
+                          : "border-base-300 bg-base-100 text-base-content hover:bg-base-200"
+                      }`}
+                      onClick={() => setActivity(item)}
+                    >
+                      {item}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <label className="flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Date</span>
               <input
                 type="date"
-                className="input input-bordered min-h-12"
+                className="input input-bordered w-full min-h-12"
                 value={laborDate}
                 onChange={(e) => setLaborDate(e.target.value)}
               />
             </label>
+
             <div className="grid grid-cols-2 gap-3">
-              <label className="form-control">
-                <span className="label-text font-medium">Start time</span>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-sm font-medium">Start time</span>
                 <input
                   type="time"
-                  className="input input-bordered min-h-12"
+                  className="input input-bordered w-full min-h-12"
                   value={laborStart}
                   onChange={(e) => setLaborStart(e.target.value)}
                 />
               </label>
-              <label className="form-control">
-                <span className="label-text font-medium">End time</span>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-sm font-medium">End time</span>
                 <input
                   type="time"
-                  className="input input-bordered min-h-12"
+                  className="input input-bordered w-full min-h-12"
                   value={laborEnd}
                   onChange={(e) => setLaborEnd(e.target.value)}
                 />
               </label>
             </div>
+
             <p className="text-xs opacity-60" aria-live="polite">
               {!laborEnd
                 ? "End time required to save a completed entry."
@@ -878,16 +934,18 @@ export function JobSheet({
                   ? "End time must be after start time."
                   : `Duration: ${spanHours.toFixed(2)} hours`}
             </p>
-            <label className="form-control">
-              <span className="label-text font-medium">Memo (optional)</span>
+
+            <label className="flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Memo (optional)</span>
               <textarea
-                className="textarea textarea-bordered min-h-16 text-base"
+                className="textarea textarea-bordered w-full min-h-16 text-base"
                 value={laborNotes}
                 onChange={(e) => setLaborNotes(e.target.value)}
                 placeholder="Optional note for this activity"
               />
             </label>
-            <div className="flex flex-wrap gap-2">
+
+            <div className="flex gap-2">
               <button
                 type="button"
                 className="btn btn-primary min-h-12 flex-1"
@@ -990,7 +1048,7 @@ export function JobSheet({
           onCancel={() => setShowProof(false)}
           onCompleted={async () => {
             setShowProof(false);
-            setMessage("Job completed with customer sign-off.");
+            setMessage("Job completed with customer initials or signature on file.");
             await onRefresh();
             onBack();
           }}

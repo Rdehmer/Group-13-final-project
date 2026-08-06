@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Bar,
   BarChart,
@@ -56,6 +56,18 @@ function shortCurrency(value: number): string {
 function fullCurrency(value: number): string {
   const n = Number(value) || 0;
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+/** Avoid Recharts SSR/client size mismatch during hydration. */
+function ChartMount({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(true);
+  }, []);
+  if (!ready) {
+    return <div className="h-full min-h-[10rem] w-full animate-pulse rounded-box bg-base-200/80" aria-hidden />;
+  }
+  return <>{children}</>;
 }
 
 export function InvoiceActivityChart({
@@ -114,58 +126,60 @@ export function InvoiceActivityChart({
           />
         ) : (
           <div className={`${chartH} ${fillParent ? "min-h-0 flex-1" : ""}`}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
-                <YAxis
-                  tick={{ fontSize: 12 }}
-                  width={56}
-                  tickFormatter={(v) => shortCurrency(Number(v))}
-                />
-                <Tooltip
-                  formatter={(value, name) => [
-                    fullCurrency(Number(value)),
-                    String(name),
-                  ]}
-                  labelFormatter={(label) => String(label)}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line
-                  type="monotone"
-                  dataKey="invoiced"
-                  name="Total Invoiced"
-                  stroke="#2563eb"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#2563eb" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="collected"
-                  name="Amount Collected"
-                  stroke="#16a34a"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#16a34a" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="outstanding"
-                  name="Outstanding Balance"
-                  stroke="#d97706"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#d97706" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartMount>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    width={56}
+                    tickFormatter={(v) => shortCurrency(Number(v))}
+                  />
+                  <Tooltip
+                    formatter={(value, name) => [
+                      fullCurrency(Number(value)),
+                      String(name),
+                    ]}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="invoiced"
+                    name="Total Invoiced"
+                    stroke="#2563eb"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#2563eb" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="collected"
+                    name="Amount Collected"
+                    stroke="#16a34a"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#16a34a" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="outstanding"
+                    name="Outstanding Balance"
+                    stroke="#d97706"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, strokeWidth: 2, fill: "#fff", stroke: "#d97706" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </ChartMount>
           </div>
         )}
       </div>
@@ -232,42 +246,44 @@ export function ContractPieCard({
             }`}
           >
             <div className={`${chartClass} min-h-0 overflow-hidden`}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={data}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={fillParent || !compact ? "28%" : 36}
-                    outerRadius={fillParent || !compact ? "48%" : 58}
-                    paddingAngle={2}
-                    isAnimationActive={false}
-                    onClick={(_, index) => {
-                      const slice = data[index];
-                      if (slice?.href) router.push(slice.href);
-                    }}
-                    style={{ cursor: "pointer" }}
-                  >
-                    {data.map((entry, i) => (
-                      <Cell
-                        key={`${entry.name}-${i}`}
-                        fill={PIE_COLORS[i % PIE_COLORS.length]}
-                        stroke="transparent"
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value, name) => [
-                      valueKind === "money"
-                        ? fullCurrency(Number(value))
-                        : `${Number(value).toLocaleString("en-US")} contracts`,
-                      String(name),
-                    ]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <ChartMount>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={data}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={fillParent || !compact ? "28%" : 36}
+                      outerRadius={fillParent || !compact ? "48%" : 58}
+                      paddingAngle={2}
+                      isAnimationActive={false}
+                      onClick={(_, index) => {
+                        const slice = data[index];
+                        if (slice?.href) router.push(slice.href);
+                      }}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {data.map((entry, i) => (
+                        <Cell
+                          key={`${entry.name}-${i}`}
+                          fill={PIE_COLORS[i % PIE_COLORS.length]}
+                          stroke="transparent"
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value, name) => [
+                        valueKind === "money"
+                          ? fullCurrency(Number(value))
+                          : `${Number(value).toLocaleString("en-US")} contracts`,
+                        String(name),
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartMount>
             </div>
             <ul className="max-h-full min-h-0 space-y-1.5 overflow-y-auto text-sm">
               {data.map((slice, i) => {
@@ -288,8 +304,8 @@ export function ContractPieCard({
                         <span className="text-xs text-base-content/55">
                           {valueKind === "money"
                             ? formatMoney(slice.value)
-                            : `${slice.value} · ${pct}%`}
-                          {valueKind === "money" ? ` · ${pct}%` : ""}
+                            : `${slice.value} ? ${pct}%`}
+                          {valueKind === "money" ? ` ? ${pct}%` : ""}
                         </span>
                       </span>
                     </Link>
@@ -305,7 +321,7 @@ export function ContractPieCard({
             {valueKind === "money"
               ? formatMoney(total)
               : `${total.toLocaleString("en-US")} contracts`}
-            {" · "}
+            {" ? "}
             click a slice or label to open Contracts
           </p>
         ) : null}
@@ -345,16 +361,18 @@ export function WorkOrderTrendChart({
           </Link>
         </div>
         <div className={`${chartH} ${fillParent ? "min-h-0 flex-1" : ""}`}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={workOrderTrend}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="count" name="Work Orders" fill="#1f5c42" />
-            </BarChart>
-          </ResponsiveContainer>
+          <ChartMount>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={workOrderTrend}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="count" name="Work Orders" fill="#1f5c42" />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartMount>
         </div>
       </div>
     </div>
@@ -420,22 +438,24 @@ export function DashboardCharts({
             <div className="card-body">
               <h3 className="card-title font-display text-base">Invoiced Revenue (6 months)</h3>
               <div className="h-64 w-full min-w-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={revenueByMonth}>
-                    <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => shortCurrency(Number(v))} />
-                    <Tooltip formatter={(v) => [fullCurrency(Number(v)), "Revenue"]} />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="revenue"
-                      name="Revenue"
-                      stroke="#0f766e"
-                      strokeWidth={2}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <ChartMount>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={revenueByMonth}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                      <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => shortCurrency(Number(v))} />
+                      <Tooltip formatter={(v) => [fullCurrency(Number(v)), "Revenue"]} />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="revenue"
+                        name="Revenue"
+                        stroke="#0f766e"
+                        strokeWidth={2}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </ChartMount>
               </div>
             </div>
           </div>

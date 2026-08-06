@@ -157,9 +157,32 @@ export function jobPhone(job: FieldJob): string | null {
   return raw || null;
 }
 
+/** Digits only (strip formatting). Keeps a leading + for international. */
+export function phoneDigits(phone: string): string {
+  const trimmed = phone.trim();
+  if (trimmed.startsWith("+")) {
+    return `+${trimmed.slice(1).replace(/\D/g, "")}`;
+  }
+  return trimmed.replace(/\D/g, "");
+}
+
+/**
+ * Show the full customer number clearly, including area code.
+ * US 10-digit (or 11 with leading 1) → (XXX) XXX-XXXX. Otherwise keep original.
+ */
+export function formatCustomerPhone(phone: string): string {
+  const digits = phoneDigits(phone).replace(/^\+/, "");
+  const national =
+    digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (national.length === 10) {
+    return `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`;
+  }
+  return phone.trim();
+}
+
 /** tel: link digits (keep leading + for international). */
 export function telHref(phone: string): string {
-  const cleaned = phone.replace(/[^\d+]/g, "");
+  const cleaned = phoneDigits(phone);
   return cleaned ? `tel:${cleaned}` : `tel:${phone}`;
 }
 
@@ -173,6 +196,9 @@ export function humanizeFieldError(message: string | null | undefined): string {
   const raw = (message ?? "").trim();
   if (!raw) return "Something went wrong. Try again.";
   const lower = raw.toLowerCase();
+  if (lower.includes("labor_time_order") || (lower.includes("start") && lower.includes("end") && lower.includes("check"))) {
+    return "Timesheet end time must be after the start time. Try Complete again — the clock window will be adjusted automatically.";
+  }
   if (lower.includes("does not exist") || lower.includes("schema cache")) {
     return "This feature is not set up in the database yet. Ask a manager to apply the latest migrations.";
   }
@@ -272,7 +298,7 @@ export function nextStepLabel(
 ): { label: string; action: "arrived" | "working" | "complete" | null } {
   if (step === "arrived") return { label: "Mark Arrived", action: "arrived" };
   if (step === "working") return { label: "Start Working", action: "working" };
-  if (step === "complete") return { label: "Complete & Sign-off", action: "complete" };
+  if (step === "complete") return { label: "Complete (customer sign-off)", action: "complete" };
   return { label: "Job closed", action: null };
 }
 
@@ -294,6 +320,57 @@ export function hoursBetween(startIso: string, endIso: string): number {
   const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
   if (!Number.isFinite(ms) || ms <= 0) return 0.25;
   return Math.round((ms / 3_600_000) * 100) / 100;
+}
+
+/**
+ * Build work_date / start_time / end_time for technician_labor so
+ * labor_time_order (start_time < end_time) is always satisfied.
+ * Handles same-second completes and overnight Working windows.
+ */
+export function laborClockRange(
+  startedAtIso: string,
+  endedAtIso: string = new Date().toISOString(),
+): {
+  work_date: string;
+  start_time: string;
+  end_time: string;
+  hours: number;
+} {
+  const start = new Date(startedAtIso);
+  let end = new Date(endedAtIso);
+  if (!Number.isFinite(start.getTime())) {
+    const now = new Date();
+    return {
+      work_date: format(now, "yyyy-MM-dd"),
+      start_time: format(new Date(now.getTime() - 60_000), "HH:mm:ss"),
+      end_time: format(now, "HH:mm:ss"),
+      hours: 0.25,
+    };
+  }
+  if (!Number.isFinite(end.getTime()) || end.getTime() <= start.getTime()) {
+    end = new Date(start.getTime() + 60_000);
+  }
+
+  const hours = hoursBetween(start.toISOString(), end.toISOString());
+  const work_date = format(start, "yyyy-MM-dd");
+  const start_time = format(start, "HH:mm:ss");
+  let end_time = format(end, "HH:mm:ss");
+
+  const sameLocalDay = format(end, "yyyy-MM-dd") === work_date;
+  if (!sameLocalDay || end_time <= start_time) {
+    // Overnight or equal clocks: keep hours, put a valid same-day time order.
+    end_time = "23:59:59";
+    if (end_time <= start_time) {
+      return {
+        work_date,
+        start_time: "23:58:00",
+        end_time: "23:59:00",
+        hours: Math.max(hours, 0.25),
+      };
+    }
+  }
+
+  return { work_date, start_time, end_time, hours };
 }
 
 /** Hours between local `HH:mm` or `HH:mm:ss` clock values (same calendar day). */

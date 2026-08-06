@@ -31,6 +31,7 @@ import {
   isActivelyWorking,
   isOpenJob,
   jobAddress,
+  formatCustomerPhone,
   jobPhone,
   jobTimeLabel,
   mapsDirectionsUrl,
@@ -69,6 +70,7 @@ function JobCard({
   const active = isActivelyWorking(job);
   const hint = relativeScheduleHint(job);
   const step = nextChecklistStep(job);
+  const [showCustomerPhone, setShowCustomerPhone] = useState(false);
 
   return (
     <div
@@ -119,16 +121,47 @@ function JobCard({
         </div>
       </button>
       {(address || phone) && (
-        <div className="flex flex-wrap gap-2 border-t border-base-200 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-2 border-t border-base-200 px-4 py-2">
           {phone ? (
-            <a
-              href={telHref(phone)}
-              className="btn btn-outline btn-sm min-h-11 gap-1"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Phone className="h-4 w-4" />
-              Call
-            </a>
+            showCustomerPhone ? (
+              <div
+                className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Phone className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide opacity-60">Customer number</p>
+                  <a
+                    href={telHref(phone)}
+                    className="block whitespace-nowrap text-base font-semibold tabular-nums tracking-wide text-primary underline-offset-2 hover:underline"
+                  >
+                    {formatCustomerPhone(phone)}
+                  </a>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowCustomerPhone(false);
+                  }}
+                >
+                  Hide
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm min-h-11 gap-1"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowCustomerPhone(true);
+                }}
+              >
+                <Phone className="h-4 w-4" />
+                Call customer
+              </button>
+            )
           ) : null}
           {address ? (
             <a
@@ -152,7 +185,7 @@ function stepCta(job: FieldJob): string {
   const step = nextChecklistStep(job);
   if (step === "arrived") return "Start → Arrived";
   if (step === "working") return "Continue → In Progress";
-  if (step === "complete") return "Finish → Sign-off";
+  if (step === "complete") return "Finish → initials or signature";
   return "View job";
 }
 
@@ -381,7 +414,13 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
     return timeOff.some((r) => timeOffCoversDay(r, job.scheduled_date!.slice(0, 10)));
   }
 
-  const greet = `${greetForTime()}, ${firstNameFromProfile(profile.full_name, profile.email)}`;
+  const firstName = firstNameFromProfile(profile.full_name, profile.email);
+  const [dayHeader, setDayHeader] = useState(`Hello, ${firstName}`);
+
+  // Avoid SSR/client time mismatch (greeting + locale date) during hydration.
+  useEffect(() => {
+    setDayHeader(`${greetForTime()}, ${firstName} · ${format(new Date(), "EEEE, MMM d")}`);
+  }, [firstName]);
   const openToday = nowNext.length + later.length;
 
   // URL job id but not in list (reassigned) — clear quietly after load
@@ -412,10 +451,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
 
   return (
     <div className="mx-auto max-w-xl space-y-5 pb-8">
-      <PageHeader
-        title="My Day"
-        description={`${greet} · ${format(new Date(), "EEEE, MMM d")}`}
-      />
+      <PageHeader title="My Day" description={dayHeader} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm opacity-70">
