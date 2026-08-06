@@ -684,51 +684,69 @@ export function JobSheet({
         )}
 
         {showAddEntry ? (
-          <div className="space-y-3 border-t border-base-300 pt-3">
+          <div className="space-y-4 border-t border-base-300 pt-3">
             <p className="text-sm font-semibold">Add Entry</p>
-            <label className="form-control">
-              <span className="label-text font-medium">Activity</span>
-              <select
-                className="select select-bordered min-h-12"
-                value={activity}
-                onChange={(e) => setActivity(e.target.value as TimesheetActivity)}
+
+            <div className="flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Activity</span>
+              <div
+                className="grid grid-cols-2 gap-2"
+                role="radiogroup"
+                aria-label="Activity"
               >
-                {TIMESHEET_ACTIVITIES.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="form-control">
-              <span className="label-text font-medium">Date</span>
+                {TIMESHEET_ACTIVITIES.map((item) => {
+                  const selected = activity === item;
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      className={`flex h-12 w-full items-center justify-center rounded-xl border text-sm font-semibold transition-colors ${
+                        selected
+                          ? "border-primary bg-primary text-primary-content"
+                          : "border-base-300 bg-base-100 text-base-content hover:bg-base-200"
+                      }`}
+                      onClick={() => setActivity(item)}
+                    >
+                      {item}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <label className="flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Date</span>
               <input
                 type="date"
-                className="input input-bordered min-h-12"
+                className="input input-bordered w-full min-h-12"
                 value={laborDate}
                 onChange={(e) => setLaborDate(e.target.value)}
               />
             </label>
+
             <div className="grid grid-cols-2 gap-3">
-              <label className="form-control">
-                <span className="label-text font-medium">Start time</span>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-sm font-medium">Start time</span>
                 <input
                   type="time"
-                  className="input input-bordered min-h-12"
+                  className="input input-bordered w-full min-h-12"
                   value={laborStart}
                   onChange={(e) => setLaborStart(e.target.value)}
                 />
               </label>
-              <label className="form-control">
-                <span className="label-text font-medium">End time</span>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-sm font-medium">End time</span>
                 <input
                   type="time"
-                  className="input input-bordered min-h-12"
+                  className="input input-bordered w-full min-h-12"
                   value={laborEnd}
                   onChange={(e) => setLaborEnd(e.target.value)}
                 />
               </label>
             </div>
+
             <p className="text-xs opacity-60" aria-live="polite">
               {!laborEnd
                 ? "End time required to save a completed entry."
@@ -736,16 +754,18 @@ export function JobSheet({
                   ? "End time must be after start time."
                   : `Duration: ${spanHours.toFixed(2)} hours`}
             </p>
-            <label className="form-control">
-              <span className="label-text font-medium">Memo (optional)</span>
+
+            <label className="flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Memo (optional)</span>
               <textarea
-                className="textarea textarea-bordered min-h-16 text-base"
+                className="textarea textarea-bordered w-full min-h-16 text-base"
                 value={laborNotes}
                 onChange={(e) => setLaborNotes(e.target.value)}
                 placeholder="Optional note for this activity"
               />
             </label>
-            <div className="flex flex-wrap gap-2">
+
+            <div className="flex gap-2">
               <button
                 type="button"
                 className="btn btn-primary min-h-12 flex-1"
