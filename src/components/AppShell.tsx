@@ -3,7 +3,17 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Mail, Menu, Wrench } from "lucide-react";
+import Image from "next/image";
+import {
+  Bell,
+  HelpCircle,
+  LogOut,
+  Mail,
+  Menu,
+  Plus,
+  Search,
+  Settings,
+} from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
@@ -17,7 +27,6 @@ const CUSTOMER_HOME = "/customer";
 const UNREAD_POLL_MS = 30_000;
 
 function isPathActive(pathname: string, href: string) {
-  // Suppliers lives at /vendors; don't treat /vendors/aging as the suppliers list.
   if (href === "/vendors") {
     return (
       pathname === "/vendors" ||
@@ -29,14 +38,14 @@ function isPathActive(pathname: string, href: string) {
 
 function gatedNavClassName(isBlocked: boolean, active: boolean, className?: string) {
   const parts = [
-    active ? "active font-medium" : "",
-    isBlocked ? "pointer-events-none cursor-not-allowed opacity-50" : "",
+    "eq-nav-item",
+    active ? "eq-nav-item--active" : "",
+    isBlocked ? "pointer-events-none cursor-not-allowed opacity-40" : "",
     className ?? "",
   ];
   return parts.filter(Boolean).join(" ");
 }
 
-/** Role-aware nav labels (same href, clearer names in the field). */
 function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/scheduling" && role === "technician") return "My Availability";
@@ -58,15 +67,13 @@ function closeMobileDrawer() {
 
 function NavBadge({ count }: { count: number }) {
   if (count <= 0) return null;
-  return (
-    <span className="badge badge-warning badge-sm ml-1 tabular-nums">{count > 99 ? "99+" : count}</span>
-  );
+  return <span className="eq-nav-badge">{count > 99 ? "99+" : count}</span>;
 }
 
 function NavLabelWithBadge({ label, count }: { label: string; count?: number }) {
   return (
-    <span className="inline-flex items-center gap-0.5">
-      {label}
+    <span className="flex w-full min-w-0 items-center justify-between gap-2">
+      <span className="truncate">{label}</span>
       <NavBadge count={count ?? 0} />
     </span>
   );
@@ -111,7 +118,6 @@ function GatedNavLink({
       href={item.href}
       className={gatedNavClassName(false, active, className)}
       onClick={(event) => {
-        // DaisyUI drawer overlay can swallow default Link navigation on some viewports.
         event.preventDefault();
         closeMobileDrawer();
         router.push(item.href);
@@ -136,19 +142,12 @@ function NavChildList({
   badgeForHref?: (href: string) => number;
 }) {
   return (
-    <ul>
+    <ul className="eq-nav-children">
       {items.map((child) => {
         if (child.children?.length) {
-          const sectionActive = child.children.some((c) => isPathActive(pathname, c.href));
           return (
             <li key={`${child.href}-${child.label}`}>
-              <span
-                className={`menu-title px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                  sectionActive ? "text-primary" : "opacity-60"
-                }`}
-              >
-                {child.label}
-              </span>
+              <div className="eq-nav-section">{child.label}</div>
               <NavChildList
                 items={child.children}
                 pathname={pathname}
@@ -188,6 +187,7 @@ function NavDetailsGroup({
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeForHref: (href: string) => number;
 }) {
+  const router = useRouter();
   const childActive = item.children!.some(function walk(child): boolean {
     if (child.children?.length) return child.children.some(walk);
     return child.href === CUSTOMER_HOME
@@ -206,7 +206,7 @@ function NavDetailsGroup({
       : 0;
 
   return (
-    <li>
+    <li className="eq-nav-group">
       {parentBlocked ? (
         <span
           role="link"
@@ -219,11 +219,12 @@ function NavDetailsGroup({
       ) : (
         <Link
           href={item.href}
-          className={
-            sectionOpen
-              ? "border-l-2 border-primary/40 font-semibold text-primary"
-              : "border-l-2 border-transparent opacity-80"
-          }
+          className={gatedNavClassName(false, sectionOpen)}
+          onClick={(event) => {
+            event.preventDefault();
+            closeMobileDrawer();
+            router.push(item.href);
+          }}
         >
           <NavLabelWithBadge label={item.label} count={parentBadge} />
         </Link>
@@ -253,7 +254,7 @@ function InboxHeaderControl({
   const pathname = usePathname();
   const active = isPathActive(pathname, href);
   const showBadge = unreadCount > 0;
-  const className = `btn btn-ghost btn-sm btn-square relative ${active ? "bg-base-200" : ""}`;
+  const className = `eq-top-icon ${active ? "eq-top-icon--active" : ""}`;
 
   if (isGateActive && blockNavigation) {
     return (
@@ -261,10 +262,10 @@ function InboxHeaderControl({
         role="link"
         aria-disabled="true"
         aria-label="Inbox"
-        className={`${className} pointer-events-none cursor-not-allowed opacity-50`}
+        className={`${className} pointer-events-none cursor-not-allowed opacity-40`}
         onClick={blockNavigation}
       >
-        <Mail className="h-4 w-4" />
+        <Mail className="h-[18px] w-[18px]" strokeWidth={1.75} />
       </span>
     );
   }
@@ -276,12 +277,8 @@ function InboxHeaderControl({
       aria-label={showBadge ? `Inbox, ${unreadCount} unread` : "Inbox"}
       title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
     >
-      <Mail className="h-4 w-4" />
-      {showBadge ? (
-        <span className="badge badge-success absolute -right-1 -top-1 h-5 min-w-5 border-0 px-1 text-[10px] font-bold text-success-content">
-          {unreadCount > 9 ? "9+" : unreadCount}
-        </span>
-      ) : null}
+      <Mail className="h-[18px] w-[18px]" strokeWidth={1.75} />
+      {showBadge ? <span className="eq-top-dot">{unreadCount > 9 ? "9+" : unreadCount}</span> : null}
     </Link>
   );
 }
@@ -320,6 +317,13 @@ function CustomerInboxHeaderControl({
       blockNavigation={blockNavigation}
     />
   );
+}
+
+function createHrefForRole(role: Profile["role"]): string {
+  if (role === "customer") return "/customer/request-service";
+  if (role === "technician") return "/technician";
+  if (role === "billing") return "/billing";
+  return "/work-orders";
 }
 
 export function AppShell({
@@ -427,64 +431,105 @@ export function AppShell({
   ) : null;
 
   const inboxControl = customerInboxControl ?? managerInboxControl;
+  const initials = (profile.full_name || profile.email || "?")
+    .split(/[\s@]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+  const createHref = createHrefForRole(profile.role);
 
   return (
-    <div className="drawer lg:drawer-open min-h-screen bg-base-200">
+    <div className="drawer lg:drawer-open eq-shell min-h-screen">
       <input id="app-drawer" type="checkbox" className="drawer-toggle" />
       <div className="drawer-content flex min-h-screen flex-col">
-        <header className="navbar sticky top-0 z-30 border-b border-base-300/80 bg-base-100/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-base-100/85">
-          <div className="flex-none lg:hidden">
-            <label htmlFor="app-drawer" className="btn btn-ghost btn-square" aria-label="Open menu">
-              <Menu className="h-5 w-5" />
+        <header className="eq-topbar">
+          <div className="flex flex-none items-center gap-2 lg:hidden">
+            <label htmlFor="app-drawer" className="eq-top-icon" aria-label="Open menu">
+              <Menu className="h-5 w-5" strokeWidth={1.75} />
             </label>
-          </div>
-          <div className="flex-1">
-            <div>
-              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-primary/80">
-                Equipment Service Manager
-              </p>
-              <p className="font-display text-base font-semibold leading-tight text-base-content">
-                Ridley Equipment Services
-              </p>
+            <div className="relative h-8 w-[132px] sm:hidden">
+              <Image
+                src="/equipmentiq-logo.png"
+                alt="EquipmentIQ"
+                fill
+                className="object-contain object-left"
+                sizes="132px"
+                priority
+              />
             </div>
           </div>
-          <div className="flex items-center gap-2 md:gap-3">
-            <div className="hidden items-center gap-3 md:flex">
-              {inboxControl}
-              <div className="text-right text-sm">
-                <p className="font-medium">{profile.full_name || profile.email}</p>
-                <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
-              </div>
-              <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={logout}>
-                <LogOut className="h-4 w-4" /> Logout
-              </button>
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm md:hidden"
-              onClick={logout}
-              aria-label="Logout"
+
+          <div className="eq-search min-w-0 flex-1">
+            <Search className="eq-search-icon" strokeWidth={1.75} />
+            <input
+              type="search"
+              className="eq-search-input"
+              placeholder="Search customers, invoices, work orders…"
+              aria-label="Search"
+              readOnly
+              onFocus={(e) => e.currentTarget.blur()}
+              title="Search (coming soon)"
+            />
+          </div>
+
+          <div className="flex flex-none items-center gap-1 sm:gap-1.5">
+            {!gateActive ? (
+              <Link href={createHref} className="eq-create-btn">
+                <Plus className="h-4 w-4" strokeWidth={2.25} />
+                <span className="hidden sm:inline">New</span>
+              </Link>
+            ) : null}
+
+            <div className="eq-top-divider hidden sm:block" />
+
+            {inboxControl}
+            <button type="button" className="eq-top-icon" aria-label="Notifications" title="Notifications">
+              <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+            </button>
+            <button type="button" className="eq-top-icon hidden sm:inline-flex" aria-label="Help" title="Help">
+              <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+            </button>
+            <Link
+              href="/settings"
+              className="eq-top-icon hidden sm:inline-flex"
+              aria-label="Settings"
+              title="Settings"
             >
-              <LogOut className="h-4 w-4" />
+              <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+            </Link>
+
+            <div className="eq-user-menu">
+              <span className="eq-avatar" aria-hidden>
+                {initials || "?"}
+              </span>
+              <div className="hidden min-w-0 text-left leading-tight md:block">
+                <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
+                  {profile.full_name || profile.email}
+                </p>
+                <p className="truncate text-[11px] text-[#5c6b7a]">{ROLE_LABELS[profile.role]}</p>
+              </div>
+            </div>
+
+            <button type="button" className="eq-signout" onClick={logout} title="Sign out">
+              <LogOut className="h-4 w-4" strokeWidth={1.75} />
+              <span className="hidden lg:inline">Sign out</span>
             </button>
           </div>
         </header>
 
-        <div className="flex items-center justify-between gap-2 border-b border-base-300/80 bg-base-100 px-4 py-2.5 md:hidden">
-          <div className="text-sm">
-            <span className="font-medium">{profile.full_name || profile.email}</span>
-            <span className="opacity-55"> · {ROLE_LABELS[profile.role]}</span>
-          </div>
-          {inboxControl}
-        </div>
-
         {gateActive ? (
-          <div role="status" className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm">
+          <div
+            role="status"
+            className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+          >
             Submit your service rating on Home to continue using the portal.
           </div>
         ) : null}
 
-        <main className="app-main flex-1 p-5 md:p-8">{children}</main>
+        <main className="eq-main flex-1">
+          <div className="eq-page">{children}</div>
+        </main>
       </div>
 
       <aside className="drawer-side z-40">
@@ -493,52 +538,64 @@ export function AppShell({
           className="drawer-overlay lg:pointer-events-none"
           aria-label="Close menu"
         />
-        <nav className="relative z-10 menu min-h-full w-72 gap-0.5 border-r border-base-300/70 bg-base-100 p-4 text-base-content">
-          <div className="mb-5 flex items-center gap-3 rounded-2xl bg-primary/10 px-3 py-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-content shadow-sm">
-              <Wrench className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="font-display text-sm font-semibold leading-tight">ESM</p>
-              <p className="truncate text-[11px] opacity-55">Field service</p>
+        <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+          <div className="eq-sidebar-brand">
+            <div className="eq-brand-mark">
+              <Image
+                src="/equipmentiq-logo.png"
+                alt="EquipmentIQ"
+                width={200}
+                height={48}
+                className="eq-brand-logo"
+                priority
+              />
             </div>
-            <DemoPersonaSwitcher currentEmail={profile.email} />
+            <p className="eq-brand-tag">Service operations</p>
           </div>
-          {navItems.map((item) => {
-            if (item.children?.length) {
-              return (
-                <NavDetailsGroup
-                  key={item.href}
-                  item={item}
-                  pathname={pathname}
-                  isGateActive={gateActive}
-                  blockNavigation={blockNavigation}
-                  badgeForHref={badgeForHref}
-                />
-              );
-            }
 
-            const matches = navItems.filter(
-              (n) => !n.children && (pathname === n.href || pathname.startsWith(`${n.href}/`)),
-            );
-            const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
-            const active = best?.href === item.href;
-            return (
-              <li key={item.href}>
-                <GatedNavLink
-                  item={item}
-                  pathname={pathname}
-                  className={
-                    active
-                      ? "active border-l-2 border-primary bg-primary/10 font-semibold text-primary"
-                      : "border-l-2 border-transparent opacity-80 hover:bg-base-200/80 hover:opacity-100"
-                  }
-                  isGateActive={gateActive}
-                  blockNavigation={blockNavigation}
-                />
-              </li>
-            );
-          })}
+          <div className="px-3 pb-2">
+            <DemoPersonaSwitcher currentEmail={profile.email} variant="dark" />
+          </div>
+
+          <div className="eq-sidebar-scroll flex-1 overflow-y-auto px-2.5 pb-4 pt-1">
+            <p className="eq-nav-heading">Menu</p>
+            {navItems.map((item) => {
+              if (item.children?.length) {
+                return (
+                  <NavDetailsGroup
+                    key={item.href}
+                    item={item}
+                    pathname={pathname}
+                    isGateActive={gateActive}
+                    blockNavigation={blockNavigation}
+                    badgeForHref={badgeForHref}
+                  />
+                );
+              }
+
+              const matches = navItems.filter(
+                (n) => !n.children && (pathname === n.href || pathname.startsWith(`${n.href}/`)),
+              );
+              const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
+              const active = best?.href === item.href;
+              return (
+                <div key={item.href} className="eq-nav-row">
+                  <GatedNavLink
+                    item={item}
+                    pathname={pathname}
+                    className={active ? "eq-nav-item--active" : ""}
+                    isGateActive={gateActive}
+                    blockNavigation={blockNavigation}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="eq-sidebar-foot">
+            <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
+            <p className="mt-0.5 text-[10px] text-white/30">Field service · Billing · Operations</p>
+          </div>
         </nav>
       </aside>
     </div>

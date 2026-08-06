@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Wrench, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DEMO_PASSWORD, DEMO_PERSONAS } from "@/lib/demo-personas";
 
@@ -55,51 +56,61 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-2">
-      <section className="hero-equipment relative hidden flex-col justify-between p-10 text-primary-content lg:flex">
+      <section className="eq-login-hero relative hidden flex-col justify-between p-10 text-white lg:flex">
         <div>
-          <div className="flex items-center gap-3">
-            <Wrench className="h-8 w-8" />
-            <div>
-              <p className="text-sm uppercase tracking-widest opacity-80">Ridley Equipment Services</p>
-              <h1 className="text-3xl font-bold">Equipment Service Manager</h1>
-            </div>
+          <div className="inline-flex rounded-2xl bg-white px-4 py-3 shadow-lg">
+            <Image
+              src="/equipmentiq-logo.png"
+              alt="EquipmentIQ"
+              width={220}
+              height={52}
+              className="h-12 w-auto object-contain"
+              priority
+            />
           </div>
-          <p className="mt-8 max-w-md text-lg opacity-90">
-            Schedule technicians, track parts, manage contracts, and keep commercial equipment running
-            with full visibility from request to invoice.
+          <p className="mt-8 max-w-md text-lg font-medium leading-relaxed text-white/90">
+            Intelligent equipment service — schedule technicians, manage contracts, track parts, and
+            close the loop from request through invoice.
           </p>
         </div>
-        <ul className="space-y-3 text-sm opacity-90">
+        <ul className="space-y-3 text-sm text-white/85">
           <li className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" /> Role-based access for managers, techs, billing, and customers
+            <ShieldCheck className="h-4 w-4 text-[#00c2c5]" /> Role-based access for managers, techs, billing,
+            and customers
           </li>
           <li className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" /> Work order lifecycle with approval controls
+            <ShieldCheck className="h-4 w-4 text-[#00c2c5]" /> Work order lifecycle with approval controls
           </li>
           <li className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" /> Profitability and AR aging at a glance
+            <ShieldCheck className="h-4 w-4 text-[#00c2c5]" /> Profitability and AR aging at a glance
           </li>
         </ul>
       </section>
 
-      <section className="flex flex-col justify-center p-6 sm:p-10">
+      <section className="flex flex-col justify-center bg-[#eef2f5] p-6 sm:p-10">
         <div className="mb-6 lg:hidden">
-          <h1 className="text-xl font-bold">Equipment Service Manager</h1>
-          <p className="text-sm opacity-70">Ridley Equipment Services</p>
+          <Image
+            src="/equipmentiq-logo.png"
+            alt="EquipmentIQ"
+            width={180}
+            height={44}
+            className="h-10 w-auto object-contain"
+            priority
+          />
         </div>
 
         <div className="mx-auto w-full max-w-md">
-          <div className="tabs tabs-boxed mb-6">
+          <div className="tabs tabs-boxed mb-6 bg-white">
             <button
               type="button"
-              className={`tab flex-1 ${mode === "login" ? "tab-active" : ""}`}
+              className={`tab flex-1 ${mode === "login" ? "tab-active !bg-[#00a3a6] !text-white" : ""}`}
               onClick={() => setMode("login")}
             >
               Sign In
             </button>
             <button
               type="button"
-              className={`tab flex-1 ${mode === "signup" ? "tab-active" : ""}`}
+              className={`tab flex-1 ${mode === "signup" ? "tab-active !bg-[#00a3a6] !text-white" : ""}`}
               onClick={() => setMode("signup")}
             >
               Sign Up
@@ -112,14 +123,14 @@ export default function LoginPage() {
             </div>
           ) : null}
 
-          <form onSubmit={onSubmit} className="card bg-base-100 shadow-xl">
+          <form onSubmit={onSubmit} className="card border border-[#dce3ea] bg-white shadow-lg">
             <div className="card-body gap-4">
-              <h2 className="card-title text-lg">
+              <h2 className="card-title text-lg text-[#1e2a36]">
                 {mode === "login" ? "Welcome back" : "Create an account"}
               </h2>
 
               {mode === "signup" ? (
-                <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">
+                <label className="form-control w-full">
                   <span className="label-text font-medium">Full name</span>
                   <input
                     className="input input-bordered w-full"
@@ -130,59 +141,56 @@ export default function LoginPage() {
                 </label>
               ) : null}
 
-              <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">
+              <label className="form-control w-full">
                 <span className="label-text font-medium">Email</span>
                 <input
                   type="email"
                   className="input input-bordered w-full"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@company.com"
                   required
                 />
               </label>
 
-              <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">
+              <label className="form-control w-full">
                 <span className="label-text font-medium">Password</span>
                 <input
                   type="password"
                   className="input input-bordered w-full"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={DEMO_PASSWORD}
                   required
-                  minLength={8}
+                  minLength={6}
                 />
               </label>
 
-              <button type="submit" className="btn btn-primary mt-2" disabled={loading}>
-                {loading ? "Please wait…" : mode === "login" ? "Sign In" : "Create Account"}
+              <button type="submit" className="btn btn-primary" disabled={loading}>
+                {loading ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
               </button>
             </div>
           </form>
 
-          <div className="mt-6 rounded-box bg-base-100 p-4 text-sm shadow">
-            <p className="font-semibold">Demo accounts — click to fill (password: {DEMO_PASSWORD})</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {DEMO_PERSONAS.map((acct) => (
+          <div className="mt-6 rounded-xl border border-[#dce3ea] bg-white p-4">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#5c6b7a]">
+              Demo accounts
+            </p>
+            <p className="mb-3 text-xs text-[#5c6b7a]">Password: {DEMO_PASSWORD}</p>
+            <div className="flex flex-col gap-2">
+              {DEMO_PERSONAS.map((persona) => (
                 <button
-                  key={acct.email}
+                  key={persona.id}
                   type="button"
-                  className="btn btn-outline btn-xs"
+                  className="btn btn-outline btn-sm justify-start"
                   onClick={() => {
                     setMode("login");
-                    setEmail(acct.email);
+                    setEmail(persona.email);
                     setPassword(DEMO_PASSWORD);
-                    setError(null);
                   }}
                 >
-                  {acct.label}
+                  {persona.label}
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-xs opacity-60">
-              Best demo flow: Manager job → Tech PO/labor → Billing invoice → Payments.
-            </p>
           </div>
         </div>
       </section>
