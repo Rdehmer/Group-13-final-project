@@ -30,7 +30,10 @@ export default function InvoiceCashReportsPage() {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       const profileData = p as Profile | null;
       setProfile(profileData);
-      if (profileData?.role !== "service_manager") {
+      if (
+        profileData?.role !== "service_manager" &&
+        profileData?.role !== "administrator"
+      ) {
         router.replace("/reports");
         return;
       }
@@ -38,7 +41,10 @@ export default function InvoiceCashReportsPage() {
     })();
   }, [router]);
 
-  if (!ready || profile?.role !== "service_manager") {
+  if (
+    !ready ||
+    (profile?.role !== "service_manager" && profile?.role !== "administrator")
+  ) {
     return <div className="p-8 text-center opacity-60">Loading…</div>;
   }
 

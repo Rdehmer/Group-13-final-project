@@ -76,9 +76,10 @@ function groupPieSlices(
 export default async function DashboardPage() {
   const supabase = await createClient();
   const profile = await getProfile();
-  const isManager = profile?.role === "service_manager";
-  const canManageContracts =
+  /** Same widget dashboard for service managers and administrators. */
+  const isManager =
     profile?.role === "service_manager" || profile?.role === "administrator";
+  const canManageContracts = isManager;
 
   const [
     { count: customerCount },
