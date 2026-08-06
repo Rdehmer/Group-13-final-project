@@ -100,7 +100,11 @@ export default function ManagerInboxPage() {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       const next = p as Profile | null;
       setProfile(next);
-      if (next?.role !== "service_manager") {
+      if (
+        next?.role !== "service_manager" &&
+        next?.role !== "administrator" &&
+        next?.role !== "billing"
+      ) {
         router.replace("/dashboard");
         return;
       }
@@ -185,7 +189,12 @@ export default function ManagerInboxPage() {
     setBusy(false);
   }
 
-  if (!ready || profile?.role !== "service_manager") {
+  if (
+    !ready ||
+    (profile?.role !== "service_manager" &&
+      profile?.role !== "administrator" &&
+      profile?.role !== "billing")
+  ) {
     return <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>;
   }
 

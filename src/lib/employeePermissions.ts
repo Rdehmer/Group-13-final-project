@@ -133,6 +133,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "parts",
     "vendors",
     "service_vendors",
+    "inbox",
     "billing",
     "payments",
     "batches",

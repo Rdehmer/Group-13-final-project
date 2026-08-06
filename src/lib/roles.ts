@@ -21,7 +21,7 @@ export const NAV_ITEMS: NavItem[] = [
     section: true,
     href: "#nav-overview",
     label: "Overview",
-    roles: ["administrator", "service_manager"],
+    roles: ["administrator", "service_manager", "billing"],
     children: [
       {
         href: "/dashboard",
@@ -30,9 +30,9 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/inbox",
-        /** Manager mailbox linked to customer portal Inbox threads. */
+        /** Staff mailbox linked to customer portal Inbox threads. */
         label: "Inbox",
-        roles: ["service_manager"],
+        roles: ["service_manager", "administrator", "billing"],
       },
     ],
   },

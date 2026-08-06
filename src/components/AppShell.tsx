@@ -489,12 +489,17 @@ export function AppShell({
   const [pendingByHref, setPendingByHref] = useState<Record<string, number>>({});
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
   const isCustomer = profile.role === "customer";
-  const showManagerInbox = profile.role === "service_manager";
+  const isTechnician = profile.role === "technician";
+  const showTopSearchAndNew = !isCustomer && !isTechnician;
+  const showManagerInbox =
+    profile.role === "service_manager" ||
+    profile.role === "administrator" ||
+    profile.role === "billing";
   const canCollapseSidebar = profile.role === "service_manager";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const refreshUnread = useCallback(async () => {
-    if (profile.role !== "service_manager") {
+    if (!showManagerInbox) {
       setUnreadInbox(0);
       return;
     }
@@ -505,7 +510,7 @@ export function AppShell({
     } catch {
       /* keep last known count */
     }
-  }, [profile.role]);
+  }, [showManagerInbox]);
 
   useEffect(() => {
     setMounted(true);
@@ -679,7 +684,7 @@ export function AppShell({
                   </div>
                 </div>
 
-                {!isCustomer ? (
+                {showTopSearchAndNew ? (
                   <div className="eq-search min-w-0 flex-1">
                     <Search className="eq-search-icon" strokeWidth={1.75} />
                     <input
@@ -697,14 +702,14 @@ export function AppShell({
                 )}
 
                 <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-                  {!isCustomer && !gateActive ? (
+                  {showTopSearchAndNew && !gateActive ? (
                     <Link href={createHref} className="eq-create-btn">
                       <Plus className="h-4 w-4" strokeWidth={2.25} />
                       <span className="hidden sm:inline">New</span>
                     </Link>
                   ) : null}
 
-                  {!isCustomer ? <div className="eq-top-divider hidden sm:block" /> : null}
+                  {showTopSearchAndNew ? <div className="eq-top-divider hidden sm:block" /> : null}
 
                   {inboxControl}
                   {!isCustomer ? (
@@ -800,7 +805,7 @@ export function AppShell({
                 </div>
               </div>
 
-              {!isCustomer ? (
+              {showTopSearchAndNew ? (
                 <div className="eq-search min-w-0 flex-1">
                   <Search className="eq-search-icon" strokeWidth={1.75} />
                   <input
@@ -818,14 +823,14 @@ export function AppShell({
               )}
 
               <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-                {!isCustomer && !gateActive ? (
+                {showTopSearchAndNew && !gateActive ? (
                   <Link href={createHref} className="eq-create-btn">
                     <Plus className="h-4 w-4" strokeWidth={2.25} />
                     <span className="hidden sm:inline">New</span>
                   </Link>
                 ) : null}
 
-                {!isCustomer ? <div className="eq-top-divider hidden sm:block" /> : null}
+                {showTopSearchAndNew ? <div className="eq-top-divider hidden sm:block" /> : null}
 
                 {inboxControl}
                 {!isCustomer ? (
