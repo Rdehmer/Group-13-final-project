@@ -46,6 +46,8 @@ export type SchedulePrefs = {
   listExpanded: boolean;
   density: "compact" | "comfortable";
   techView: "all" | "mine" | string; // tech id
+  /** Day timeline body height in px (user-draggable expansion). */
+  dayViewHeight: number;
 };
 
 export const DEFAULT_PREFS: SchedulePrefs = {
@@ -53,7 +55,11 @@ export const DEFAULT_PREFS: SchedulePrefs = {
   listExpanded: true,
   density: "comfortable",
   techView: "all",
+  dayViewHeight: 280,
 };
+
+export const DAY_VIEW_HEIGHT_MIN = 160;
+export const DAY_VIEW_HEIGHT_MAX = 720;
 
 export const CATEGORY_STYLES: Record<
   ScheduleCategory,
@@ -320,8 +326,12 @@ export function customerName(wo: ScheduleWo): string {
 }
 
 export function densityRowHeight(density: "compact" | "comfortable"): number {
-  return density === "compact" ? 40 : 56;
+  // Tall enough for WO number, tech, customer, and time on day-timeline bubbles.
+  return density === "compact" ? 56 : 96;
 }
+
+/** Minimum vertical lanes on the day timeline so empty days do not look cramped. */
+export const DAY_TIMELINE_MIN_LANES = 2;
 
 export function exportDayCsv(day: Date, orders: TimedWo[]): string {
   const header = ["Work Order", "Start", "End", "Technician", "Customer", "Status", "Category", "Conflict"];

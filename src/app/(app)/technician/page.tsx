@@ -61,6 +61,9 @@ import {
   techName,
   customerName,
   densityRowHeight,
+  DAY_TIMELINE_MIN_LANES,
+  DAY_VIEW_HEIGHT_MIN,
+  DAY_VIEW_HEIGHT_MAX,
   exportDayCsv,
   downloadTextFile,
   nextWeekDate,
@@ -213,11 +216,13 @@ export default function TechnicianPage() {
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [scheduleSaved, setScheduleSaved] = useState(false);
   const [scheduleDirty, setScheduleDirty] = useState(false);
+  const [dayViewHeight, setDayViewHeight] = useState(DEFAULT_PREFS.dayViewHeight);
+  const dayResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
 
   const isServiceManager = profile?.role === "service_manager";
   const isManager = profile?.role === "administrator" || isServiceManager;
-  // Managers always use comfortable density (no compact control).
-  const rowHeight = densityRowHeight(isServiceManager ? "comfortable" : density);
+  // Managers schedule at comfortable height so timeline bubbles stay readable.
+  const baseRowHeight = densityRowHeight(isManager ? "comfortable" : density);
 
   useEffect(() => {
     const prefs = loadPrefs();
@@ -225,6 +230,11 @@ export default function TechnicianPage() {
     setListExpanded(prefs.listExpanded);
     setDensity(prefs.density);
     setTechView(prefs.techView);
+    if (typeof prefs.dayViewHeight === "number" && Number.isFinite(prefs.dayViewHeight)) {
+      setDayViewHeight(
+        Math.min(DAY_VIEW_HEIGHT_MAX, Math.max(DAY_VIEW_HEIGHT_MIN, prefs.dayViewHeight)),
+      );
+    }
     setPrefsHydrated(true);
   }, []);
 
@@ -236,8 +246,42 @@ export default function TechnicianPage() {
       listExpanded,
       density: isServiceManager ? "comfortable" : density,
       techView,
+      dayViewHeight,
     });
-  }, [categoryFilter, listExpanded, density, techView, prefsHydrated, isServiceManager]);
+  }, [categoryFilter, listExpanded, density, techView, dayViewHeight, prefsHydrated, isServiceManager]);
+
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      const start = dayResizeRef.current;
+      if (!start) return;
+      const delta = e.clientY - start.startY;
+      const next = Math.min(
+        DAY_VIEW_HEIGHT_MAX,
+        Math.max(DAY_VIEW_HEIGHT_MIN, start.startHeight + delta),
+      );
+      setDayViewHeight(next);
+    }
+    function onUp() {
+      dayResizeRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  function beginDayCalendarResize(e: React.PointerEvent) {
+    e.preventDefault();
+    dayResizeRef.current = { startY: e.clientY, startHeight: dayViewHeight };
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+  }
 
   const loadProfile = useCallback(async () => {
     const {
@@ -547,6 +591,14 @@ export default function TechnicianPage() {
     };
   }, [dayOrders]);
 
+  const dayLaneCount = Math.max(dayTimeline.laneCount, DAY_TIMELINE_MIN_LANES);
+  // Stretch rows to fill the user-resized day calendar height.
+  const dayTimelineBodyHeight = dayViewHeight;
+  const dayBubbleRowHeight = Math.max(
+    Math.min(baseRowHeight, 64),
+    Math.floor((dayTimelineBodyHeight - 28) / dayLaneCount),
+  );
+
   function selectWorkOrder(id: string) {
     if (bulkMode) {
       setBulkSelected((prev) => {
@@ -818,14 +870,21 @@ export default function TechnicianPage() {
     if (!wo) return;
 
     const targetDate = format(targetDay, "yyyy-MM-dd");
+    // Day-to-day moves keep the same clock times; only the date changes.
+    const startMin = wo.startMinutes;
+    const endMin = Math.max(wo.endMinutes, startMin + Math.max(payload.durationMinutes, 15));
+    const hours = Math.round(((endMin - startMin) / 60) * 100) / 100;
+
     const patch = {
       scheduled_date: targetDate,
-      scheduled_start_time: wo.scheduled_start_time ?? formatTimeForDb(wo.startMinutes),
-      scheduled_end_time: formatTimeForDb(wo.endMinutes),
-      estimated_labor_hours: wo.estimated_labor_hours ?? payload.durationMinutes / 60,
+      scheduled_start_time: formatTimeForDb(startMin),
+      scheduled_end_time: formatTimeForDb(endMin),
+      estimated_labor_hours: hours,
     };
 
     applyLocalScheduleUpdate(payload.id, patch);
+    setSelectedDay(startOfDay(targetDay));
+    setMonthCursor(startOfMonth(targetDay));
     setBusy(true);
     await persistScheduleUpdate(payload.id, patch);
     await reloadAll();
@@ -1355,6 +1414,7 @@ export default function TechnicianPage() {
             <div className="space-y-3">
               <p className="text-xs opacity-60">
                 Click a work order to highlight it on the calendars; click again to clear.
+                {isManager ? " Drag a work order onto the month or day calendar to schedule it." : ""}
                 {bulkMode ? " Bulk mode: toggle multiple selections." : ""} Showing{" "}
                 {Math.min(visibleCount, filteredOrders.length)} of {filteredOrders.length}.
               </p>
@@ -1372,10 +1432,15 @@ export default function TechnicianPage() {
                           <button
                             type="button"
                             onClick={() => selectWorkOrder(wo.id)}
+                            draggable={isManager}
+                            onDragStart={(e) => handleDragStart(e, wo)}
                             className={`rounded-box border px-3 py-1.5 text-left text-sm transition ${style.chip} ${
                               active ? `ring-2 ring-offset-2 ${style.ring}` : "opacity-90 hover:opacity-100"
-                            } ${wo.hasConflict ? "outline outline-2 outline-error outline-offset-1" : ""}`}
+                            } ${wo.hasConflict ? "outline outline-2 outline-error outline-offset-1" : ""} ${
+                              isManager ? "cursor-grab active:cursor-grabbing" : ""
+                            }`}
                             aria-pressed={active}
+                            title={isManager ? "Drag to month or day calendar to schedule" : undefined}
                           >
                             {bulkMode ? (
                               <span className="mr-1 inline-block h-3 w-3 rounded border border-current align-middle" aria-hidden />
@@ -1383,6 +1448,13 @@ export default function TechnicianPage() {
                             <span className="font-semibold">{wo.work_order_number}</span>
                             <span className="mx-1 opacity-70">·</span>
                             <span className="opacity-90">{customerName(wo)}</span>
+                            {wo.scheduled_date ? (
+                              <span className="ml-1 opacity-70">
+                                · {wo.scheduled_date.slice(0, 10)} {wo.startLabel}
+                              </span>
+                            ) : (
+                              <span className="ml-1 opacity-70">· Unscheduled</span>
+                            )}
                           </button>
                         </li>
                       );
@@ -1696,11 +1768,15 @@ export default function TechnicianPage() {
                   ref={timelineDropRef}
                   className="relative"
                   style={{
-                    height: dayTimeline.laneCount * rowHeight + 20,
+                    height: dayTimelineBodyHeight,
                     width: dayTimeline.timelineWidth,
+                    minHeight: DAY_VIEW_HEIGHT_MIN,
                   }}
                   onDragOver={(e) => {
-                    if (isManager) e.preventDefault();
+                    if (isManager) {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                    }
                   }}
                   onDrop={(e) => void handleTimelineDrop(e)}
                 >
@@ -1714,13 +1790,14 @@ export default function TechnicianPage() {
 
                   {dayTimeline.placed.map(({ wo, lane }) => {
                     const left =
-                      ((wo.startMinutes - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH + lane * 10;
+                      ((wo.startMinutes - dayTimeline.rangeStartMin) / 60) * HOUR_WIDTH + lane * 12;
                     const width = Math.max(
-                      ((wo.endMinutes - wo.startMinutes) / 60) * HOUR_WIDTH - 4,
-                      HOUR_WIDTH * 0.4,
+                      ((wo.endMinutes - wo.startMinutes) / 60) * HOUR_WIDTH - 6,
+                      HOUR_WIDTH * 0.55,
                     );
                     const style = CATEGORY_STYLES[wo.category];
                     const active = selectedId === wo.id;
+                    const bubbleH = Math.max(40, dayBubbleRowHeight - 10);
                     return (
                       <div
                         key={wo.id}
@@ -1728,8 +1805,8 @@ export default function TechnicianPage() {
                         style={{
                           left,
                           width,
-                          top: 8 + lane * rowHeight,
-                          height: rowHeight - 14,
+                          top: 10 + lane * dayBubbleRowHeight,
+                          height: bubbleH,
                         }}
                         draggable={isManager}
                         onDragStart={(e) => handleDragStart(e, wo)}
@@ -1737,22 +1814,24 @@ export default function TechnicianPage() {
                         <button
                           type="button"
                           onClick={() => selectWorkOrder(wo.id)}
-                          className={`relative h-full w-full overflow-hidden rounded-md border px-2 py-1 text-left text-xs shadow-sm transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${style.block} ${
+                          className={`relative h-full w-full overflow-hidden rounded-md border px-2.5 py-1.5 text-left shadow-sm transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${style.block} ${
                             active ? `ring-2 ring-offset-2 ${style.ring}` : ""
-                          } ${wo.hasConflict ? "ring-2 ring-error ring-offset-1" : ""}`}
+                          } ${wo.hasConflict ? "ring-2 ring-error ring-offset-1" : ""} ${
+                            isManager ? "cursor-grab active:cursor-grabbing" : ""
+                          }`}
                           aria-label={`Work order ${wo.work_order_number} from ${wo.startLabel} to ${wo.endLabel}`}
                           aria-pressed={active}
                         >
                           {wo.hasConflict ? (
                             <AlertTriangle
-                              className="absolute right-1 top-1 h-3.5 w-3.5 text-error-content"
+                              className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-error-content"
                               aria-label="Schedule conflict"
                             />
                           ) : null}
-                          <div className="truncate font-semibold leading-tight">{wo.work_order_number}</div>
-                          <div className="truncate text-[10px] opacity-90">{techName(wo)}</div>
-                          <div className="truncate opacity-90">{customerName(wo)}</div>
-                          <div className="truncate text-[10px] opacity-80">
+                          <div className="truncate text-sm font-semibold leading-snug">{wo.work_order_number}</div>
+                          <div className="truncate text-xs leading-snug opacity-95">{techName(wo)}</div>
+                          <div className="truncate text-xs leading-snug opacity-95">{customerName(wo)}</div>
+                          <div className="truncate text-xs font-medium leading-snug opacity-90">
                             {wo.startLabel} – {wo.endLabel}
                           </div>
                         </button>
@@ -1761,14 +1840,50 @@ export default function TechnicianPage() {
                   })}
 
                   {dayOrders.length === 0 ? (
-                    <div className="flex h-full min-h-[4rem] items-center justify-center text-sm opacity-50">
-                      No work orders this day
+                    <div className="flex h-full min-h-[8rem] items-center justify-center text-sm opacity-50">
+                      {isManager
+                        ? "No work orders this day — drag one here from the list above"
+                        : "No work orders this day"}
                       {categoryFilter !== "all" ? " for this filter" : ""}
                     </div>
                   ) : null}
                 </div>
               </div>
+
+              {/* Drag edge: pull down to expand / up to shrink the day calendar */}
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize day calendar height. Drag up or down to expand or shrink."
+                aria-valuemin={DAY_VIEW_HEIGHT_MIN}
+                aria-valuemax={DAY_VIEW_HEIGHT_MAX}
+                aria-valuenow={Math.round(dayViewHeight)}
+                tabIndex={0}
+                onPointerDown={beginDayCalendarResize}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setDayViewHeight((h) => Math.min(DAY_VIEW_HEIGHT_MAX, h + 24));
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setDayViewHeight((h) => Math.max(DAY_VIEW_HEIGHT_MIN, h - 24));
+                  } else if (e.key === "Home") {
+                    e.preventDefault();
+                    setDayViewHeight(DAY_VIEW_HEIGHT_MIN);
+                  } else if (e.key === "End") {
+                    e.preventDefault();
+                    setDayViewHeight(DAY_VIEW_HEIGHT_MAX);
+                  }
+                }}
+                className="group flex h-4 cursor-ns-resize select-none items-center justify-center border-t border-base-300 bg-base-200/50 print:hidden hover:bg-primary/15 active:bg-primary/25"
+                title="Drag up or down to resize the day calendar"
+              >
+                <span className="h-1 w-10 rounded-full bg-base-content/25 group-hover:bg-primary/60" aria-hidden />
+              </div>
             </div>
+            <p className="mt-1 text-center text-[10px] opacity-50 print:hidden">
+              Drag the bar below the day calendar up or down to resize · {Math.round(dayViewHeight)}px
+            </p>
           </div>
         </section>
 
@@ -1811,6 +1926,7 @@ export default function TechnicianPage() {
                 const list = ordersByDayKey.get(key) ?? [];
                 const inMonth = isSameMonth(day, monthCursor);
                 const isSelectedDay = isSameDay(day, selectedDay);
+                const emptyDay = list.length === 0;
                 return (
                   <div
                     key={key}
@@ -1824,15 +1940,36 @@ export default function TechnicianPage() {
                       }
                     }}
                     onDragOver={(e) => {
-                      if (isManager) e.preventDefault();
+                      if (isManager) {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }
                     }}
                     onDrop={(e) => void handleMonthCellDrop(e, day)}
-                    className={`min-h-[5.5rem] cursor-pointer rounded-box border p-1 text-left transition hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
-                      inMonth ? "border-base-300 bg-base-100" : "border-transparent bg-base-200/40 opacity-50"
-                    } ${isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""} ${isToday(day) ? "bg-base-200/80" : ""}`}
-                    aria-label={`${format(day, "MMMM d, yyyy")}: ${list.length} work orders. Click to open day details.`}
+                    className={`relative min-h-[6.5rem] cursor-pointer overflow-hidden rounded-box border p-1 text-left transition hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary ${
+                      inMonth ? "border-base-300" : "border-transparent opacity-50"
+                    } ${isSelectedDay ? "ring-2 ring-primary ring-offset-1" : ""} ${
+                      emptyDay
+                        ? ""
+                        : inMonth
+                          ? "bg-base-100"
+                          : "bg-base-200/40"
+                    } ${!emptyDay && isToday(day) ? "bg-base-200/80" : ""}`}
+                    style={
+                      emptyDay
+                        ? {
+                            // White / grey diagonal hatch for days with nothing scheduled
+                            backgroundColor: inMonth ? "#ffffff" : "rgba(243,244,246,0.7)",
+                            backgroundImage:
+                              "repeating-linear-gradient(-45deg, #ffffff 0px, #ffffff 5px, #e5e7eb 5px, #e5e7eb 10px)",
+                          }
+                        : undefined
+                    }
+                    aria-label={`${format(day, "MMMM d, yyyy")}: ${list.length} work orders. ${
+                      isManager ? "Drop a work order here to schedule." : ""
+                    } Click to open day details.`}
                   >
-                    <div className="mb-1 flex items-center justify-between px-0.5">
+                    <div className="relative z-[1] mb-1 flex items-center justify-between px-0.5">
                       <span className={`text-xs font-semibold ${isToday(day) ? "text-primary" : ""}`}>
                         {format(day, "d")}
                       </span>
@@ -1840,7 +1977,7 @@ export default function TechnicianPage() {
                         <span className="badge badge-ghost badge-xs tabular-nums">{list.length}</span>
                       ) : null}
                     </div>
-                    <div className="flex flex-col gap-0.5">
+                    <div className="relative z-[1] flex flex-col gap-0.5">
                       {list.slice(0, 3).map((wo) => {
                         const style = CATEGORY_STYLES[wo.category];
                         const active = selectedId === wo.id;
@@ -1848,10 +1985,19 @@ export default function TechnicianPage() {
                           <button
                             key={wo.id}
                             type="button"
+                            draggable={isManager}
+                            onDragStart={(e) => {
+                              e.stopPropagation();
+                              handleDragStart(e, wo);
+                            }}
                             className={`truncate rounded px-1 py-0.5 text-left text-[10px] leading-tight ${style.chip} ${
                               active ? `ring-2 ring-offset-1 ${style.ring}` : ""
-                            } ${wo.hasConflict ? "outline outline-1 outline-error" : ""}`}
-                            title={`${wo.work_order_number} · ${wo.startLabel} · ${techName(wo)}`}
+                            } ${wo.hasConflict ? "outline outline-1 outline-error" : ""} ${
+                              isManager ? "cursor-grab active:cursor-grabbing" : ""
+                            }`}
+                            title={`${wo.work_order_number} · ${wo.startLabel} · ${techName(wo)}${
+                              isManager ? " — drag to another day to reschedule" : ""
+                            }`}
                             onClick={(e) => {
                               e.stopPropagation();
                               selectWorkOrder(wo.id);

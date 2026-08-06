@@ -2,11 +2,18 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { format } from "date-fns";
+import { Download } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
-import type { Customer } from "@/lib/types";
+import type { Customer, ServiceContract } from "@/lib/types";
+import {
+  inferContractTier,
+  tierBadgeClass,
+  type ContractTierId,
+} from "@/lib/contracts";
 
 type CustomerLocation = Customer;
 
@@ -25,6 +32,16 @@ const emptyCustomerForm = {
   region: "",
   country: "",
   status: "Active" as Customer["status"],
+};
+
+/** Manager list: membership tier, one-off service (hot order), or ended membership. */
+export type ServiceTypeKind = "tier" | "hot_order" | "inactive" | "active_membership";
+
+export type ServiceTypeInfo = {
+  kind: ServiceTypeKind;
+  /** Display text in Service Type column */
+  label: string;
+  tierId?: ContractTierId;
 };
 
 function emptyToNull(value: string): string | null {
@@ -112,7 +129,61 @@ function InfoTip({
   );
 }
 
-type CustomerRow = CustomerLocation & { activeEquipmentCount: number };
+function isActiveContract(status: string | null | undefined): boolean {
+  const s = (status ?? "").toLowerCase();
+  return s === "active" || s === "renewed";
+}
+
+const TIER_RANK: Record<ContractTierId, number> = { gold: 3, silver: 2, bronze: 1 };
+
+/**
+ * Resolve Service Type from membership contracts.
+ * Active + known tier → Gold/Silver/Bronze.
+ * Active + unknown tier (until customer branch stores tier reliably) → Active membership placeholder.
+ * Past contracts only → Inactive.
+ * No contracts → Hot Order (one-off service, not a tier membership).
+ */
+export function resolveServiceType(
+  contracts: Array<Pick<ServiceContract, "name" | "status" | "end_date">>,
+): ServiceTypeInfo {
+  if (!contracts.length) {
+    return { kind: "hot_order", label: "Hot Order" };
+  }
+
+  const active = contracts.filter((c) => isActiveContract(c.status));
+  if (active.length > 0) {
+    let bestTier: ContractTierId | null = null;
+    for (const c of active) {
+      const tier = inferContractTier(c.name ?? "");
+      if (!tier) continue;
+      if (!bestTier || TIER_RANK[tier] > TIER_RANK[bestTier]) bestTier = tier;
+    }
+    if (bestTier) {
+      const label = bestTier.charAt(0).toUpperCase() + bestTier.slice(1);
+      return { kind: "tier", label, tierId: bestTier };
+    }
+    // Tier not in contract name yet — keep a clear membership signal until customer branch updates.
+    return { kind: "active_membership", label: "Active membership" };
+  }
+
+  return { kind: "inactive", label: "Inactive" };
+}
+
+function serviceTypeTone(info: ServiceTypeInfo): "success" | "warning" | "error" | "info" | "neutral" {
+  if (info.kind === "tier") {
+    if (info.tierId === "gold") return "warning";
+    if (info.tierId === "silver") return "info";
+    return "neutral";
+  }
+  if (info.kind === "hot_order") return "info";
+  if (info.kind === "inactive") return "error";
+  return "success";
+}
+
+type CustomerRow = CustomerLocation & {
+  activeEquipmentCount: number;
+  serviceType: ServiceTypeInfo;
+};
 
 /** Active equipment = not Retired (still on the service relationship). */
 function isActiveEquipment(operatingStatus: string | null | undefined): boolean {
@@ -124,23 +195,107 @@ function locationMatches(c: CustomerLocation, filter: string, value: string | nu
   return (nonEmpty(value) ?? "").toLowerCase() === filter.toLowerCase();
 }
 
+function customerSearchHaystack(c: CustomerRow): string {
+  const parts = [
+    c.name,
+    c.primary_contact_name,
+    c.email,
+    c.phone,
+    c.service_address,
+    c.billing_address,
+    c.city,
+    c.state,
+    c.zip_code,
+    c.region,
+    c.country,
+    c.status,
+    String(c.activeEquipmentCount),
+    c.serviceType.label,
+    formatLocationLabel(c),
+  ];
+  return parts
+    .filter((p) => p != null && String(p).trim() !== "")
+    .join(" ")
+    .toLowerCase();
+}
+
+function csvEscape(value: string | number | null | undefined): string {
+  const s = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/** CSV with BOM so Excel opens UTF-8 correctly and treats columns as text. */
+function buildCustomersExcelCsv(rows: CustomerRow[]): string {
+  const headers = [
+    "Name",
+    "Contact",
+    "Email",
+    "Phone",
+    "Location",
+    "Street Address",
+    "City",
+    "State",
+    "ZIP",
+    "Active Equipment",
+    "Service Type",
+    "Status",
+  ];
+  const lines = [
+    headers.join(","),
+    ...rows.map((c) =>
+      [
+        c.name,
+        c.primary_contact_name,
+        c.email,
+        c.phone,
+        formatLocationLabel(c),
+        nonEmpty(c.service_address) ?? nonEmpty(c.billing_address) ?? "",
+        c.city,
+        c.state,
+        c.zip_code,
+        c.activeEquipmentCount,
+        c.serviceType.label,
+        c.status,
+      ]
+        .map(csvEscape)
+        .join(","),
+    ),
+  ];
+  return `\uFEFF${lines.join("\r\n")}`;
+}
+
+function downloadCustomersExcel(rows: CustomerRow[]) {
+  const csv = buildCustomersExcelCsv(rows);
+  const blob = new Blob([csv], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `customers-${format(new Date(), "yyyy-MM-dd")}.xls`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function CustomersPage() {
   const supabase = createClient();
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filterCountry, setFilterCountry] = useState(ALL);
-  const [filterRegion, setFilterRegion] = useState(ALL);
+  const [searchQuery, setSearchQuery] = useState("");
   const [filterState, setFilterState] = useState(ALL);
   const [filterCity, setFilterCity] = useState(ALL);
   const [form, setForm] = useState(emptyCustomerForm);
 
   async function load() {
     setLoading(true);
-    const [{ data: customerData }, { data: equipmentData }] = await Promise.all([
+    const [{ data: customerData }, { data: equipmentData }, { data: contractData }] = await Promise.all([
       supabase.from("customers").select("*").order("name"),
       supabase.from("equipment").select("customer_id, operating_status"),
+      supabase.from("service_contracts").select("id, customer_id, name, status, end_date"),
     ]);
 
     const counts = new Map<string, number>();
@@ -149,9 +304,22 @@ export default function CustomersPage() {
       counts.set(eq.customer_id, (counts.get(eq.customer_id) ?? 0) + 1);
     }
 
+    const contractsByCustomer = new Map<string, Array<Pick<ServiceContract, "name" | "status" | "end_date">>>();
+    for (const sc of contractData ?? []) {
+      if (!sc.customer_id) continue;
+      const list = contractsByCustomer.get(sc.customer_id) ?? [];
+      list.push({
+        name: sc.name as string,
+        status: sc.status as string,
+        end_date: sc.end_date as string,
+      });
+      contractsByCustomer.set(sc.customer_id, list);
+    }
+
     const rows: CustomerRow[] = ((customerData as CustomerLocation[]) ?? []).map((c) => ({
       ...c,
       activeEquipmentCount: counts.get(c.id) ?? 0,
+      serviceType: resolveServiceType(contractsByCustomer.get(c.id) ?? []),
     }));
 
     rows.sort((a, b) => {
@@ -169,42 +337,31 @@ export default function CustomersPage() {
     load();
   }, []);
 
-  const countryOptions = useMemo(() => uniqueSorted(customers.map((c) => c.country)), [customers]);
-  const regionOptions = useMemo(() => {
-    const base = filterCountry
-      ? customers.filter((c) => locationMatches(c, filterCountry, c.country))
-      : customers;
-    return uniqueSorted(base.map((c) => c.region));
-  }, [customers, filterCountry]);
-  const stateOptions = useMemo(() => {
-    let base = customers;
-    if (filterCountry) base = base.filter((c) => locationMatches(c, filterCountry, c.country));
-    if (filterRegion) base = base.filter((c) => locationMatches(c, filterRegion, c.region));
-    return uniqueSorted(base.map((c) => c.state));
-  }, [customers, filterCountry, filterRegion]);
+  const stateOptions = useMemo(() => uniqueSorted(customers.map((c) => c.state)), [customers]);
   const cityOptions = useMemo(() => {
-    let base = customers;
-    if (filterCountry) base = base.filter((c) => locationMatches(c, filterCountry, c.country));
-    if (filterRegion) base = base.filter((c) => locationMatches(c, filterRegion, c.region));
-    if (filterState) base = base.filter((c) => locationMatches(c, filterState, c.state));
+    const base = filterState
+      ? customers.filter((c) => locationMatches(c, filterState, c.state))
+      : customers;
     return uniqueSorted(base.map((c) => c.city));
-  }, [customers, filterCountry, filterRegion, filterState]);
+  }, [customers, filterState]);
 
   const filteredCustomers = useMemo(() => {
-    return customers.filter(
-      (c) =>
-        locationMatches(c, filterCountry, c.country) &&
-        locationMatches(c, filterRegion, c.region) &&
-        locationMatches(c, filterState, c.state) &&
-        locationMatches(c, filterCity, c.city),
-    );
-  }, [customers, filterCountry, filterRegion, filterState, filterCity]);
+    const q = searchQuery.trim().toLowerCase();
+    const terms = q ? q.split(/\s+/).filter(Boolean) : [];
 
-  const hasLocationFilters = Boolean(filterCountry || filterRegion || filterState || filterCity);
+    return customers.filter((c) => {
+      if (!locationMatches(c, filterState, c.state)) return false;
+      if (!locationMatches(c, filterCity, c.city)) return false;
+      if (terms.length === 0) return true;
+      const hay = customerSearchHaystack(c);
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [customers, filterState, filterCity, searchQuery]);
 
-  function clearLocationFilters() {
-    setFilterCountry(ALL);
-    setFilterRegion(ALL);
+  const hasFilters = Boolean(searchQuery.trim() || filterState || filterCity);
+
+  function clearFilters() {
+    setSearchQuery("");
     setFilterState(ALL);
     setFilterCity(ALL);
   }
@@ -267,9 +424,25 @@ export default function CustomersPage() {
         title="Customers"
         description="Manage commercial customer accounts"
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
-            Add Customer
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              onClick={() => downloadCustomersExcel(filteredCustomers)}
+              disabled={loading || filteredCustomers.length === 0}
+              title={
+                filteredCustomers.length === 0
+                  ? "No customers to export"
+                  : `Export ${filteredCustomers.length} customer${filteredCustomers.length === 1 ? "" : "s"} (current search/filters)`
+              }
+            >
+              <Download className="h-4 w-4" aria-hidden />
+              Export to Excel
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
+              Add Customer
+            </button>
+          </>
         }
       />
 
@@ -359,57 +532,24 @@ export default function CustomersPage() {
       {!loading && customers.length > 0 ? (
         <div className="mb-4 rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-medium">Filter by location</p>
-            {hasLocationFilters ? (
-              <button type="button" className="btn btn-ghost btn-xs" onClick={clearLocationFilters}>
-                Clear filters
+            <p className="text-sm font-medium">Search &amp; filter</p>
+            {hasFilters ? (
+              <button type="button" className="btn btn-ghost btn-xs" onClick={clearFilters}>
+                Clear
               </button>
             ) : null}
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <label className="form-control w-full">
-              <span className="label-text mb-1 text-xs opacity-70">Country</span>
-              <select
-                className="select select-bordered select-sm w-full"
-                value={filterCountry}
-                onChange={(e) => {
-                  setFilterCountry(e.target.value);
-                  setFilterRegion(ALL);
-                  setFilterState(ALL);
-                  setFilterCity(ALL);
-                }}
-                aria-label="Filter customers by country"
-              >
-                <option value={ALL}>All countries</option>
-                {countryOptions.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-              {countryOptions.length === 0 ? (
-                <span className="mt-1 text-xs opacity-50">No country data yet (ready for global clients)</span>
-              ) : null}
-            </label>
-
-            <label className="form-control w-full">
-              <span className="label-text mb-1 text-xs opacity-70">Region</span>
-              <select
-                className="select select-bordered select-sm w-full"
-                value={filterRegion}
-                onChange={(e) => {
-                  setFilterRegion(e.target.value);
-                  setFilterState(ALL);
-                  setFilterCity(ALL);
-                }}
-                aria-label="Filter customers by region"
-              >
-                <option value={ALL}>All regions</option>
-                {regionOptions.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-              {regionOptions.length === 0 ? (
-                <span className="mt-1 text-xs opacity-50">No region data yet</span>
-              ) : null}
+            <label className="form-control w-full sm:col-span-2 lg:col-span-2">
+              <span className="label-text mb-1 text-xs opacity-70">Search</span>
+              <input
+                type="search"
+                className="input input-bordered input-sm w-full"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Name, contact, email, phone, location, service type…"
+                aria-label="Search customers"
+              />
             </label>
 
             <label className="form-control w-full">
@@ -445,6 +585,9 @@ export default function CustomersPage() {
               </select>
             </label>
           </div>
+          <p className="mt-2 text-xs opacity-60">
+            Showing {filteredCustomers.length} of {customers.length} customers
+          </p>
         </div>
       ) : null}
 
@@ -459,10 +602,10 @@ export default function CustomersPage() {
           ) : filteredCustomers.length === 0 ? (
             <div className="p-6">
               <EmptyState
-                title="No customers match these filters"
-                description="Try another location, or clear filters to see all customers."
+                title="No customers match"
+                description="Try a different search or location filter, or clear filters to see all customers."
                 action={
-                  <button type="button" className="btn btn-primary btn-sm" onClick={clearLocationFilters}>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={clearFilters}>
                     Clear filters
                   </button>
                 }
@@ -477,6 +620,7 @@ export default function CustomersPage() {
                     <th>Contact</th>
                     <th>Location</th>
                     <th>Active Equipment</th>
+                    <th>Service Type</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -484,6 +628,7 @@ export default function CustomersPage() {
                   {filteredCustomers.map((c) => {
                     const locationLabel = formatLocationLabel(c);
                     const contactLabel = nonEmpty(c.primary_contact_name) ?? "—";
+                    const st = c.serviceType;
                     return (
                       <tr key={c.id}>
                         <td>
@@ -514,6 +659,13 @@ export default function CustomersPage() {
                           >
                             {c.activeEquipmentCount}
                           </span>
+                        </td>
+                        <td>
+                          {st.kind === "tier" && st.tierId ? (
+                            <span className={`badge badge-sm ${tierBadgeClass(st.tierId)}`}>{st.label}</span>
+                          ) : (
+                            <StatusBadge label={st.label} tone={serviceTypeTone(st)} />
+                          )}
                         </td>
                         <td>
                           <StatusBadge label={c.status} tone={customerStatusTone(c.status)} />
