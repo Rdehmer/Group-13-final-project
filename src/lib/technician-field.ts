@@ -222,6 +222,60 @@ export function priorityBarClass(priority: string): string {
   }
 }
 
+/** Time-of-day greeting for field tech home. */
+export function greetForTime(now = new Date()): string {
+  const h = now.getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+export function firstNameFromProfile(fullName: string | null | undefined, email?: string | null): string {
+  const name = fullName?.trim();
+  if (name) return name.split(/\s+/)[0] ?? name;
+  const local = email?.split("@")[0]?.trim();
+  return local || "Tech";
+}
+
+export function isActivelyWorking(
+  job: Pick<WorkOrder, "status" | "dispatch_status" | "started_at" | "arrival_at">,
+): boolean {
+  if (!isOpenJob(job)) return false;
+  return (
+    job.dispatch_status === "Working" ||
+    (Boolean(job.started_at) && nextChecklistStep(job) === "complete")
+  );
+}
+
+/** Short label for schedule cards, e.g. "Starts in 20m" or "Started 9:00". */
+export function relativeScheduleHint(job: FieldJob, now = new Date()): string | null {
+  if (!isTodayJob(job, now)) return null;
+  const step = nextChecklistStep(job);
+  if (step === "complete" || step === "working" || isActivelyWorking(job)) {
+    if (job.dispatch_status === "Working" || job.started_at) return "In progress";
+    if (job.arrival_at || job.dispatch_status === "Arrived") return "On site";
+  }
+  const timed = withDerivedTimes(job);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const start = timed.startMinutes;
+  if (start == null || !Number.isFinite(start)) return null;
+  const delta = start - nowMin;
+  if (delta <= 0 && delta > -120) return "Window open";
+  if (delta > 0 && delta <= 60) return `Starts in ${delta}m`;
+  if (delta > 60 && delta <= 180) return `Starts in ${Math.round(delta / 60)}h`;
+  return null;
+}
+
+/** Checklist primary CTA for sticky footers / buttons. */
+export function nextStepLabel(
+  step: ReturnType<typeof nextChecklistStep>,
+): { label: string; action: "arrived" | "working" | "complete" | null } {
+  if (step === "arrived") return { label: "Mark Arrived", action: "arrived" };
+  if (step === "working") return { label: "Start Working", action: "working" };
+  if (step === "complete") return { label: "Complete & Sign-off", action: "complete" };
+  return { label: "Job closed", action: null };
+}
+
 /** True when part/labor may be outside contract coverage. */
 export function isOutOfScope(
   job: Pick<WorkOrder, "warranty_coverage" | "contract_id" | "under_expired_contract">,

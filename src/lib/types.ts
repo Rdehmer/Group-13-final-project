@@ -175,7 +175,7 @@ export type TruckInventory = {
   updated_at: string;
 };
 
-/** Technician parts replenishment request (truck inventory PO request row). */
+/** Technician parts replenishment request (purchase order request row). */
 export type TechPartOrderRequest = {
   id: string;
   technician_id: string;

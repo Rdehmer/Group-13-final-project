@@ -94,7 +94,7 @@ export function PurchaseOrderRequest({
             <h2 id="purchase-order-title" className="text-2xl font-bold">
               Request purchase order
             </h2>
-            <p className="text-sm opacity-70">Ask the office to restock your truck.</p>
+            <p className="text-sm opacity-70">Ask the office to restock from warehouse inventory.</p>
           </div>
         </div>
 
