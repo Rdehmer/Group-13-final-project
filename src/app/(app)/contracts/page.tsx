@@ -9,7 +9,7 @@ import { PageHeader, FormRow } from "@/components/PageHeader";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
-import type { Customer, Profile, ServiceContract } from "@/lib/types";
+import type { Customer, Invoice, Profile, ServiceContract } from "@/lib/types";
 import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
 import {
   contractMatchesPlanFilters,
@@ -19,7 +19,19 @@ import {
   parsePlanSnapshotFromNotes,
   type ServiceLevelId,
 } from "@/lib/contract-plans";
+import {
+  currentBillingPeriodKey,
+  formatStandingDetail,
+  generateMonthlyInvoicesForPeriod,
+  getContractPaymentStanding,
+  monthlyFromAnnual,
+  resolveMoneyFromContractNotes,
+  resolvedDeductible,
+  resolvedMonthlyAmount,
+  standingBadgeClass,
+} from "@/lib/contract-billing";
 import { ClipboardList } from "lucide-react";
+import { formatMonthLabel } from "@/lib/billing";
 
 type ContractRow = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -40,6 +52,8 @@ const emptyContractForm = {
   end_date: "",
   billing_method: "Monthly Recurring Charge",
   contract_price: "0",
+  monthly_amount: "0",
+  deductible: "0",
   included_service_visits: "4",
   included_labor_hours: "8",
   included_replacement_parts: "0",
@@ -72,6 +86,7 @@ export default function ContractsPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const statusFromUrl = searchParams.get("status") ?? "";
+  const typeFromUrl = searchParams.get("type") ?? "";
   const [profile, setProfile] = useState<Profile | null>(null);
   const [contracts, setContracts] = useState<ContractRow[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -84,7 +99,7 @@ export default function ContractsPage() {
   const [filters, setFilters] = useState({
     name: "",
     customer: "",
-    type: "",
+    type: typeFromUrl,
     price: "",
     status: statusFromUrl,
     end: "",
@@ -99,6 +114,9 @@ export default function ContractsPage() {
   const [planPacks, setPlanPacks] = useState(() =>
     typeof window !== "undefined" ? listActivePacks(loadCatalog()) : [],
   );
+  const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
+  const [genBusy, setGenBusy] = useState(false);
+  const [genMessage, setGenMessage] = useState<string | null>(null);
 
   const isManager =
     profile?.role === "service_manager" || profile?.role === "administrator";
@@ -109,20 +127,26 @@ export default function ContractsPage() {
   }, []);
 
   useEffect(() => {
-    setFilters((prev) => ({ ...prev, status: statusFromUrl }));
-  }, [statusFromUrl]);
+    setFilters((prev) => ({ ...prev, status: statusFromUrl, type: typeFromUrl }));
+  }, [statusFromUrl, typeFromUrl]);
 
   async function load() {
-    const [{ data: sc }, { data: cust }, { data: { user } }] = await Promise.all([
+    const [{ data: sc }, { data: cust }, { data: { user } }, { data: inv }] = await Promise.all([
       supabase
         .from("service_contracts")
         .select("*, customers(id, name)")
         .order("created_at", { ascending: false }),
       supabase.from("customers").select("*").order("name"),
       supabase.auth.getUser(),
+      supabase
+        .from("invoices")
+        .select("*")
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0),
     ]);
     setContracts((sc as ContractRow[]) ?? []);
     setCustomers((cust as Customer[]) ?? []);
+    setStandingInvoices((inv as Invoice[]) ?? []);
     if (user) {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -310,6 +334,13 @@ export default function ContractsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const annual = Number(form.contract_price) || 0;
+    const monthly =
+      Number(form.monthly_amount) > 0
+        ? Number(form.monthly_amount)
+        : /monthly\s*recurring/i.test(form.billing_method)
+          ? monthlyFromAnnual(annual)
+          : 0;
     const payload = {
       customer_id: form.customer_id,
       name: form.name,
@@ -317,7 +348,9 @@ export default function ContractsPage() {
       start_date: form.start_date,
       end_date: form.end_date,
       billing_method: form.billing_method,
-      contract_price: Number(form.contract_price),
+      contract_price: annual,
+      monthly_amount: monthly,
+      deductible: Number(form.deductible) || 0,
       included_service_visits: Number(form.included_service_visits),
       included_labor_hours: Number(form.included_labor_hours),
       included_replacement_parts: Number(form.included_replacement_parts) || 0,
@@ -395,11 +428,28 @@ export default function ContractsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const price = Number(contract.contract_price) || 0;
+
+    let price = Number(contract.contract_price) || 0;
+    let monthly = resolvedMonthlyAmount(contract);
+    let deductible = resolvedDeductible(contract);
+    if (price <= 0) {
+      const fromPlan = resolveMoneyFromContractNotes(contract.notes);
+      if (fromPlan) {
+        price = fromPlan.contract_price;
+        monthly = fromPlan.monthly_amount;
+        deductible = fromPlan.deductible;
+      }
+    } else if (monthly <= 0 && /monthly\s*recurring/i.test(contract.billing_method)) {
+      monthly = monthlyFromAnnual(price);
+    }
+
     const { error: updateError } = await supabase
       .from("service_contracts")
       .update({
         status: "Active",
+        contract_price: price,
+        monthly_amount: monthly,
+        deductible,
         updated_at: new Date().toISOString(),
       })
       .eq("id", contract.id);
@@ -409,7 +459,17 @@ export default function ContractsPage() {
       return;
     }
     setContracts((prev) =>
-      prev.map((c) => (c.id === contract.id ? { ...c, status: "Active" } : c)),
+      prev.map((c) =>
+        c.id === contract.id
+          ? {
+              ...c,
+              status: "Active",
+              contract_price: price,
+              monthly_amount: monthly,
+              deductible,
+            }
+          : c,
+      ),
     );
     await logActivity(supabase, {
       userId: user?.id ?? null,
@@ -420,6 +480,32 @@ export default function ContractsPage() {
       newValue: `Active @ ${formatMoney(price)}`,
     });
     setActionBusyId(null);
+  }
+
+  async function generateMonthlyFees() {
+    if (!isManager) return;
+    setGenBusy(true);
+    setGenMessage(null);
+    setError(null);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const period = currentBillingPeriodKey();
+    const result = await generateMonthlyInvoicesForPeriod(supabase, {
+      billingPeriod: period,
+      userId: user?.id ?? null,
+    });
+    setGenBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setGenMessage(
+      `Monthly fees for ${formatMonthLabel(period)}: created ${result.created}, skipped ${result.skipped}.${
+        result.errors.length ? ` ${result.errors.slice(0, 3).join(" ")}` : ""
+      }`,
+    );
+    await load();
   }
 
   async function rejectContract(contract: ContractRow) {
@@ -473,11 +559,31 @@ export default function ContractsPage() {
         title="Service Contracts"
         description="Manage maintenance agreements and profitability"
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={openAddForm}>
-            New Contract
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {isManager ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                disabled={genBusy}
+                onClick={() => void generateMonthlyFees()}
+              >
+                {genBusy ? "Generating…" : "Generate monthly fees"}
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-primary btn-sm" onClick={openAddForm}>
+              New Contract
+            </button>
+          </div>
         }
       />
+      {genMessage ? (
+        <div className="alert alert-success mb-4 text-sm">
+          <span>{genMessage}</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setGenMessage(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {isManager ? (
         <div className="mb-6 card bg-base-100 shadow">
@@ -511,7 +617,7 @@ export default function ContractsPage() {
                   <option value="unlabeled">Unlabeled (no plan tag)</option>
                   {planPacks.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} — Gold Mid from {formatMoney(packGoldMidPrice(p))}/yr
+                      {p.name} — Gold Mid from {formatMoney(Math.round(packGoldMidPrice(p) / 12))}/mo
                     </option>
                   ))}
                 </select>
@@ -757,14 +863,41 @@ export default function ContractsPage() {
                   required
                 />
               </FormRow>
-              <FormRow label="Price">
+              <FormRow label="Annual price">
                 <input
                   type="number"
                   min="0"
                   step="0.01"
                   className="input input-bordered w-full"
                   value={form.contract_price}
-                  onChange={(e) => setForm({ ...form, contract_price: e.target.value })}
+                  onChange={(e) => {
+                    const price = e.target.value;
+                    const monthly =
+                      /monthly\s*recurring/i.test(form.billing_method) && Number(price) > 0
+                        ? String(monthlyFromAnnual(Number(price)))
+                        : form.monthly_amount;
+                    setForm({ ...form, contract_price: price, monthly_amount: monthly });
+                  }}
+                />
+              </FormRow>
+              <FormRow label="Monthly fee">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input-bordered w-full"
+                  value={form.monthly_amount}
+                  onChange={(e) => setForm({ ...form, monthly_amount: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="Deductible">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input-bordered w-full"
+                  value={form.deductible}
+                  onChange={(e) => setForm({ ...form, deductible: e.target.value })}
                 />
               </FormRow>
               <FormRow label="Visits">
@@ -886,7 +1019,10 @@ export default function ContractsPage() {
                     <th>Name</th>
                     <th>Customer</th>
                     <th>Type</th>
-                    <th>Price</th>
+                    <th>Annual</th>
+                    <th>Monthly</th>
+                    <th>Deductible</th>
+                    <th>Fee status</th>
                     <th>Status</th>
                     <th>End</th>
                   </tr>
@@ -908,6 +1044,9 @@ export default function ContractsPage() {
                       <th className="font-normal">
                         <ColumnFilterSelect column="price" label="price" options={filterOptions.price} />
                       </th>
+                      <th />
+                      <th />
+                      <th />
                       <th className="font-normal">
                         <ColumnFilterSelect
                           column="status"
@@ -935,7 +1074,7 @@ export default function ContractsPage() {
                 <tbody>
                   {filteredContracts.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="p-6">
+                      <td colSpan={9} className="p-6">
                         <EmptyState
                           title="No matching contracts"
                           description="Try clearing one or more column filters."
@@ -950,7 +1089,9 @@ export default function ContractsPage() {
                       </td>
                     </tr>
                   ) : (
-                    filteredContracts.map((c) => (
+                    filteredContracts.map((c) => {
+                      const standing = getContractPaymentStanding(c, standingInvoices);
+                      return (
                       <tr key={c.id}>
                         <td className="align-top">
                           {isManager ? (
@@ -990,6 +1131,26 @@ export default function ContractsPage() {
                         </td>
                         <td className="align-top break-words">{c.contract_type}</td>
                         <td className="align-top">{formatMoney(c.contract_price)}</td>
+                        <td className="align-top tabular-nums">
+                          {formatMoney(resolvedMonthlyAmount(c))}
+                        </td>
+                        <td className="align-top tabular-nums">
+                          {formatMoney(resolvedDeductible(c))}
+                        </td>
+                        <td className="align-top">
+                          {standing.id === "not_monthly" ? (
+                            <span className="text-xs opacity-50">—</span>
+                          ) : (
+                            <div>
+                              <span className={`badge badge-sm ${standingBadgeClass(standing.id)}`}>
+                                {standing.label}
+                              </span>
+                              <p className="mt-1 max-w-[10rem] text-xs opacity-60">
+                                {formatStandingDetail(standing)}
+                              </p>
+                            </div>
+                          )}
+                        </td>
                         <td className="align-top">
                           {isManager ? (
                             <div className="dropdown dropdown-hover dropdown-end">
@@ -1024,7 +1185,8 @@ export default function ContractsPage() {
                         </td>
                         <td className="align-top">{c.end_date}</td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>

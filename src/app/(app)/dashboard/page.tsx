@@ -1,17 +1,71 @@
 import Link from "next/link";
-import { format, subMonths, startOfMonth, isBefore, parseISO, startOfDay } from "date-fns";
+import {
+  addDays,
+  format,
+  isBefore,
+  parseISO,
+  startOfDay,
+  startOfMonth,
+  subMonths,
+} from "date-fns";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard, StatusBadge, statusTone, EmptyState } from "@/components/ui";
-import { ClickableStatCard, ClickableSectionCard } from "@/components/ClickableStatCard";
-import { DashboardCharts, type InvoiceActivityPoint } from "@/components/DashboardCharts";
+import { ClickableStatCard } from "@/components/ClickableStatCard";
+import {
+  DashboardCharts,
+  type DashboardPieSlice,
+  type InvoiceActivityPoint,
+} from "@/components/DashboardCharts";
+import { ManagerDashboardStudio } from "@/components/ManagerDashboardStudio";
 import { formatMoney } from "@/lib/calculations";
 import { relatedName } from "@/lib/relations";
+import { fetchManagerUnreadInboxCount } from "@/lib/manager-inbox";
 
 function safeNumber(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+type ContractRow = {
+  id: string;
+  name: string;
+  status: string;
+  end_date: string | null;
+  contract_price: number | null;
+  contract_type: string | null;
+  customers?: { name?: string | null } | { name?: string | null }[] | null;
+};
+
+type OpenWoPulse = {
+  id: string;
+  scheduled_date: string | null;
+  assigned_technician_id: string | null;
+  priority: string;
+  status: string;
+};
+
+type TimeOffRow = {
+  id: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+};
+
+function groupPieSlices(
+  rows: { key: string; value: number }[],
+  hrefFor: (key: string) => string,
+): DashboardPieSlice[] {
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    const key = r.key.trim() || "Unspecified";
+    map.set(key, (map.get(key) ?? 0) + r.value);
+  }
+  return Array.from(map.entries())
+    .map(([name, value]) => ({ name, value, href: hrefFor(name) }))
+    .filter((s) => s.value > 0)
+    .sort((a, b) => b.value - a.value);
 }
 
 /**
@@ -35,6 +89,8 @@ export default async function DashboardPage() {
     paymentsResult,
     { data: contracts },
     { data: allParts },
+    openPulseResult,
+    timeOffResult,
   ] = await Promise.all([
     supabase.from("customers").select("*", { count: "exact", head: true }).eq("status", "Active"),
     supabase
@@ -57,8 +113,19 @@ export default async function DashboardPage() {
     isManager
       ? supabase.from("payments").select("payment_date, payment_amount")
       : Promise.resolve({ data: null as { payment_date: string; payment_amount: number }[] | null, error: null }),
-    supabase.from("service_contracts").select("id, name, status, end_date, contract_price"),
+    supabase
+      .from("service_contracts")
+      .select("id, name, status, end_date, contract_price, contract_type, customers(name)"),
     supabase.from("parts").select("id, name, part_number, quantity_on_hand, reorder_level").eq("is_active", true),
+    isManager
+      ? supabase
+          .from("work_orders")
+          .select("id, scheduled_date, assigned_technician_id, priority, status")
+          .not("status", "in", '("Completed","Closed","Canceled")')
+      : Promise.resolve({ data: null as OpenWoPulse[] | null, error: null }),
+    isManager
+      ? supabase.from("time_off_requests").select("id, status, start_date, end_date")
+      : Promise.resolve({ data: null as TimeOffRow[] | null, error: null }),
   ]);
 
   const invoices = invoicesResult.data;
@@ -72,6 +139,7 @@ export default async function DashboardPage() {
       : null;
   const chartError = invoiceError ?? paymentError;
 
+  const contractRows = (contracts as ContractRow[] | null) ?? [];
   const lowStockParts = (allParts ?? []).filter((p) => p.quantity_on_hand <= p.reorder_level).slice(0, 5);
 
   const months = Array.from({ length: 6 }, (_, i) => startOfMonth(subMonths(new Date(), 5 - i)));
@@ -104,15 +172,50 @@ export default async function DashboardPage() {
     };
   });
 
-  const activeContracts = (contracts ?? []).filter((c) => c.status === "Active").length;
-  const pendingApprovals = (contracts ?? []).filter((c) => c.status === "Pending Approval").length;
-  const expiringSoon = (contracts ?? []).filter((c) => {
-    if (!c.end_date) return false;
-    const end = new Date(c.end_date);
-    const in30 = new Date();
-    in30.setDate(in30.getDate() + 30);
-    return end <= in30 && c.status === "Active";
-  });
+  const activeContracts = contractRows.filter((c) => c.status === "Active").length;
+  const pendingApprovals = contractRows.filter((c) => c.status === "Pending Approval").length;
+
+  const today = startOfDay(new Date());
+  const in30 = addDays(today, 30);
+  const weekEnd = addDays(today, 6);
+
+  const expiringSoon = contractRows
+    .filter((c) => {
+      if (!c.end_date || c.status !== "Active") return false;
+      try {
+        const end = startOfDay(parseISO(c.end_date.slice(0, 10)));
+        return !isBefore(end, today) && !isBefore(in30, end);
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => (a.end_date ?? "").localeCompare(b.end_date ?? ""))
+    .slice(0, 6);
+
+  const expiringSoonCount = contractRows.filter((c) => {
+    if (!c.end_date || c.status !== "Active") return false;
+    try {
+      const end = startOfDay(parseISO(c.end_date.slice(0, 10)));
+      return !isBefore(end, today) && !isBefore(in30, end);
+    } catch {
+      return false;
+    }
+  }).length;
+
+  const contractStatusSlices = groupPieSlices(
+    contractRows.map((c) => ({ key: c.status || "Unspecified", value: 1 })),
+    (status) => `/contracts?status=${encodeURIComponent(status)}`,
+  );
+
+  const contractValueSlices = groupPieSlices(
+    contractRows
+      .filter((c) => c.status === "Active")
+      .map((c) => ({
+        key: c.contract_type?.trim() || "Unspecified",
+        value: safeNumber(c.contract_price),
+      })),
+    (type) => `/contracts?status=Active&type=${encodeURIComponent(type)}`,
+  );
 
   const arBalance = (invoices ?? [])
     .filter((i) => !["Paid", "Canceled"].includes(i.status))
@@ -122,17 +225,126 @@ export default async function DashboardPage() {
       return s + remaining;
     }, 0);
 
-  const today = startOfDay(new Date());
+  const openPulse = (openPulseResult.data as OpenWoPulse[] | null) ?? [];
+  const unscheduledOpen = openPulse.filter((wo) => !wo.scheduled_date).length;
+
+  const timeOffRows = (timeOffResult.data as TimeOffRow[] | null) ?? [];
+  const pendingTimeOff = timeOffRows.filter((r) => r.status === "Pending").length;
+  const ptoThisWeek = timeOffRows.filter((r) => {
+    if (r.status !== "Approved") return false;
+    try {
+      const start = startOfDay(parseISO(r.start_date.slice(0, 10)));
+      const end = startOfDay(parseISO(r.end_date.slice(0, 10)));
+      return !isBefore(end, today) && !isBefore(weekEnd, start);
+    } catch {
+      return false;
+    }
+  }).length;
+
+  let unreadInboxCount = 0;
+  if (isManager) {
+    try {
+      unreadInboxCount = await fetchManagerUnreadInboxCount(supabase);
+    } catch {
+      unreadInboxCount = 0;
+    }
+  }
+
+  const attentionTiles = isManager
+    ? [
+        {
+          label: "Unread inbox messages",
+          value: unreadInboxCount,
+          href: "/inbox",
+          danger: unreadInboxCount > 0,
+        },
+        {
+          label: "Pending contract approvals",
+          value: pendingApprovals,
+          href: "/contracts?status=Pending%20Approval",
+          danger: pendingApprovals > 0,
+        },
+        {
+          label: "Expiring ≤30 days",
+          value: expiringSoonCount,
+          href: "/contracts?status=Active",
+          danger: expiringSoonCount > 0,
+        },
+        {
+          label: "Pending PTO requests",
+          value: pendingTimeOff,
+          href: "/time-off",
+          danger: pendingTimeOff > 0,
+        },
+        {
+          label: "Unscheduled open WOs",
+          value: unscheduledOpen,
+          href: "/technician",
+          danger: unscheduledOpen > 0,
+        },
+        {
+          label: "High / critical open",
+          value: criticalCount ?? 0,
+          href: "/work-orders?filter=urgent",
+          danger: (criticalCount ?? 0) > 0,
+        },
+      ].filter((t) => t.value > 0)
+    : [];
+
+  if (isManager) {
+    return (
+      <ManagerDashboardStudio
+        data={{
+          customerCount: customerCount ?? 0,
+          openWoCount: openWoCount ?? 0,
+          criticalCount: criticalCount ?? 0,
+          activeContracts,
+          pendingApprovals,
+          expiringSoonCount,
+          arBalance,
+          arLabel: formatMoney(arBalance),
+          attentionTiles,
+          contractStatusSlices,
+          contractValueSlices,
+          workOrderTrend,
+          invoiceActivity,
+          chartError,
+          expiringSoon: expiringSoon.map((c) => ({
+            id: c.id,
+            name: c.name,
+            end_date: c.end_date,
+            contract_price: c.contract_price,
+            contract_type: c.contract_type,
+            customers: c.customers,
+          })),
+          openWorkOrders: (openWorkOrders ?? []).map((wo) => ({
+            id: wo.id,
+            work_order_number: wo.work_order_number,
+            priority: wo.priority,
+            status: wo.status,
+            scheduled_date: wo.scheduled_date,
+            customers: wo.customers,
+          })),
+          lowStockParts: (lowStockParts ?? []).map((p) => ({
+            id: p.id,
+            name: p.name,
+            part_number: p.part_number,
+            quantity_on_hand: p.quantity_on_hand,
+            reorder_level: p.reorder_level,
+          })),
+          pendingTimeOff,
+          ptoThisWeek,
+          unscheduledOpen,
+        }}
+      />
+    );
+  }
 
   return (
     <div>
       <PageHeader
         title="Dashboard"
-        description={
-          isManager
-            ? "Manager operations overview — select a summary to open related records"
-            : "Operations overview for Ridley Equipment Services"
-        }
+        description="Operations overview for Ridley Equipment Services"
         actions={
           <Link href="/work-orders" className="btn btn-primary btn-sm">
             New Work Order
@@ -159,8 +371,8 @@ export default async function DashboardPage() {
             <ClickableStatCard
               label="Active Contracts"
               value={activeContracts}
-              hint={`${expiringSoon.length} expiring soon`}
-              href="/contracts"
+              hint={`${expiringSoonCount} expiring soon`}
+              href="/contracts?status=Active"
               ariaLabel="View service contracts"
             />
             <ClickableStatCard
@@ -176,7 +388,7 @@ export default async function DashboardPage() {
               value={formatMoney(arBalance)}
               href="/reports"
               danger={arBalance > 0}
-              ariaLabel="View accounts receivable on reports"
+              ariaLabel="View accounts receivable"
             />
           </>
         ) : (
@@ -190,7 +402,7 @@ export default async function DashboardPage() {
             <StatCard
               label="Active Contracts"
               value={activeContracts}
-              hint={`${expiringSoon.length} expiring soon`}
+              hint={`${expiringSoonCount} expiring soon`}
             />
             <StatCard
               label="Pending Approvals"
@@ -209,156 +421,89 @@ export default async function DashboardPage() {
           revenueByMonth={revenueByMonth}
           invoiceActivity={invoiceActivity}
           invoiceActivityError={chartError}
-          variant={isManager ? "manager" : "default"}
+          contractStatusSlices={contractStatusSlices}
+          contractValueSlices={contractValueSlices}
+          variant="default"
         />
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        {isManager ? (
-          <ClickableSectionCard
-            href="/work-orders?filter=open"
-            title="Action Required — Work Orders"
-            ariaLabel="View all open work orders needing action"
-          >
+        <div className="card bg-base-100 shadow">
+          <div className="card-body">
+            <h2 className="card-title text-base">Action Required — Work Orders</h2>
             {(openWorkOrders ?? []).length === 0 ? (
               <EmptyState title="No open work orders" description="Create a work order to get started." />
             ) : (
-              <ul className="divide-y divide-base-300">
-                {(openWorkOrders ?? []).map((wo) => {
-                  const urgent = ["Critical", "High"].includes(wo.priority);
-                  const overdue =
-                    !!wo.scheduled_date && isBefore(parseISO(wo.scheduled_date), today);
-                  return (
-                    <li key={wo.id}>
-                      <Link
-                        href={`/work-orders/${wo.id}`}
-                        aria-label={`Open work order ${wo.work_order_number}`}
-                        className={`flex flex-wrap items-center gap-3 px-2 py-3 transition-colors
-                          hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
-                          ${urgent || overdue ? "bg-error/10" : ""}`}
-                      >
-                        <span className="min-w-[5.5rem] font-medium text-primary">{wo.work_order_number}</span>
-                        <span className="min-w-0 flex-1 truncate text-sm">{relatedName(wo.customers)}</span>
-                        <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
-                        <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
-                        <span className="text-xs text-primary/80">View</span>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+              <div className="overflow-x-auto">
+                <table className="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>WO #</th>
+                      <th>Customer</th>
+                      <th>Priority</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(openWorkOrders ?? []).map((wo) => {
+                      const urgent = ["Critical", "High"].includes(wo.priority);
+                      return (
+                        <tr key={wo.id} className={urgent ? "bg-error/10" : ""}>
+                          <td>
+                            <Link href={`/work-orders/${wo.id}`} className="link link-primary">
+                              {wo.work_order_number}
+                            </Link>
+                          </td>
+                          <td>{relatedName(wo.customers)}</td>
+                          <td>
+                            <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
+                          </td>
+                          <td>
+                            <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
-          </ClickableSectionCard>
-        ) : (
-          <div className="card bg-base-100 shadow">
-            <div className="card-body">
-              <h2 className="card-title text-base">Action Required — Work Orders</h2>
-              {(openWorkOrders ?? []).length === 0 ? (
-                <EmptyState title="No open work orders" description="Create a work order to get started." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>WO #</th>
-                        <th>Customer</th>
-                        <th>Priority</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(openWorkOrders ?? []).map((wo) => {
-                        const urgent = ["Critical", "High"].includes(wo.priority);
-                        return (
-                          <tr key={wo.id} className={urgent ? "bg-error/10" : ""}>
-                            <td>
-                              <Link href={`/work-orders/${wo.id}`} className="link link-primary">
-                                {wo.work_order_number}
-                              </Link>
-                            </td>
-                            <td>{relatedName(wo.customers)}</td>
-                            <td>
-                              <StatusBadge label={wo.priority} tone={statusTone(wo.priority)} />
-                            </td>
-                            <td>
-                              <StatusBadge label={wo.status} tone={statusTone(wo.status)} />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
           </div>
-        )}
+        </div>
 
-        {isManager ? (
-          <ClickableSectionCard
-            href="/parts?filter=low-stock"
-            title="Low Stock Parts"
-            ariaLabel="View parts at or below reorder level"
-          >
+        <div className="card bg-base-100 shadow">
+          <div className="card-body">
+            <h2 className="card-title text-base">Low Stock Parts</h2>
             {(lowStockParts ?? []).length === 0 ? (
               <EmptyState title="Inventory looks good" description="No parts at or below reorder level." />
             ) : (
-              <ul className="divide-y divide-base-300">
-                {(lowStockParts ?? []).map((p) => (
-                  <li key={p.id}>
-                    <Link
-                      href={`/parts?filter=low-stock&part=${p.id}`}
-                      aria-label={`View low-stock part ${p.part_number} ${p.name}`}
-                      className="flex flex-wrap items-center gap-3 px-2 py-3 transition-colors
-                        hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    >
-                      <span className="min-w-0 flex-1 truncate font-medium">
-                        {p.part_number} — {p.name}
-                      </span>
-                      <StatusBadge label={`On hand ${p.quantity_on_hand}`} tone="warning" />
-                      <span className="text-sm opacity-70">Reorder {p.reorder_level}</span>
-                      <span className="text-xs text-primary/80">View</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </ClickableSectionCard>
-        ) : (
-          <div className="card bg-base-100 shadow">
-            <div className="card-body">
-              <h2 className="card-title text-base">Low Stock Parts</h2>
-              {(lowStockParts ?? []).length === 0 ? (
-                <EmptyState title="Inventory looks good" description="No parts at or below reorder level." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Part</th>
-                        <th>On Hand</th>
-                        <th>Reorder</th>
+              <div className="overflow-x-auto">
+                <table className="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Part</th>
+                      <th>On Hand</th>
+                      <th>Reorder</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(lowStockParts ?? []).map((p) => (
+                      <tr key={p.id}>
+                        <td>
+                          {p.part_number} — {p.name}
+                        </td>
+                        <td>
+                          <StatusBadge label={String(p.quantity_on_hand)} tone="warning" />
+                        </td>
+                        <td>{p.reorder_level}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {(lowStockParts ?? []).map((p) => (
-                        <tr key={p.id}>
-                          <td>
-                            {p.part_number} — {p.name}
-                          </td>
-                          <td>
-                            <StatusBadge label={String(p.quantity_on_hand)} tone="warning" />
-                          </td>
-                          <td>{p.reorder_level}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

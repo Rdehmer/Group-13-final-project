@@ -16,6 +16,7 @@ import {
   EMERGENCY_SLA_OPTIONS,
   findOverlappingEquipment,
   getContractTier,
+  loadContractDraft,
   PAYMENT_TERMS,
   RENEWAL_OPTIONS,
   saveContractDraft,
@@ -26,8 +27,13 @@ import {
 } from "@/lib/contracts";
 import { FormRow } from "@/components/PageHeader";
 import type { Equipment } from "@/lib/types";
-import { sumEquipmentAssetValue } from "@/lib/contract-plans";
+import { sumEquipmentAssetValue, loadCatalog, resolvePlan } from "@/lib/contract-plans";
 import { ContractRequestPreview } from "./ContractRequestPreview";
+import { ContractPricingSummary } from "@/components/ContractPricingSummary";
+import {
+  DEFAULT_SERVICE_FEE_OPTION,
+  type ServiceFeeOption,
+} from "@/lib/contract-pricing";
 
 type Props = {
   supabase: SupabaseClient;
@@ -63,6 +69,7 @@ export function ContractRequestForm({
   const [error, setError] = useState<string | null>(null);
   const [showAddEquipment, setShowAddEquipment] = useState(false);
   const [customizeCoverage, setCustomizeCoverage] = useState(false);
+  const [serviceFeeOption, setServiceFeeOption] = useState<ServiceFeeOption>(DEFAULT_SERVICE_FEE_OPTION);
   const submitIntentRef = useRef(false);
   const tierRef = useRef(selectedTier);
   const packRef = useRef(selectedPackId);
@@ -75,13 +82,25 @@ export function ContractRequestForm({
   }, [selectedTier, selectedPackId]);
 
   useEffect(() => {
+    const draft = loadContractDraft(customerId);
+    if (draft?.serviceFeeOption) setServiceFeeOption(draft.serviceFeeOption);
+  }, [customerId]);
+
+  useEffect(() => {
     saveContractDraft(customerId, {
       form,
       tierId: selectedTier,
       packId: selectedPackId,
       step,
+      serviceFeeOption,
     });
-  }, [customerId, form, selectedTier, selectedPackId, step]);
+  }, [customerId, form, selectedTier, selectedPackId, step, serviceFeeOption]);
+
+  const planResolved = useMemo(() => {
+    const selectedEquipment = equipment.filter((eq) => form.equipment_ids.includes(eq.id));
+    const assetValue = sumEquipmentAssetValue(selectedEquipment) || 100_000;
+    return resolvePlan(selectedPackId, selectedTier, assetValue, loadCatalog());
+  }, [equipment, form.equipment_ids, selectedPackId, selectedTier]);
 
   const preview = useMemo(
     () => buildContractPreview(form, selectedTier, equipment, customerName, selectedPackId),
@@ -179,6 +198,7 @@ export function ContractRequestForm({
       tierId: selectedTier,
       packId: selectedPackId,
       assetValue: sumEquipmentAssetValue(selectedEquipment) || 100_000,
+      serviceFeeOption,
     });
 
     const { data: contract, error: insertError } = await supabase
@@ -349,7 +369,7 @@ export function ContractRequestForm({
 
           {step === 2 ? (
             <>
-              <div className="rounded-box bg-base-200/60 p-4">
+              <div className="rounded-box border border-base-300 bg-base-200/40 p-4">
                 <p className="text-sm font-medium">{activeTier.name} coverage includes:</p>
                 <ul className="mt-3 space-y-1.5 text-sm opacity-80">
                   {activeTier.coverages.map((item) => (
@@ -359,54 +379,86 @@ export function ContractRequestForm({
                     </li>
                   ))}
                 </ul>
-                <p className="mt-3 text-xs opacity-60">{preview.coverageSummary}</p>
+                <p className="mt-3 border-t border-base-300/80 pt-3 text-xs opacity-60">
+                  {preview.coverageSummary}
+                </p>
               </div>
 
-              <FormRow label="Site notes">
-                <textarea className="textarea textarea-bordered w-full" rows={2} value={form.notes} onChange={(e) => update({ notes: e.target.value })} placeholder="Site access, hours, dock info, or other details" />
-              </FormRow>
+              <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                <label className="form-control w-full gap-2">
+                  <div>
+                    <span className="text-sm font-medium">Site notes</span>
+                    <span className="ml-1.5 text-xs font-normal opacity-60">(optional)</span>
+                    <p className="mt-0.5 text-xs opacity-60">
+                      Access codes, dock hours, after-hours contacts, or anything our team should know.
+                    </p>
+                  </div>
+                  <textarea
+                    className="textarea textarea-bordered min-h-[5.5rem] w-full resize-y text-sm"
+                    rows={3}
+                    value={form.notes}
+                    onChange={(e) => update({ notes: e.target.value })}
+                    placeholder="e.g. Gate code 4521 · Receiving dock B · Mon–Fri 7am–4pm"
+                  />
+                </label>
 
-              <div className="flex justify-end pt-1">
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => setCustomizeCoverage((v) => !v)}
-                >
-                  {customizeCoverage ? "Hide customize coverage" : "Customize coverage details"}
-                </button>
-              </div>
-
-              {customizeCoverage ? (
-                <div className="space-y-3 rounded-box border border-base-300 p-4">
-                  <FormRow label="Included visits / year">
-                    <input type="number" min="0" className="input input-bordered w-full" value={form.included_service_visits} onChange={(e) => update({ included_service_visits: e.target.value })} />
-                  </FormRow>
-                  <FormRow label="Service frequency">
-                    <select className="select select-bordered w-full" value={form.service_frequency} onChange={(e) => update({ service_frequency: e.target.value })}>
-                      {SERVICE_FREQUENCIES.map((f) => <option key={f} value={f}>{f}</option>)}
-                    </select>
-                  </FormRow>
-                  <FormRow label="Included labor hours">
-                    <input type="number" min="0" step="0.5" className="input input-bordered w-full" value={form.included_labor_hours} onChange={(e) => update({ included_labor_hours: e.target.value })} />
-                  </FormRow>
-                  <FormRow label="Parts allowance ($)">
-                    <input type="number" min="0" step="0.01" className="input input-bordered w-full" value={form.included_replacement_parts} onChange={(e) => update({ included_replacement_parts: e.target.value })} />
-                  </FormRow>
-                  <FormRow label="Emergency response">
-                    <select className="select select-bordered w-full" value={form.emergency_response_commitment} onChange={(e) => update({ emergency_response_commitment: e.target.value })}>
-                      {EMERGENCY_SLA_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  </FormRow>
-                  <FormRow label="Approval requirements">
-                    <textarea className="textarea textarea-bordered w-full" rows={2} value={form.approval_requirements} onChange={(e) => update({ approval_requirements: e.target.value })} placeholder="e.g. PO required before dispatch" />
-                  </FormRow>
+                <div className="mt-4 flex justify-end border-t border-base-200 pt-3">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setCustomizeCoverage((v) => !v)}
+                  >
+                    {customizeCoverage ? "Hide customize coverage" : "Customize coverage details"}
+                  </button>
                 </div>
-              ) : null}
+
+                {customizeCoverage ? (
+                  <div className="mt-4 space-y-3 border-t border-base-200 pt-4">
+                    <FormRow label="Included visits / year">
+                      <input type="number" min="0" className="input input-bordered w-full" value={form.included_service_visits} onChange={(e) => update({ included_service_visits: e.target.value })} />
+                    </FormRow>
+                    <FormRow label="Service frequency">
+                      <select className="select select-bordered w-full" value={form.service_frequency} onChange={(e) => update({ service_frequency: e.target.value })}>
+                        {SERVICE_FREQUENCIES.map((f) => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </FormRow>
+                    <FormRow label="Included labor hours">
+                      <input type="number" min="0" step="0.5" className="input input-bordered w-full" value={form.included_labor_hours} onChange={(e) => update({ included_labor_hours: e.target.value })} />
+                    </FormRow>
+                    <FormRow label="Parts allowance ($)">
+                      <input type="number" min="0" step="0.01" className="input input-bordered w-full" value={form.included_replacement_parts} onChange={(e) => update({ included_replacement_parts: e.target.value })} />
+                    </FormRow>
+                    <FormRow label="Emergency response">
+                      <select className="select select-bordered w-full" value={form.emergency_response_commitment} onChange={(e) => update({ emergency_response_commitment: e.target.value })}>
+                        {EMERGENCY_SLA_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </FormRow>
+                    <label className="form-control w-full gap-2">
+                      <span className="text-sm font-medium">Approval requirements</span>
+                      <textarea
+                        className="textarea textarea-bordered min-h-[4.5rem] w-full resize-y text-sm"
+                        rows={2}
+                        value={form.approval_requirements}
+                        onChange={(e) => update({ approval_requirements: e.target.value })}
+                        placeholder="e.g. PO required before dispatch"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+              </div>
             </>
           ) : null}
 
           {step === 3 ? (
             <>
+              {planResolved ? (
+                <ContractPricingSummary
+                  variant="prospect"
+                  resolved={planResolved}
+                  serviceFeeOption={serviceFeeOption}
+                  onServiceFeeOptionChange={setServiceFeeOption}
+                />
+              ) : null}
               <FormRow label="Billing method">
                 <select className="select select-bordered w-full" value={form.billing_method} onChange={(e) => update({ billing_method: e.target.value })}>
                   {BILLING_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}

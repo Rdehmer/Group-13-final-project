@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, ReceiptText, Upload } from "lucide-react";
 import { FormRow } from "@/components/PageHeader";
 import { logActivity } from "@/lib/activity";
@@ -158,11 +159,25 @@ export function EmergencyPurchaseLog({
     setSaving(false);
   }
 
-  return (
-    <dialog className="modal modal-open" aria-labelledby="emergency-purchase-title">
-      <div className="modal-box max-w-2xl border-2 border-warning/50 p-4 sm:p-6">
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/50"
+        aria-label="Close dialog"
+        onClick={onClose}
+        disabled={saving}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="emergency-purchase-title"
+        className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border-2 border-warning/50 bg-base-100 p-4 shadow-2xl sm:p-6"
+      >
         <div className="flex items-center gap-3">
-          <AlertTriangle className="h-7 w-7 text-warning" />
+          <AlertTriangle className="h-7 w-7 shrink-0 text-warning" />
           <div>
             <h2 id="emergency-purchase-title" className="text-2xl font-bold">
               I bought a part today
@@ -270,7 +285,7 @@ export function EmergencyPurchaseLog({
             </div>
           ) : null}
 
-          <div className="modal-action grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button
               type="button"
               className="btn min-h-14 text-base"
@@ -289,9 +304,7 @@ export function EmergencyPurchaseLog({
           </div>
         </form>
       </div>
-      <form method="dialog" className="modal-backdrop">
-        <button type="button" onClick={onClose}>close</button>
-      </form>
-    </dialog>
+    </div>,
+    document.body,
   );
 }

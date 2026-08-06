@@ -3,6 +3,12 @@
  * Stored in localStorage (ridley_contract_plans_v2); no Supabase table required.
  */
 
+import {
+  formatCapSummaryLine,
+  getIndustryCapProfile,
+  resolveCoverageCaps,
+} from "@/lib/contract-cap-profiles";
+
 export const CONTRACT_PLANS_STORAGE_KEY = "ridley_contract_plans_v2";
 const CONTRACT_PLANS_STORAGE_KEY_V1 = "ridley_contract_plans_v1";
 
@@ -31,6 +37,10 @@ export type CatalogDrivenTier = {
 
 export type PlanThresholds = {
   annual_price: number;
+  /** Monthly premium when member selects $125/visit service fee (AHS default). */
+  monthly_premium_at_125_fee?: number;
+  /** Monthly premium when member selects $100/visit service fee. */
+  monthly_premium_at_100_fee?: number;
   contract_type: string;
   included_service_visits: number;
   service_frequency: string;
@@ -84,6 +94,8 @@ export type ManagerContractFormFields = {
   contract_type: string;
   billing_method: string;
   contract_price: string;
+  monthly_amount?: string;
+  deductible?: string;
   included_service_visits: string;
   included_labor_hours: string;
   included_replacement_parts?: string;
@@ -134,7 +146,78 @@ const PLAN_TAG_RE =
   /\[Plan:\s*([^·]+)·\s*([^·]+)·\s*([^·]+)·\s*asset\s*\$([0-9,]+(?:\.\d+)?)\]/i;
 const EXTRAS_TAG_RE = /\[Extras:\s*[^\]]*\]/gi;
 
-const CATALOG_VERSION = 2;
+const CATALOG_VERSION = 4;
+
+function bandScaleForEnrich(bandId: "low" | "mid" | "high"): number {
+  if (bandId === "low") return 0.7;
+  if (bandId === "high") return 1.5;
+  return 1;
+}
+
+function enrichPlanThresholds(
+  t: PlanThresholds,
+  tier: ServiceLevelId,
+  bandId: "low" | "mid" | "high",
+  packId: string,
+): PlanThresholds {
+  const scale = bandScaleForEnrich(bandId);
+  const caps = resolveCoverageCaps(tier, bandId, packId);
+  const monthly125 = t.monthly_premium_at_125_fee ?? Math.round(Number(t.annual_price) / 12);
+  const tradeoff = Math.round(Number(t.extras.premium_tradeoff_per_month) || 25 * scale);
+  const monthly100 = t.monthly_premium_at_100_fee ?? monthly125 + tradeoff;
+  const { deductible: _d, service_fee_per_visit: _s, ...restExtras } = t.extras;
+
+  let parts = t.included_replacement_parts;
+  if (tier === "bronze" && parts <= 0 && bandId === "mid") {
+    parts = Math.round(caps.partsMid * scale);
+  }
+
+  return {
+    ...t,
+    annual_price: monthly125 * 12,
+    monthly_premium_at_125_fee: monthly125,
+    monthly_premium_at_100_fee: monthly100,
+    included_replacement_parts: parts,
+    billing_method: "Monthly Recurring Charge",
+    extras: {
+      ...restExtras,
+      aggregate_coverage_cap: Math.round(
+        Number(restExtras.aggregate_coverage_cap ?? caps.aggregate * scale),
+      ),
+      per_equipment_cap: Math.round(
+        Number(restExtras.per_equipment_cap ?? caps.perEquipment * scale),
+      ),
+      premium_tradeoff_per_month: tradeoff,
+      default_service_fee_option: 125,
+    },
+  };
+}
+
+export function buildPricingExtrasLine(
+  thresholds: PlanThresholds,
+  serviceFeeOption: 100 | 125,
+  packId?: string,
+): string {
+  const at100 = thresholds.monthly_premium_at_100_fee ?? 0;
+  const at125 = thresholds.monthly_premium_at_125_fee ?? Math.round(thresholds.annual_price / 12);
+  const parts = [
+    `service_fee_option=${serviceFeeOption}`,
+    `monthly_premium_at_100_fee=${at100}`,
+    `monthly_premium_at_125_fee=${at125}`,
+    `aggregate_coverage_cap=${String(thresholds.extras.aggregate_coverage_cap ?? "")}`,
+    `per_equipment_cap=${String(thresholds.extras.per_equipment_cap ?? "")}`,
+    `premium_tradeoff_per_month=${String(thresholds.extras.premium_tradeoff_per_month ?? 25)}`,
+    `default_service_fee_option=125`,
+  ];
+  if (packId) {
+    parts.push(`industry_pack_id=${packId}`);
+    parts.push(`cap_profile=${getIndustryCapProfile(packId)}`);
+  }
+  if (thresholds.extras.max_units_covered != null) {
+    parts.push(`max_units_covered=${String(thresholds.extras.max_units_covered)}`);
+  }
+  return `[Extras: ${parts.join("; ")}]`;
+}
 
 function thr(
   annual: number,
@@ -191,6 +274,8 @@ function bandsFor(
   mid: PlanThresholds,
   high: PlanThresholds,
   bounds: BandBoundSet,
+  tier: ServiceLevelId,
+  packId: string,
 ): AssetValueBand[] {
   return [
     {
@@ -198,23 +283,44 @@ function bandsFor(
       label: "Low",
       min_asset_value: bounds.low.min,
       max_asset_value: bounds.low.max,
-      thresholds: low,
+      thresholds: enrichPlanThresholds(low, tier, "low", packId),
     },
     {
       id: "mid",
       label: "Mid",
       min_asset_value: bounds.mid.min,
       max_asset_value: bounds.mid.max,
-      thresholds: mid,
+      thresholds: enrichPlanThresholds(mid, tier, "mid", packId),
     },
     {
       id: "high",
       label: "High",
       min_asset_value: bounds.high.min,
       max_asset_value: bounds.high.max,
-      thresholds: high,
+      thresholds: enrichPlanThresholds(high, tier, "high", packId),
     },
   ];
+}
+
+function normalizeCatalog(catalog: ContractPlanCatalog): ContractPlanCatalog {
+  return {
+    ...catalog,
+    packs: catalog.packs.map((pack) => ({
+      ...pack,
+      levels: pack.levels.map((level) => ({
+        ...level,
+        bands: level.bands.map((band) => ({
+          ...band,
+          thresholds: enrichPlanThresholds(
+            band.thresholds,
+            level.id,
+            band.id as "low" | "mid" | "high",
+            pack.id,
+          ),
+        })),
+      })),
+    })),
+  };
 }
 
 function unitsLine(n: number): string {
@@ -224,7 +330,7 @@ function unitsLine(n: number): string {
 function partsLine(parts: number): string {
   return parts > 0
     ? `$${parts.toLocaleString("en-US")} parts allowance`
-    : "No included parts — billed separately";
+    : "No included parts allowance";
 }
 
 function laborLine(labor: number): string {
@@ -264,9 +370,9 @@ const warehouseBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "semi-annual dock and cooler inspections"),
   laborLine(labor),
-  "Filters and basic checks included; repairs billed T&M",
+  "Filters and basic checks included; covered repairs within plan caps",
   slaLine(sla),
-  "Corrective work billed time and materials",
+  "Covered repairs within plan caps",
 ];
 
 const shippingGold: CoverageBuilder = ({ units, visits, labor, parts, sla }) => [
@@ -294,7 +400,7 @@ const shippingBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "forklift and dock safety inspection schedule"),
   laborLine(labor),
-  "Repairs billed time and materials",
+  "Repairs within plan coverage caps",
   slaLine(sla),
   "Essential inspections only — no included parts",
 ];
@@ -324,7 +430,7 @@ const farmBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "seasonal pre-peak inspection (cooling/milk)"),
   laborLine(labor),
-  "In-season repairs billed T&M",
+  "In-season repairs within plan coverage caps",
   slaLine(sla),
   "Essential inspections only",
 ];
@@ -354,7 +460,7 @@ const agricultureBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "annual/semi-annual line inspection"),
   laborLine(labor),
-  "Corrective work billed time and materials",
+  "Covered repairs within plan caps",
   slaLine(sla),
   "Essential inspections only — no included parts",
 ];
@@ -366,7 +472,7 @@ const homeWarrantyGold: CoverageBuilder = ({ units, visits, labor, parts, sla })
   partsLine(parts),
   slaLine(sla),
   "Next-day emergency dispatch for covered systems",
-  "Deductible model for repairs (see extras)",
+  "$100 or $125 service fee per covered visit (your choice at signup)",
   "Filter changes and seasonal tune-ups included",
 ];
 
@@ -386,7 +492,7 @@ const homeWarrantyBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   laborLine(labor),
   "No included parts — billed separately",
   slaLine(sla),
-  "Repairs and emergency calls billed T&M",
+  "Emergency calls within plan coverage caps",
 ];
 
 const foodserviceGold: CoverageBuilder = ({ units, visits, labor, parts, sla }) => [
@@ -414,7 +520,7 @@ const foodserviceBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "semi-annual kitchen equipment check"),
   laborLine(labor),
-  "Repairs billed time and materials",
+  "Repairs within plan coverage caps",
   slaLine(sla),
   "Essential inspections only — no included parts",
 ];
@@ -444,7 +550,7 @@ const retailBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "semi-annual case and HVAC inspection"),
   laborLine(labor),
-  "Repairs billed time and materials",
+  "Repairs within plan coverage caps",
   slaLine(sla),
   "Essential inspections only",
 ];
@@ -474,7 +580,7 @@ const healthcareBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "scheduled inspection with compliance checklist"),
   laborLine(labor),
-  "Corrective work billed time and materials",
+  "Covered repairs within plan caps",
   slaLine(sla),
   "Inspection-only — no included parts",
 ];
@@ -504,7 +610,7 @@ const manufacturingBronze: CoverageBuilder = ({ units, visits, labor, sla }) => 
   unitsLine(units),
   visitsLine(visits, "semi-annual production equipment inspection"),
   laborLine(labor),
-  "Breakdowns billed time and materials",
+  "Breakdowns within plan coverage caps",
   slaLine(sla),
   "Essential inspections only",
 ];
@@ -534,7 +640,7 @@ const fleetBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "semi-annual mobile unit inspection"),
   laborLine(labor),
-  "Repairs billed time and materials",
+  "Repairs within plan coverage caps",
   slaLine(sla),
   "Essential inspections only — travel extras may apply",
 ];
@@ -564,7 +670,7 @@ const propertyBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "rotating site inspection across portfolio"),
   laborLine(labor),
-  "Corrective work billed time and materials",
+  "Covered repairs within plan caps",
   slaLine(sla),
   "Few visits per year shared across sites",
 ];
@@ -594,12 +700,22 @@ const standbyBronze: CoverageBuilder = ({ units, visits, labor, sla }) => [
   unitsLine(units),
   visitsLine(visits, "annual load-bank / start test"),
   laborLine(labor),
-  "Repairs billed time and materials",
+  "Repairs within plan coverage caps",
   slaLine(sla),
   "Inspection and test only — no included parts",
 ];
 
+function coverageWithCapLine(
+  base: string[],
+  tier: ServiceLevelId,
+  packId: string,
+): string[] {
+  const caps = resolveCoverageCaps(tier, "mid", packId);
+  return [...base, formatCapSummaryLine(caps)];
+}
+
 function makeLevels(opts: {
+  packId: string;
   bounds: BandBoundSet;
   units: TierUnitCounts;
   taglines: { gold: string; silver: string; bronze: string };
@@ -622,54 +738,72 @@ function makeLevels(opts: {
       name: "Gold",
       tagline: opts.taglines.gold,
       recommended: true,
-      coverages: opts.coverages.gold({
-        units: opts.units.gold,
-        visits: goldMid.included_service_visits,
-        labor: goldMid.included_labor_hours,
-        parts: goldMid.included_replacement_parts,
-        sla: goldMid.emergency_response_commitment,
-      }),
+      coverages: coverageWithCapLine(
+        opts.coverages.gold({
+          units: opts.units.gold,
+          visits: goldMid.included_service_visits,
+          labor: goldMid.included_labor_hours,
+          parts: goldMid.included_replacement_parts,
+          sla: goldMid.emergency_response_commitment,
+        }),
+        "gold",
+        opts.packId,
+      ),
       bands: bandsFor(
         withUnits(opts.gold.low, opts.units.gold, "low"),
         goldMid,
         withUnits(opts.gold.high, opts.units.gold, "high"),
         opts.bounds,
+        "gold",
+        opts.packId,
       ),
     },
     {
       id: "silver",
       name: "Silver",
       tagline: opts.taglines.silver,
-      coverages: opts.coverages.silver({
-        units: opts.units.silver,
-        visits: silverMid.included_service_visits,
-        labor: silverMid.included_labor_hours,
-        parts: silverMid.included_replacement_parts,
-        sla: silverMid.emergency_response_commitment,
-      }),
+      coverages: coverageWithCapLine(
+        opts.coverages.silver({
+          units: opts.units.silver,
+          visits: silverMid.included_service_visits,
+          labor: silverMid.included_labor_hours,
+          parts: silverMid.included_replacement_parts,
+          sla: silverMid.emergency_response_commitment,
+        }),
+        "silver",
+        opts.packId,
+      ),
       bands: bandsFor(
         withUnits(opts.silver.low, opts.units.silver, "low"),
         silverMid,
         withUnits(opts.silver.high, opts.units.silver, "high"),
         opts.bounds,
+        "silver",
+        opts.packId,
       ),
     },
     {
       id: "bronze",
       name: "Bronze",
       tagline: opts.taglines.bronze,
-      coverages: opts.coverages.bronze({
-        units: opts.units.bronze,
-        visits: bronzeMid.included_service_visits,
-        labor: bronzeMid.included_labor_hours,
-        parts: bronzeMid.included_replacement_parts,
-        sla: bronzeMid.emergency_response_commitment,
-      }),
+      coverages: coverageWithCapLine(
+        opts.coverages.bronze({
+          units: opts.units.bronze,
+          visits: bronzeMid.included_service_visits,
+          labor: bronzeMid.included_labor_hours,
+          parts: bronzeMid.included_replacement_parts,
+          sla: bronzeMid.emergency_response_commitment,
+        }),
+        "bronze",
+        opts.packId,
+      ),
       bands: bandsFor(
         withUnits(opts.bronze.low, opts.units.bronze, "low"),
         bronzeMid,
         withUnits(opts.bronze.high, opts.units.bronze, "high"),
         opts.bounds,
+        "bronze",
+        opts.packId,
       ),
     },
   ];
@@ -753,6 +887,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 10,
       levels: makeLevels({
+        packId: "warehouse",
         bounds: BOUNDS.warehouse,
         units: { bronze: 8, silver: 20, gold: 40 },
         taglines: {
@@ -789,6 +924,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 20,
       levels: makeLevels({
+        packId: "shipping",
         bounds: BOUNDS.shipping,
         units: { bronze: 8, silver: 18, gold: 35 },
         taglines: {
@@ -825,6 +961,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 30,
       levels: makeLevels({
+        packId: "farm",
         bounds: BOUNDS.farm,
         units: { bronze: 5, silver: 12, gold: 22 },
         taglines: {
@@ -861,6 +998,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 40,
       levels: makeLevels({
+        packId: "agriculture",
         bounds: BOUNDS.agriculture,
         units: { bronze: 6, silver: 15, gold: 30 },
         taglines: {
@@ -897,6 +1035,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 50,
       levels: makeLevels({
+        packId: "home_warranty",
         bounds: BOUNDS.home_warranty,
         units: { bronze: 3, silver: 6, gold: 10 },
         taglines: {
@@ -933,6 +1072,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 60,
       levels: makeLevels({
+        packId: "foodservice",
         bounds: BOUNDS.foodservice,
         units: { bronze: 6, silver: 12, gold: 20 },
         taglines: {
@@ -969,6 +1109,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 70,
       levels: makeLevels({
+        packId: "retail_grocery",
         bounds: BOUNDS.retail_grocery,
         units: { bronze: 8, silver: 18, gold: 35 },
         taglines: {
@@ -1005,6 +1146,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 80,
       levels: makeLevels({
+        packId: "healthcare",
         bounds: BOUNDS.healthcare,
         units: { bronze: 5, silver: 12, gold: 25 },
         taglines: {
@@ -1041,6 +1183,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 90,
       levels: makeLevels({
+        packId: "manufacturing",
         bounds: BOUNDS.manufacturing,
         units: { bronze: 6, silver: 15, gold: 35 },
         taglines: {
@@ -1077,6 +1220,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 100,
       levels: makeLevels({
+        packId: "fleet",
         bounds: BOUNDS.fleet,
         units: { bronze: 6, silver: 15, gold: 30 },
         taglines: {
@@ -1113,6 +1257,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 110,
       levels: makeLevels({
+        packId: "property_multisite",
         bounds: BOUNDS.property_multisite,
         units: { bronze: 10, silver: 25, gold: 50 },
         taglines: {
@@ -1149,6 +1294,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 120,
       levels: makeLevels({
+        packId: "standby_power",
         bounds: BOUNDS.standby_power,
         units: { bronze: 2, silver: 4, gold: 8 },
         taglines: {
@@ -1185,6 +1331,7 @@ export function buildSeedCatalog(): ContractPlanCatalog {
       active: true,
       sort_order: 130,
       levels: makeLevels({
+        packId: "custom_industry",
         bounds: BOUNDS.custom_industry,
         units: { bronze: 8, silver: 20, gold: 40 },
         taglines: {
@@ -1231,7 +1378,7 @@ function canUseStorage(): boolean {
   return typeof window !== "undefined" && typeof localStorage !== "undefined";
 }
 
-function midBandMidpointAssetValue(pack: IndustryPack): number {
+export function midBandMidpointAssetValue(pack: IndustryPack): number {
   const bands = pack.levels[0]?.bands ?? [];
   const mid = bands.find((b) => b.id === "mid") ?? bands[1] ?? bands[0];
   if (!mid) return 100_000;
@@ -1288,12 +1435,13 @@ export function loadCatalog(): ContractPlanCatalog {
       return seed;
     }
     const { catalog, changed } = mergeMissingPacksFromSeed(parsed);
+    const normalized = normalizeCatalog(catalog);
     if (changed || fromV1 || (parsed.version ?? 0) < CATALOG_VERSION) {
-      const next = { ...catalog, version: CATALOG_VERSION };
+      const next = { ...normalized, version: CATALOG_VERSION };
       saveCatalog(next);
       return next;
     }
-    return catalog;
+    return normalized;
   } catch {
     return buildSeedCatalog();
   }
@@ -1389,6 +1537,19 @@ export function parsePlanSnapshotFromNotes(notes: string | null | undefined): Pl
   const tierId = (["gold", "silver", "bronze"] as ServiceLevelId[]).find(
     (id) => id === tierName.toLowerCase(),
   );
+  const extrasMatch = notes.match(/\[Extras:\s*([^\]]+)\]/i);
+  const extras: Record<string, string | number | boolean> = {};
+  if (extrasMatch) {
+    for (const part of extrasMatch[1].split(";")) {
+      const idx = part.indexOf("=");
+      if (idx <= 0) continue;
+      const key = part.slice(0, idx).trim();
+      const val = part.slice(idx + 1).trim();
+      if (!key) continue;
+      const num = Number(val);
+      extras[key] = Number.isFinite(num) && val !== "" ? num : val;
+    }
+  }
   return {
     packId: packName.toLowerCase().replace(/\s+/g, "_"),
     packName,
@@ -1397,31 +1558,31 @@ export function parsePlanSnapshotFromNotes(notes: string | null | undefined): Pl
     bandId: bandLabel.toLowerCase(),
     bandLabel,
     assetValue: Number.isFinite(assetValue) ? assetValue : 0,
-    extras: {},
+    extras,
   };
 }
 
 export function applyPlanToContractForm<T extends ManagerContractFormFields>(
   form: T,
   resolved: ResolvedPlan,
-  options?: { updateName?: boolean; customerName?: string },
+  options?: { updateName?: boolean; customerName?: string; serviceFeeOption?: 100 | 125 },
 ): T {
   const t = resolved.thresholds;
+  const feeOption = options?.serviceFeeOption ?? 125;
+  const monthlyPremium =
+    feeOption === 100
+      ? (t.monthly_premium_at_100_fee ?? Math.round(t.annual_price / 12) + 25)
+      : (t.monthly_premium_at_125_fee ?? Math.round(t.annual_price / 12));
   const tag = formatPlanSnapshot({
     pack: resolved.pack,
     level: resolved.level,
     band: resolved.band,
     assetValue: resolved.assetValue,
   });
-  const extrasLine =
-    Object.keys(t.extras).length > 0
-      ? `[Extras: ${Object.entries(t.extras)
-          .map(([k, v]) => `${k}=${String(v)}`)
-          .join("; ")}]`
-      : "";
+  const extrasLine = buildPricingExtrasLine(t, feeOption, resolved.pack.id);
   const notesWithExtras = mergePlanSnapshotIntoNotes(
     form.notes,
-    extrasLine ? `${tag}\n${extrasLine}` : tag,
+    `${tag}\n${extrasLine}`,
   );
 
   const name =
@@ -1429,12 +1590,23 @@ export function applyPlanToContractForm<T extends ManagerContractFormFields>(
       ? `${options.customerName} · ${resolved.pack.name} · ${resolved.level.name}`
       : form.name;
 
+  const annual = Number(t.annual_price) || 0;
+  const isMonthly = /monthly\s*recurring/i.test(t.billing_method);
+  const deductibleRaw = t.extras.deductible;
+  const deductible =
+    typeof deductibleRaw === "number"
+      ? deductibleRaw
+      : Number(deductibleRaw);
+  const monthly = isMonthly ? Math.round((annual / 12) * 100) / 100 : 0;
+
   return {
     ...form,
     ...(name != null ? { name } : {}),
     contract_type: t.contract_type,
     billing_method: t.billing_method,
-    contract_price: String(t.annual_price),
+    contract_price: String(monthlyPremium * 12),
+    monthly_amount: String(monthlyPremium),
+    deductible: String(Number.isFinite(deductible) && deductible >= 0 ? deductible : 0),
     included_service_visits: String(t.included_service_visits),
     included_labor_hours: String(t.included_labor_hours),
     included_replacement_parts: String(t.included_replacement_parts),
@@ -1470,6 +1642,8 @@ export function getCatalogDrivenTier(
   if (!hasUnitsLine && Number.isFinite(units) && units > 0) {
     coverages.unshift(unitsLine(units));
   }
+  const monthly125 = t.monthly_premium_at_125_fee ?? Math.round(t.annual_price / 12);
+  const monthly100 = t.monthly_premium_at_100_fee ?? monthly125 + 25;
   return {
     id: tierId,
     name: resolved.level.name,
@@ -1477,7 +1651,8 @@ export function getCatalogDrivenTier(
     recommended: resolved.level.recommended,
     coverages: [
       ...coverages,
-      `From ${formatMoneyPlain(t.annual_price)}/yr (${resolved.pack.name} Mid asset band; final price set by Ridley)`,
+      `${formatMoneyPlain(monthly125)}/mo @ $125/visit or ${formatMoneyPlain(monthly100)}/mo @ $100/visit (${resolved.pack.name} Mid band)`,
+      "$100 or $125 service fee per dispatch (your choice at signup)",
     ],
     formDefaults: {
       contract_type: t.contract_type,

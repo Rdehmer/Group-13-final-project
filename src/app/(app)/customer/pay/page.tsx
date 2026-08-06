@@ -19,11 +19,17 @@ import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
-import { daysPastDue } from "@/lib/billing";
-import type { Invoice, Payment, Profile } from "@/lib/types";
+import { daysPastDue, formatMonthLabel } from "@/lib/billing";
+import type { Invoice, Payment, Profile, ServiceContract } from "@/lib/types";
+import {
+  getContractPaymentStanding,
+  isMonthlyStandingInvoice,
+  summarizeContractStandings,
+} from "@/lib/contract-billing";
 
 type OpenInvoice = Invoice & {
   work_orders?: { work_order_number: string } | null;
+  service_contracts?: { id: string; name: string } | null;
 };
 
 type Receipt = {
@@ -240,6 +246,8 @@ function PayPortalInner() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
+  const [contracts, setContracts] = useState<ServiceContract[]>([]);
+  const [allStandingInvoices, setAllStandingInvoices] = useState<Invoice[]>([]);
   const [history, setHistory] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -272,10 +280,11 @@ function PayPortalInner() {
       return;
     }
 
-    const [{ data: inv }, { data: pay }, { data: cust }, configRes] = await Promise.all([
+    const [{ data: inv }, { data: pay }, { data: cust }, { data: sc }, { data: monthlyInv }, configRes] =
+      await Promise.all([
       supabase
         .from("invoices")
-        .select("*, work_orders(work_order_number)")
+        .select("*, work_orders(work_order_number), service_contracts(id, name)")
         .eq("customer_id", p.customer_id)
         .gt("remaining_balance", 0)
         .not("status", "eq", "Canceled")
@@ -287,6 +296,17 @@ function PayPortalInner() {
         .order("payment_date", { ascending: false })
         .limit(50),
       supabase.from("customers").select("name").eq("id", p.customer_id).maybeSingle(),
+      supabase
+        .from("service_contracts")
+        .select("*")
+        .eq("customer_id", p.customer_id)
+        .in("status", ["Active", "Renewed"]),
+      supabase
+        .from("invoices")
+        .select("*")
+        .eq("customer_id", p.customer_id)
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0),
       fetch("/api/stripe/config")
         .then((r) => r.json())
         .catch(() => ({ configured: false, demo: false })),
@@ -294,6 +314,8 @@ function PayPortalInner() {
 
     const open = (inv as OpenInvoice[]) ?? [];
     setInvoices(open);
+    setContracts((sc as ServiceContract[]) ?? []);
+    setAllStandingInvoices((monthlyInv as Invoice[]) ?? []);
     setHistory((pay as Payment[]) ?? []);
     setCustomerName(cust?.name ?? p.full_name ?? "Account");
     setStripeConfigured(Boolean(configRes?.configured));
@@ -391,6 +413,29 @@ function PayPortalInner() {
     }
     return selectedTotal;
   }, [partialMode, selectedInvoices.length, customAmount, selectedTotal]);
+
+  const feeStandingSummary = useMemo(() => {
+    const standings = contracts.map((c) => getContractPaymentStanding(c, allStandingInvoices, today));
+    return summarizeContractStandings(standings);
+  }, [contracts, allStandingInvoices, today]);
+
+  const feeStandingMessage = useMemo(() => {
+    if (contracts.length === 0) return null;
+    const { upToDate, paymentDue, pastDue, pendingSetup } = feeStandingSummary;
+    const parts: string[] = [];
+    if (upToDate) parts.push(`${upToDate} up to date`);
+    if (paymentDue) parts.push(`${paymentDue} payment due`);
+    if (pastDue) parts.push(`${pastDue} past due`);
+    if (pendingSetup) parts.push(`${pendingSetup} pending setup`);
+    if (parts.length === 0) return "No monthly recurring contracts on file.";
+    if (pastDue + paymentDue === 0 && upToDate > 0) {
+      return `Your contracts are up to date (${parts.join(" · ")}).`;
+    }
+    if (pastDue + paymentDue > 0) {
+      return `You have a monthly fee due (${parts.join(" · ")}).`;
+    }
+    return `Monthly fee status: ${parts.join(" · ")}.`;
+  }, [contracts.length, feeStandingSummary]);
 
   function toggleInvoice(id: string) {
     setSuccess(null);
@@ -572,6 +617,26 @@ function PayPortalInner() {
         <StatCard label="Open Invoices" value={invoices.length} hint="Select which to pay" />
       </div>
 
+      {feeStandingMessage ? (
+        <div
+          className={`rounded-box border p-4 text-sm ${
+            feeStandingSummary.pastDue + feeStandingSummary.paymentDue > 0
+              ? "border-warning/40 bg-warning/10"
+              : "border-success/30 bg-success/10"
+          }`}
+        >
+          <p className="font-medium">{feeStandingMessage}</p>
+          <p className="mt-1 opacity-70">
+            Monthly contract fees appear below as open invoices when generated by Ridley.
+            View standing anytime on{" "}
+            <Link href="/customer/contracts" className="link">
+              My Contracts
+            </Link>
+            .
+          </p>
+        </div>
+      ) : null}
+
       {error ? (
         <div className="alert alert-error text-sm">
           <AlertCircle className="h-4 w-4" />
@@ -672,6 +737,16 @@ function PayPortalInner() {
                           {inv.work_orders?.work_order_number ? (
                             <span className="mt-0.5 block text-[11px] font-normal opacity-50">
                               Job {inv.work_orders.work_order_number}
+                            </span>
+                          ) : isMonthlyStandingInvoice(inv) ? (
+                            <span className="mt-0.5 block text-[11px] font-normal opacity-50">
+                              Monthly fee
+                              {inv.service_contracts?.name
+                                ? ` — ${inv.service_contracts.name}`
+                                : ""}
+                              {inv.billing_period
+                                ? ` · ${formatMonthLabel(inv.billing_period)}`
+                                : ""}
                             </span>
                           ) : null}
                         </td>

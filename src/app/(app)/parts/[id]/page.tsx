@@ -47,7 +47,8 @@ export default function PartDetailPage() {
     is_active: true,
   });
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "administrator" || profile?.role === "service_manager";
 
   async function load() {
     setLoading(true);

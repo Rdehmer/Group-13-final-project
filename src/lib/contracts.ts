@@ -7,7 +7,9 @@ import {
   listCatalogDrivenTiers,
   mergePlanSnapshotIntoNotes,
   resolvePlan,
+  buildPricingExtrasLine,
 } from "@/lib/contract-plans";
+import { premiumForFeeOption, type ServiceFeeOption } from "@/lib/contract-pricing";
 
 export const CONTRACT_TYPES = [
   "Preventive Maintenance",
@@ -150,7 +152,8 @@ export const CONTRACT_TIERS: ContractTier[] = [
       "No included parts — billed separately",
       "Standard (best effort) emergency response",
       "Semi-annual inspections and basic tune-ups",
-      "Corrective work billed time and materials",
+      "Covered repairs within plan caps",
+      "$100 or $125 service fee per dispatch (your choice at signup)",
       "Business-hours scheduling only",
       "Customer approval required before non-PM dispatch",
     ],
@@ -162,7 +165,7 @@ export const CONTRACT_TIERS: ContractTier[] = [
       included_labor_hours: "4",
       included_replacement_parts: "0",
       emergency_response_commitment: "Standard (best effort)",
-      billing_method: "Per-Service Charge",
+      billing_method: "Monthly Recurring Charge",
       payment_terms: "Net 30",
       approval_requirements: "Customer approval required before non-PM dispatch",
     },
@@ -279,16 +282,20 @@ type BuildSubmissionInput = {
   packId?: string;
   /** Covered asset value for plan band snapshot (defaults Mid-ish $100k). */
   assetValue?: number;
+  serviceFeeOption?: ServiceFeeOption;
 };
 
 export function buildContractSubmission(input: BuildSubmissionInput) {
   const { customerId, customerName, userId, form, tierId, packId } = input;
+  const serviceFeeOption = input.serviceFeeOption ?? 125;
   const assetValue =
     input.assetValue != null && Number.isFinite(input.assetValue) && input.assetValue > 0
       ? input.assetValue
       : 100_000;
 
   let notes = form.notes || null;
+  let monthlyAmount = 0;
+  let deductible = 0;
   if (packId && tierId) {
     const resolved = resolvePlan(packId, tierId, assetValue);
     if (resolved) {
@@ -298,7 +305,14 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
         band: resolved.band,
         assetValue: resolved.assetValue,
       });
-      notes = mergePlanSnapshotIntoNotes(notes, tag);
+      const extrasLine = buildPricingExtrasLine(resolved.thresholds, serviceFeeOption, packId);
+      notes = mergePlanSnapshotIntoNotes(notes, `${tag}\n${extrasLine}`);
+      if (/monthly\s*recurring/i.test(resolved.thresholds.billing_method)) {
+        monthlyAmount = premiumForFeeOption(resolved.thresholds, serviceFeeOption);
+      }
+      const d = resolved.thresholds.extras.deductible;
+      const dn = typeof d === "number" ? d : Number(d);
+      deductible = Number.isFinite(dn) && dn >= 0 ? dn : 0;
     }
   }
 
@@ -316,6 +330,8 @@ export function buildContractSubmission(input: BuildSubmissionInput) {
     renewal_option: form.renewal_option || null,
     billing_method: form.billing_method,
     contract_price: 0,
+    monthly_amount: monthlyAmount,
+    deductible,
     payment_terms: form.payment_terms || null,
     included_service_visits: Number(form.included_service_visits) || 0,
     service_frequency: form.service_frequency || null,
@@ -642,6 +658,7 @@ export type ContractDraft = {
   tierId: ContractTierId;
   step: number;
   packId?: string;
+  serviceFeeOption?: ServiceFeeOption;
 };
 
 export function saveContractDraft(customerId: string, data: ContractDraft) {
