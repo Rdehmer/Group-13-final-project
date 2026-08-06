@@ -10,6 +10,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import {
+  CalendarDays,
   CalendarOff,
   ChevronRight,
   MapPin,
@@ -432,10 +433,14 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Link href="/parts" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <Package className="h-4 w-4" />
           Parts
+        </Link>
+        <Link href="/scheduling" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
+          <CalendarDays className="h-4 w-4" />
+          Hours
         </Link>
         <Link href="/time-off" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarOff className="h-4 w-4" />

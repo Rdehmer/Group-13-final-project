@@ -408,6 +408,35 @@ export type TimeOffRequest = {
   technician?: { id: string; full_name: string | null; email: string } | null;
 };
 
+/** Weekly preferred availability window (0=Sun … 6=Sat). */
+export type TechnicianAvailability = {
+  id: string;
+  technician_id: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  is_available: boolean;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TechnicianShiftStatus = "draft" | "published" | "canceled";
+
+/** Manager-published shift on a calendar day. */
+export type TechnicianShift = {
+  id: string;
+  technician_id: string;
+  work_date: string;
+  start_time: string;
+  end_time: string;
+  status: TechnicianShiftStatus;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export const ROLE_LABELS: Record<UserRole, string> = {
   administrator: "Administrator",
   service_manager: "Service Manager",
