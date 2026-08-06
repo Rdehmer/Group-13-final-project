@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, LogOut, Wrench } from "lucide-react";
+import { Mail, Menu, LogOut, Wrench } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
+import { countUnreadInboxThreads } from "@/lib/customer-inbox";
 
 const CUSTOMER_HOME = "/customer";
 
@@ -53,9 +54,8 @@ function GatedNavLink({
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
-  const active = item.href === CUSTOMER_HOME
-    ? pathname === CUSTOMER_HOME
-    : isPathActive(pathname, item.href);
+  const active =
+    item.href === CUSTOMER_HOME ? pathname === CUSTOMER_HOME : isPathActive(pathname, item.href);
   const isBlocked = isGateActive && item.href !== CUSTOMER_HOME;
 
   if (isBlocked) {
@@ -78,6 +78,55 @@ function GatedNavLink({
   );
 }
 
+function NavChildList({
+  items,
+  pathname,
+  isGateActive,
+  blockNavigation,
+}: {
+  items: NavItem[];
+  pathname: string;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  return (
+    <ul>
+      {items.map((child) => {
+        if (child.children?.length) {
+          const sectionActive = child.children.some((c) => isPathActive(pathname, c.href));
+          return (
+            <li key={`${child.href}-${child.label}`}>
+              <span
+                className={`menu-title px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                  sectionActive ? "text-primary" : "opacity-60"
+                }`}
+              >
+                {child.label}
+              </span>
+              <NavChildList
+                items={child.children}
+                pathname={pathname}
+                isGateActive={isGateActive}
+                blockNavigation={blockNavigation}
+              />
+            </li>
+          );
+        }
+        return (
+          <li key={`${child.href}-${child.label}`}>
+            <GatedNavLink
+              item={child}
+              pathname={pathname}
+              isGateActive={isGateActive}
+              blockNavigation={blockNavigation}
+            />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function NavDetailsGroup({
   item,
   pathname,
@@ -89,11 +138,12 @@ function NavDetailsGroup({
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
-  const childActive = item.children!.some((child) =>
-    child.href === CUSTOMER_HOME
+  const childActive = item.children!.some(function walk(child): boolean {
+    if (child.children?.length) return child.children.some(walk);
+    return child.href === CUSTOMER_HOME
       ? pathname === CUSTOMER_HOME
-      : isPathActive(pathname, child.href),
-  );
+      : isPathActive(pathname, child.href);
+  });
   const sectionOpen = childActive || isPathActive(pathname, item.href);
   const parentBlocked = isGateActive && item.href !== CUSTOMER_HOME;
 
@@ -109,23 +159,85 @@ function NavDetailsGroup({
           {item.label}
         </span>
       ) : (
-        <Link href={item.href} className={sectionOpen ? "border-l-2 border-primary/40 font-semibold text-primary" : "border-l-2 border-transparent opacity-80"}>
+        <Link
+          href={item.href}
+          className={
+            sectionOpen
+              ? "border-l-2 border-primary/40 font-semibold text-primary"
+              : "border-l-2 border-transparent opacity-80"
+          }
+        >
           {item.label}
         </Link>
       )}
-      <ul>
-        {item.children!.map((child) => (
-          <li key={`${child.href}-${child.label}`}>
-            <GatedNavLink
-              item={child}
-              pathname={pathname}
-              isGateActive={isGateActive}
-              blockNavigation={blockNavigation}
-            />
-          </li>
-        ))}
-      </ul>
+      <NavChildList
+        items={item.children!}
+        pathname={pathname}
+        isGateActive={isGateActive}
+        blockNavigation={blockNavigation}
+      />
     </li>
+  );
+}
+
+function CustomerInboxHeaderControl({
+  customerId,
+  isGateActive,
+  blockNavigation,
+}: {
+  customerId: string;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  const pathname = usePathname();
+  const supabase = createClient();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const refreshUnread = useCallback(async () => {
+    const count = await countUnreadInboxThreads(supabase, customerId);
+    setUnreadCount(count);
+  }, [customerId, supabase]);
+
+  useEffect(() => {
+    void refreshUnread();
+    const id = window.setInterval(() => {
+      void refreshUnread();
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [refreshUnread, pathname]);
+
+  const active = isPathActive(pathname, "/customer/inbox");
+  const showBadge = unreadCount > 0;
+  const className = `btn btn-ghost btn-sm btn-square relative ${active ? "bg-base-200" : ""}`;
+
+  if (isGateActive) {
+    return (
+      <span
+        role="link"
+        aria-disabled="true"
+        aria-label="Inbox"
+        className={`${className} pointer-events-none cursor-not-allowed opacity-50`}
+        onClick={blockNavigation}
+      >
+        <Mail className="h-4 w-4" />
+      </span>
+    );
+  }
+
+  return (
+    <Link
+      href="/customer/inbox"
+      className={className}
+      aria-label={showBadge ? `Inbox, ${unreadCount} unread` : "Inbox"}
+      title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
+    >
+      <Mail className="h-4 w-4" />
+      {showBadge ? (
+        <span className="badge badge-success absolute -right-1 -top-1 h-5 min-w-5 border-0 px-1 text-[10px] font-bold text-success-content">
+          {unreadCount > 9 ? "9+" : unreadCount}
+        </span>
+      ) : null}
+    </Link>
   );
 }
 
@@ -141,6 +253,7 @@ export function AppShell({
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
+  const isCustomer = profile.role === "customer";
 
   useEffect(() => {
     setMounted(true);
@@ -176,6 +289,13 @@ export function AppShell({
             </div>
           </div>
           <div className="hidden items-center gap-3 md:flex">
+            {isCustomer && profile.customer_id ? (
+              <CustomerInboxHeaderControl
+                customerId={profile.customer_id}
+                isGateActive={gateActive}
+                blockNavigation={blockNavigation}
+              />
+            ) : null}
             <div className="text-right text-sm">
               <p className="font-medium">{profile.full_name || profile.email}</p>
               <p className="text-xs opacity-55">{ROLE_LABELS[profile.role]}</p>
@@ -191,9 +311,18 @@ export function AppShell({
             <span className="font-medium">{profile.full_name || profile.email}</span>
             <span className="opacity-55"> · {ROLE_LABELS[profile.role]}</span>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={logout} aria-label="Logout">
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {isCustomer && profile.customer_id ? (
+              <CustomerInboxHeaderControl
+                customerId={profile.customer_id}
+                isGateActive={gateActive}
+                blockNavigation={blockNavigation}
+              />
+            ) : null}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={logout} aria-label="Logout">
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {gateActive ? (

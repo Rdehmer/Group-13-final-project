@@ -1,3 +1,4 @@
+import { isInboxThreadUnread } from "@/lib/customer-inbox";
 import { inboxCategoryLabel, formatInboxWhen, type InboxThread } from "./inbox-types";
 
 type Props = {
@@ -19,6 +20,12 @@ export function ThreadList({ threads, selectedId, onSelect }: Props) {
     <ul className="divide-y divide-base-200 rounded-box border border-base-300 bg-base-100">
       {threads.map((thread) => {
         const active = thread.id === selectedId;
+        const unread = isInboxThreadUnread({
+          id: thread.id,
+          last_message_at: thread.last_message_at,
+          customer_last_read_at: thread.customer_last_read_at ?? null,
+          last_sender_role: thread.last_sender_role ?? null,
+        });
         return (
           <li key={thread.id}>
             <button
@@ -29,7 +36,17 @@ export function ThreadList({ threads, selectedId, onSelect }: Props) {
               }`}
             >
               <div className="flex items-start justify-between gap-2">
-                <p className="line-clamp-1 font-medium text-sm">{thread.subject}</p>
+                <p
+                  className={`line-clamp-1 text-sm ${unread ? "font-semibold" : "font-medium"}`}
+                >
+                  {unread ? (
+                    <span
+                      className="mr-1.5 inline-block h-2 w-2 rounded-full bg-success align-middle"
+                      aria-label="Unread"
+                    />
+                  ) : null}
+                  {thread.subject}
+                </p>
                 <span className="shrink-0 text-[10px] opacity-50 tabular-nums">
                   {formatInboxWhen(thread.last_message_at)}
                 </span>
@@ -46,6 +63,7 @@ export function ThreadList({ threads, selectedId, onSelect }: Props) {
                 {thread.status === "resolved" ? (
                   <span className="badge badge-success badge-xs">Resolved</span>
                 ) : null}
+                {unread ? <span className="badge badge-success badge-xs">Unread</span> : null}
               </div>
             </button>
           </li>

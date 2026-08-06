@@ -15,6 +15,8 @@ export type InboxThread = {
   status: "open" | "resolved";
   last_message_at: string;
   created_at: string;
+  customer_last_read_at?: string | null;
+  last_sender_role?: "customer" | "staff" | null;
   work_orders?:
     | ({ work_order_number: string; work_order_type: string } & WorkOrderDraftFields)
     | null;

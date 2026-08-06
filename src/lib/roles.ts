@@ -98,49 +98,65 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["customer"],
     children: [
       {
-        href: "/customer/request-contract",
-        label: "Request Contract",
-        roles: ["customer"],
-      },
-      {
         href: "/customer/contracts",
-        label: "My Contracts",
+        label: "Contracts",
         roles: ["customer"],
-      },
-      {
-        href: "/customer/equipment",
-        label: "My Equipment",
-        roles: ["customer"],
+        children: [
+          {
+            href: "/customer/request-contract",
+            label: "Request Contract",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/contracts",
+            label: "My Contracts",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/equipment",
+            label: "My Equipment",
+            roles: ["customer"],
+          },
+        ],
       },
       {
         href: "/customer/request-service",
-        label: "Request Service",
+        label: "Service",
         roles: ["customer"],
-      },
-      {
-        href: "/customer/open-request",
-        label: "Active Service",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/inbox",
-        label: "Inbox",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/order-history",
-        label: "Service History",
-        roles: ["customer"],
+        children: [
+          {
+            href: "/customer/request-service",
+            label: "Request Service",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/open-request",
+            label: "Active Service",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/order-history",
+            label: "Service History",
+            roles: ["customer"],
+          },
+        ],
       },
       {
         href: "/customer/pay",
-        label: "Payments",
+        label: "Billing & Account",
         roles: ["customer"],
-      },
-      {
-        href: "/customer/account",
-        label: "Account Information",
-        roles: ["customer"],
+        children: [
+          {
+            href: "/customer/pay",
+            label: "Payments",
+            roles: ["customer"],
+          },
+          {
+            href: "/customer/account",
+            label: "Account Information",
+            roles: ["customer"],
+          },
+        ],
       },
     ],
   },
