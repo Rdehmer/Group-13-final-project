@@ -32,6 +32,7 @@ export type JournalSource =
   | "write_off"
   | "payroll_accrual"
   | "ap_bill"
+  | "ap_payment"
   | "deposit"
   | "manual"
   | "cogs";
@@ -172,9 +173,11 @@ function nextEntryNumber(source: JournalSource): string {
                   ? "JE-P"
                   : source === "ap_bill"
                     ? "JE-V"
-                    : source === "deposit"
-                      ? "JE-U"
-                      : "JE";
+                    : source === "ap_payment"
+                      ? "JE-VP"
+                      : source === "deposit"
+                        ? "JE-U"
+                        : "JE";
   const meta = readJson<{ seq: number }>(KEY_META, { seq: 1000 });
   meta.seq += 1;
   writeJson(KEY_META, meta);

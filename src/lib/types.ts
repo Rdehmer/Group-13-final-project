@@ -17,6 +17,8 @@ export type PermissionKey =
   | "timesheets"
   | "dispatch"
   | "parts"
+  | "vendors"
+  | "service_vendors"
   | "emergency_purchases"
   | "inbox"
   | "billing"
@@ -145,6 +147,8 @@ export type WorkOrder = {
   work_order_type: string;
   priority: "Low" | "Normal" | "High" | "Critical";
   assigned_technician_id: string | null;
+  /** External service provider assigned to this job (Ecotrak-style). */
+  service_vendor_id?: string | null;
   scheduled_date: string | null;
   scheduled_start_time: string | null;
   /** Optional end time when the column exists; duration falls back to estimated_labor_hours. */
@@ -344,6 +348,107 @@ export type Invoice = {
   assigned_to: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type VendorBillStatus = "Open" | "Partial" | "Paid" | "Void";
+export type VendorPaymentMethod = "Check" | "ACH" | "Cash" | "Card" | "Other";
+export type VendorApprovalStatus = "Pending" | "Approved" | "Rejected";
+
+export type Vendor = {
+  id: string;
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  payment_terms: string;
+  notes: string | null;
+  is_active: boolean;
+  approval_status: VendorApprovalStatus;
+  requested_by: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VendorBill = {
+  id: string;
+  vendor_id: string;
+  bill_number: string;
+  bill_date: string;
+  due_date: string;
+  amount: number;
+  amount_paid: number;
+  status: VendorBillStatus;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VendorBillPayment = {
+  id: string;
+  bill_id: string;
+  payment_date: string;
+  amount: number;
+  method: VendorPaymentMethod;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+/** Ecotrak-style service provider (company we buy services from). */
+export type ServiceVendor = {
+  id: string;
+  name: string;
+  primary_trade: string;
+  trades: string[];
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  service_area: string | null;
+  notes: string | null;
+  is_active: boolean;
+  approval_status: VendorApprovalStatus;
+  requested_by: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceVendorBill = {
+  id: string;
+  service_vendor_id: string;
+  work_order_id: string | null;
+  bill_number: string;
+  bill_date: string;
+  due_date: string;
+  amount: number;
+  amount_paid: number;
+  status: VendorBillStatus;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceVendorRating = {
+  id: string;
+  service_vendor_id: string;
+  work_order_id: string | null;
+  rating: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
 };
 
 export type PurchaseOrder = {

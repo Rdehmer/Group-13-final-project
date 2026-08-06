@@ -50,6 +50,7 @@ import type {
   Invoice,
   Part,
   Profile,
+  ServiceVendor,
   TechnicianLabor,
   WorkOrder,
   WorkOrderPart,
@@ -79,6 +80,7 @@ export default function JobDetailPage() {
   const [wo, setWo] = useState<JobDetail | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
+  const [serviceVendors, setServiceVendors] = useState<ServiceVendor[]>([]);
   const [techName, setTechName] = useState<string>("—");
   const [labor, setLabor] = useState<TechnicianLabor[]>([]);
   const [parts, setParts] = useState<(WorkOrderPart & { parts?: Part })[]>([]);
@@ -92,6 +94,7 @@ export default function JobDetailPage() {
   const [workPerformed, setWorkPerformed] = useState("");
   const [techNotes, setTechNotes] = useState("");
   const [assignTech, setAssignTech] = useState("");
+  const [assignServiceVendor, setAssignServiceVendor] = useState("");
   const [scheduleDate, setScheduleDate] = useState("");
   const [problemDescription, setProblemDescription] = useState("");
   const [requestedService, setRequestedService] = useState("");
@@ -134,6 +137,7 @@ export default function JobDetailPage() {
       setWorkPerformed(w.work_performed ?? "");
       setTechNotes(w.technician_notes ?? "");
       setAssignTech(w.assigned_technician_id ?? "");
+      setAssignServiceVendor(w.service_vendor_id ?? "");
       setScheduleDate(w.scheduled_date ?? "");
       setProblemDescription(w.problem_description ?? "");
       setRequestedService(w.requested_service ?? "");
@@ -147,7 +151,7 @@ export default function JobDetailPage() {
       setProfile(p as Profile);
     }
 
-    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }] =
+    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }, { data: sv }] =
       await Promise.all([
         supabase.from("profiles").select("*").eq("role", "technician").eq("is_active", true),
         supabase.from("technician_labor").select("*").eq("work_order_id", id).order("work_date", { ascending: false }),
@@ -160,10 +164,17 @@ export default function JobDetailPage() {
           .select("*")
           .eq("work_order_id", id)
           .maybeSingle(),
+        supabase
+          .from("service_vendors")
+          .select("id, name, primary_trade, is_active, approval_status")
+          .eq("is_active", true)
+          .eq("approval_status", "Approved")
+          .order("name"),
       ]);
 
     const techs = (tech as Profile[]) ?? [];
     setTechnicians(techs);
+    setServiceVendors((sv as ServiceVendor[]) ?? []);
     setLabor((lab as TechnicianLabor[]) ?? []);
     setParts((pts as typeof parts) ?? []);
     setAdditional((awr as AdditionalWorkRequest[]) ?? []);
@@ -261,6 +272,7 @@ export default function JobDetailPage() {
         work_order_type: workOrderType,
         priority,
         assigned_technician_id: assignTech || null,
+        service_vendor_id: assignServiceVendor || null,
         scheduled_date: scheduleDate || null,
         status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
           ? wo?.status
@@ -288,6 +300,7 @@ export default function JobDetailPage() {
     await patchJob(
       {
         assigned_technician_id: assignTech || null,
+        service_vendor_id: assignServiceVendor || null,
         scheduled_date: scheduleDate || null,
         status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
           ? wo?.status
@@ -894,6 +907,24 @@ export default function JobDetailPage() {
               <p className="font-medium">{techName}</p>
             </div>
             <div className="rounded-box bg-base-200/60 p-3">
+              <p className="opacity-60">Service vendor</p>
+              {assignServiceVendor ? (
+                <Link
+                  href={`/service-vendors/${assignServiceVendor}`}
+                  className="link link-hover font-medium"
+                >
+                  {serviceVendors.find((v) => v.id === assignServiceVendor)?.name ?? "Assigned"}
+                </Link>
+              ) : (
+                <p className="font-medium">In-house</p>
+              )}
+              {assignServiceVendor ? (
+                <p className="mt-0.5 text-xs opacity-70">
+                  {serviceVendors.find((v) => v.id === assignServiceVendor)?.primary_trade ?? ""}
+                </p>
+              ) : null}
+            </div>
+            <div className="rounded-box bg-base-200/60 p-3">
               <p className="opacity-60">Scheduled</p>
               <p className="font-medium">{wo.scheduled_date ?? "—"}</p>
             </div>
@@ -901,7 +932,7 @@ export default function JobDetailPage() {
               <p className="opacity-60">Est. billable</p>
               <p className="font-medium">{formatMoney(estBillable)}</p>
             </div>
-            <div className="rounded-box bg-base-200/60 p-3">
+            <div className="rounded-box bg-base-200/60 p-3 sm:col-span-2">
               <p className="opacity-60">Equipment</p>
               <p className="font-medium">{wo.equipment?.name ?? "—"}</p>
               {wo.equipment?.model || wo.equipment?.serial_number ? (
@@ -1082,6 +1113,27 @@ export default function JobDetailPage() {
                             </option>
                           ))}
                         </select>
+                      </FormRow>
+                      <FormRow label="Service vendor">
+                        <select
+                          className="select select-bordered w-full"
+                          value={assignServiceVendor}
+                          onChange={(e) => setAssignServiceVendor(e.target.value)}
+                          disabled={wo.status === "Closed"}
+                        >
+                          <option value="">None (in-house)</option>
+                          {serviceVendors.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.name} · {v.primary_trade}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-xs opacity-50">
+                          External provider for specialty work.{" "}
+                          <Link href="/service-vendors" className="link link-hover">
+                            Manage directory
+                          </Link>
+                        </p>
                       </FormRow>
                       <FormRow label="Schedule date">
                         <input

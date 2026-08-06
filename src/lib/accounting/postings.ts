@@ -255,6 +255,30 @@ export function postApBill(input: {
   });
 }
 
+export function postApPayment(input: {
+  vendor: string;
+  amount: number;
+  asOf: string;
+  paymentId: string;
+  userId: string | null;
+}): { ok: true; journal: JournalEntry } | { ok: false; error: string } {
+  const amount = Math.round(Number(input.amount) * 100) / 100;
+  if (amount <= 0) return { ok: false, error: "Payment amount required." };
+  const existing = journalsForSource("ap_payment", input.paymentId);
+  if (existing) return { ok: true, journal: existing };
+  return postJournal({
+    entryDate: input.asOf,
+    source: "ap_payment",
+    sourceId: input.paymentId,
+    memo: `AP payment — ${input.vendor}`,
+    userId: input.userId,
+    lines: [
+      { accountCode: "2000", debit: amount, memo: "Accounts payable" },
+      { accountCode: "1000", credit: amount, memo: "Cash" },
+    ],
+  });
+}
+
 export function postDepositClearing(input: {
   amount: number;
   depositDate: string;

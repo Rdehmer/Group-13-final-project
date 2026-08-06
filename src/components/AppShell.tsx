@@ -17,6 +17,13 @@ const CUSTOMER_HOME = "/customer";
 const UNREAD_POLL_MS = 30_000;
 
 function isPathActive(pathname: string, href: string) {
+  // Suppliers lives at /vendors; don't treat /vendors/aging as the suppliers list.
+  if (href === "/vendors") {
+    return (
+      pathname === "/vendors" ||
+      (pathname.startsWith("/vendors/") && !pathname.startsWith("/vendors/aging"))
+    );
+  }
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -49,23 +56,42 @@ function closeMobileDrawer() {
   if (toggle) toggle.checked = false;
 }
 
+function NavBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="badge badge-warning badge-sm ml-1 tabular-nums">{count > 99 ? "99+" : count}</span>
+  );
+}
+
+function NavLabelWithBadge({ label, count }: { label: string; count?: number }) {
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      {label}
+      <NavBadge count={count ?? 0} />
+    </span>
+  );
+}
+
 function GatedNavLink({
   item,
   pathname,
   className,
   isGateActive,
   blockNavigation,
+  badgeCount,
 }: {
   item: NavItem;
   pathname: string;
   className?: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  badgeCount?: number;
 }) {
   const router = useRouter();
   const active =
     item.href === CUSTOMER_HOME ? pathname === CUSTOMER_HOME : isPathActive(pathname, item.href);
   const isBlocked = isGateActive && item.href !== CUSTOMER_HOME;
+  const label = <NavLabelWithBadge label={item.label} count={badgeCount} />;
 
   if (isBlocked) {
     return (
@@ -75,7 +101,7 @@ function GatedNavLink({
         className={gatedNavClassName(true, active, className)}
         onClick={blockNavigation}
       >
-        {item.label}
+        {label}
       </span>
     );
   }
@@ -91,7 +117,7 @@ function GatedNavLink({
         router.push(item.href);
       }}
     >
-      {item.label}
+      {label}
     </Link>
   );
 }
@@ -101,11 +127,13 @@ function NavChildList({
   pathname,
   isGateActive,
   blockNavigation,
+  badgeForHref,
 }: {
   items: NavItem[];
   pathname: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  badgeForHref?: (href: string) => number;
 }) {
   return (
     <ul>
@@ -126,6 +154,7 @@ function NavChildList({
                 pathname={pathname}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
+                badgeForHref={badgeForHref}
               />
             </li>
           );
@@ -137,6 +166,7 @@ function NavChildList({
               pathname={pathname}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
+              badgeCount={badgeForHref?.(child.href)}
             />
           </li>
         );
@@ -150,11 +180,13 @@ function NavDetailsGroup({
   pathname,
   isGateActive,
   blockNavigation,
+  badgeForHref,
 }: {
   item: NavItem;
   pathname: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
+  badgeForHref: (href: string) => number;
 }) {
   const childActive = item.children!.some(function walk(child): boolean {
     if (child.children?.length) return child.children.some(walk);
@@ -162,8 +194,16 @@ function NavDetailsGroup({
       ? pathname === CUSTOMER_HOME
       : isPathActive(pathname, child.href);
   });
-  const sectionOpen = childActive || isPathActive(pathname, item.href);
+  const sectionOpen =
+    childActive ||
+    isPathActive(pathname, item.href) ||
+    pathname.startsWith("/vendors/aging") ||
+    pathname.startsWith("/service-vendors");
   const parentBlocked = isGateActive && item.href !== CUSTOMER_HOME;
+  const parentBadge =
+    item.href === "/vendors"
+      ? badgeForHref("/vendors") + badgeForHref("/service-vendors")
+      : 0;
 
   return (
     <li>
@@ -174,7 +214,7 @@ function NavDetailsGroup({
           className={gatedNavClassName(true, sectionOpen)}
           onClick={blockNavigation}
         >
-          {item.label}
+          <NavLabelWithBadge label={item.label} count={parentBadge} />
         </span>
       ) : (
         <Link
@@ -185,7 +225,7 @@ function NavDetailsGroup({
               : "border-l-2 border-transparent opacity-80"
           }
         >
-          {item.label}
+          <NavLabelWithBadge label={item.label} count={parentBadge} />
         </Link>
       )}
       <NavChildList
@@ -193,6 +233,7 @@ function NavDetailsGroup({
         pathname={pathname}
         isGateActive={isGateActive}
         blockNavigation={blockNavigation}
+        badgeForHref={badgeForHref}
       />
     </li>
   );
@@ -293,6 +334,7 @@ export function AppShell({
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
   const [unreadInbox, setUnreadInbox] = useState(0);
+  const [pendingByHref, setPendingByHref] = useState<Record<string, number>>({});
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
   const isCustomer = profile.role === "customer";
   const showManagerInbox = profile.role === "service_manager";
@@ -327,7 +369,42 @@ export function AppShell({
     };
   }, [showManagerInbox, refreshUnread, pathname]);
 
+  useEffect(() => {
+    const canVendors = ["administrator", "service_manager"].includes(profile.role);
+    if (!canVendors) {
+      setPendingByHref({});
+      return;
+    }
+    let cancelled = false;
+    async function loadPending() {
+      const supabase = createClient();
+      const [suppliers, services] = await Promise.all([
+        supabase
+          .from("vendors")
+          .select("id", { count: "exact", head: true })
+          .eq("approval_status", "Pending"),
+        supabase
+          .from("service_vendors")
+          .select("id", { count: "exact", head: true })
+          .eq("approval_status", "Pending"),
+      ]);
+      if (cancelled) return;
+      setPendingByHref({
+        "/vendors": suppliers.count ?? 0,
+        "/service-vendors": services.count ?? 0,
+      });
+    }
+    void loadPending();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile.role, pathname]);
+
   const gateActive = mounted && isGateActive;
+
+  function badgeForHref(href: string) {
+    return pendingByHref[href] ?? 0;
+  }
 
   async function logout() {
     const supabase = createClient();
@@ -436,6 +513,7 @@ export function AppShell({
                   pathname={pathname}
                   isGateActive={gateActive}
                   blockNavigation={blockNavigation}
+                  badgeForHref={badgeForHref}
                 />
               );
             }
