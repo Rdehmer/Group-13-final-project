@@ -1187,7 +1187,11 @@ export default function JobDetailPage() {
                 <div className="card-body">
                   <PurchaseOrderPanel
                     workOrderId={wo.id}
-                    invoiceId={invoices[0]?.id}
+                    invoiceId={
+                      invoices.find(
+                        (i) => i.status !== "Canceled" && i.status !== "Draft",
+                      )?.id ?? invoices[0]?.id
+                    }
                     canEdit={openForField || isBilling || profile?.role === "service_manager" || profile?.role === "administrator" || profile?.role === "technician"}
                   />
                 </div>
