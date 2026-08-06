@@ -375,7 +375,7 @@ export default async function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard"
-        description="Operations overview for Ridley Equipment Services"
+        description="Operations overview for EquipmentIQ"
         actions={
           <Link href="/work-orders" className="btn btn-primary btn-sm">
             New Work Order

@@ -134,7 +134,7 @@ function CustomerContractsPageInner() {
 
   if (!profile.customer_id) {
     return (
-      <EmptyState title="No customer account linked" description="Contact Ridley Equipment Services to link your portal account." />
+      <EmptyState title="No customer account linked" description="Contact EquipmentIQ to link your portal account." />
     );
   }
 
@@ -174,7 +174,7 @@ function CustomerContractsPageInner() {
             <StatCard
               label="Pending approval"
               value={pendingContracts.length}
-              hint={pendingContracts.length > 0 ? "Ridley is reviewing" : "No requests waiting"}
+              hint={pendingContracts.length > 0 ? "EquipmentIQ is reviewing" : "No requests waiting"}
               danger={pendingContracts.length > 0}
               onClick={() => setFilter("pending")}
               active={filter === "pending"}

@@ -368,8 +368,8 @@ begin
     where start_date = cur_start and end_date = cur_end;
   end if;
 
-  select id into tech1 from public.profiles where email = 'tech1@ridley-demo.test' limit 1;
-  select id into tech2 from public.profiles where email = 'tech2@ridley-demo.test' limit 1;
+  select id into tech1 from public.profiles where email = 'tech1@equipmentiq-demo.test' limit 1;
+  select id into tech2 from public.profiles where email = 'tech2@equipmentiq-demo.test' limit 1;
 
   if tech1 is not null and cur_id is not null then
     insert into public.timesheet_entries (technician_id, cycle_id, work_date, hours, notes)

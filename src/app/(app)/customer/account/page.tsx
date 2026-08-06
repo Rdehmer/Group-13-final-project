@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Customer, Profile } from "@/lib/types";
 import type { CustomerAddressFields } from "@/lib/customer-address";
+import { formatCustomerPhone } from "@/lib/technician-field";
 import { BusinessLocationCard, emptyBusinessLocationAddress } from "../BusinessLocationCard";
 
 type CustomerAccount = Pick<
@@ -83,7 +84,7 @@ export default function CustomerAccountPage() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -94,7 +95,7 @@ export default function CustomerAccountPage() {
     <div>
       <PageHeader
         title="Account Information"
-        description="View your business account details on file with Ridley Equipment Services."
+        description="View your business account details on file with EquipmentIQ."
         actions={
           <Link href="/customer" className="btn btn-ghost btn-sm">
             ← Dashboard
@@ -115,7 +116,7 @@ export default function CustomerAccountPage() {
                   <StatusBadge label={customer.status} tone={statusTone(customer.status)} />
                 </div>
                 <p className="mt-1 text-sm opacity-70">
-                  This is the business account Ridley uses for contracts, service, and billing.
+                  This is the business account EquipmentIQ uses for contracts, service, and billing.
                 </p>
               </div>
             </div>
@@ -137,7 +138,7 @@ export default function CustomerAccountPage() {
               <div>
                 <h2 className="card-title text-base">Contact information</h2>
                 <p className="text-sm opacity-70">
-                  Who Ridley should reach for scheduling and account questions.
+                  Who EquipmentIQ should reach for scheduling and account questions.
                 </p>
               </div>
             </div>
@@ -147,7 +148,14 @@ export default function CustomerAccountPage() {
                 value={customer.primary_contact_name?.trim() || "Not on file"}
               />
               <DetailRow label="Account email" value={customer.email?.trim() || "Not on file"} />
-              <DetailRow label="Phone" value={customer.phone?.trim() || "Not on file"} />
+              <DetailRow
+                label="Phone"
+                value={
+                  customer.phone?.trim()
+                    ? formatCustomerPhone(customer.phone)
+                    : "Not on file"
+                }
+              />
             </dl>
             <div role="status" className="alert alert-info text-sm">
               <span>
@@ -155,7 +163,7 @@ export default function CustomerAccountPage() {
                 <Link href="/customer/inbox" className="link link-hover font-medium">
                   Inbox
                 </Link>{" "}
-                or call Ridley Equipment Services.
+                or call EquipmentIQ.
               </span>
             </div>
           </div>

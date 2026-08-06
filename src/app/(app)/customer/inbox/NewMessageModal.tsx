@@ -115,7 +115,7 @@ export function NewMessageModal({
                 New message
               </h3>
               <p className="mt-1 text-sm leading-relaxed opacity-70">
-                Send a message to Ridley Equipment Services. We typically respond within one business
+                Send a message to EquipmentIQ. We typically respond within one business
                 day.
               </p>
             </div>
@@ -179,7 +179,7 @@ export function NewMessageModal({
             required
             className="flex min-h-0 flex-1 flex-col"
             hint={
-              body.trim().startsWith("Hi Ridley team,")
+              body.trim().startsWith("Hi EquipmentIQ team,")
                 ? "Draft started for you — edit before sending."
                 : undefined
             }

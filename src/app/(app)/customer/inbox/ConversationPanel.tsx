@@ -36,7 +36,7 @@ export function ConversationPanel({
   showDraftHint = false,
   replyPlaceholder,
   customerLabel = "Customer",
-  staffLabel = "Ridley Equipment Services",
+  staffLabel = "EquipmentIQ",
   onReplyChange,
   onSend,
 }: Props) {
@@ -48,7 +48,7 @@ export function ConversationPanel({
   const replyRows = Math.max(showDraftHint ? 10 : 3, reply.split("\n").length + 1);
   const placeholder =
     replyPlaceholder ??
-    (viewerRole === "staff" ? "Write a reply to the customer…" : "Write a reply to Ridley…");
+    (viewerRole === "staff" ? "Write a reply to the customer…" : "Write a reply to EquipmentIQ…");
 
   if (layout === "email") {
     return (

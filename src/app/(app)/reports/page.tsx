@@ -76,7 +76,7 @@ type ContractRow = ServiceContract & { customers?: { name: string } };
 type PaymentRow = Payment & { customers?: { name: string } };
 
 /**
- * GAAP-oriented financial reporting center for Ridley Equipment Services.
+ * GAAP-oriented financial reporting center for EquipmentIQ.
  * Full suite: financials, collections, job profitability, labor, inventory, tax.
  */
 export default function ReportsPage() {
@@ -623,7 +623,7 @@ export default function ReportsPage() {
     <div className="reports-page">
       <PageHeader
         title="Reports"
-        description="GAAP financials plus collections, job profitability, timesheet pay periods, inventory, and tax — live from Ridley data"
+        description="GAAP financials plus collections, job profitability, timesheet pay periods, inventory, and tax — live from EquipmentIQ data"
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
@@ -706,7 +706,7 @@ export default function ReportsPage() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-base-content/45">
-                  Ridley Equipment Services · U.S. GAAP orientation
+                  EquipmentIQ · U.S. GAAP orientation
                 </p>
                 <h2 className="text-xl font-bold tracking-tight sm:text-2xl">{REPORT_NAME[reportId]}</h2>
                 <p className="mt-1 text-sm opacity-60">
@@ -2619,7 +2619,7 @@ function PoliciesReport() {
         <Scale className="h-4 w-4 shrink-0" />
         <span>
           These policies describe how this application measures report lines from operational subledgers. They are
-          educational GAAP orientation for Ridley&apos;s service business — not a substitute for a full audited GL.
+          educational GAAP orientation for EquipmentIQ&apos;s service business — not a substitute for a full audited GL.
         </span>
       </div>
       <dl className="space-y-4">

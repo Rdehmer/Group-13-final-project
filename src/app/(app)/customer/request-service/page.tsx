@@ -417,7 +417,7 @@ function RequestServicePageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }

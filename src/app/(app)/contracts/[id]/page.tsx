@@ -317,7 +317,7 @@ export default function ContractDetailPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const note = [form.notes.trim(), "Rejected by Ridley (customer request not approved)."]
+    const note = [form.notes.trim(), "Rejected by EquipmentIQ (customer request not approved)."]
       .filter(Boolean)
       .join("\n");
     const { error: updateError } = await supabase

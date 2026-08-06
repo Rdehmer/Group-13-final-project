@@ -6,8 +6,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { GlAccount, GlAccountType, GlNormalBalance, GlPostingDefault } from "@/lib/types";
 
-const KEY_ACCOUNTS = "ridley_gl_accounts_v1";
-const KEY_DEFAULTS = "ridley_gl_posting_defaults_v1";
+const KEY_ACCOUNTS = "equipmentiq_gl_accounts_v1";
+const KEY_DEFAULTS = "equipmentiq_gl_posting_defaults_v1";
 
 export const GL_ACCOUNT_TYPES: GlAccountType[] = [
   "asset",

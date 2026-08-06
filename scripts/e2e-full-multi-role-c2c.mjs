@@ -45,11 +45,11 @@ function todayYmd() {
 }
 
 const PERSONA_BY_EMAIL = {
-  "admin@ridley-demo.test": "Admin",
-  "billing@ridley-demo.test": "Billing",
-  "manager@ridley-demo.test": "Manager",
-  "tech1@ridley-demo.test": "Technician",
-  "customer1@ridley-demo.test": "Contract Customer",
+  "admin@equipmentiq-demo.test": "Admin",
+  "billing@equipmentiq-demo.test": "Billing",
+  "manager@equipmentiq-demo.test": "Manager",
+  "tech1@equipmentiq-demo.test": "Technician",
+  "customer1@equipmentiq-demo.test": "Contract Customer",
 };
 
 async function login(page, email) {
@@ -112,8 +112,8 @@ async function main() {
 
   try {
     // ── 1) Customer: create service request ──────────────────────────────
-    await login(page, "customer1@ridley-demo.test");
-    log("login_customer", "pass", "customer1@ridley-demo.test (Contract Customer / Northwind)");
+    await login(page, "customer1@equipmentiq-demo.test");
+    log("login_customer", "pass", "customer1@equipmentiq-demo.test (Contract Customer / Northwind)");
 
     // Clear mandatory service-rating gate from prior completed jobs
     async function clearRatingGates() {
@@ -280,8 +280,8 @@ async function main() {
     await logout(page, context);
 
     // ── 2) Manager: assign + schedule ────────────────────────────────────
-    await login(page, "manager@ridley-demo.test");
-    log("login_manager", "pass", "manager@ridley-demo.test");
+    await login(page, "manager@equipmentiq-demo.test");
+    log("login_manager", "pass", "manager@equipmentiq-demo.test");
 
     if (ids.woId) {
       await page.goto(`${BASE}/work-orders/${ids.woId}`, { waitUntil: "domcontentloaded" });
@@ -352,8 +352,8 @@ async function main() {
     await logout(page, context);
 
     // ── 3) Technician: Arrived → Working → Complete + sign-off ───────────
-    await login(page, "tech1@ridley-demo.test");
-    log("login_tech", "pass", "tech1@ridley-demo.test");
+    await login(page, "tech1@equipmentiq-demo.test");
+    log("login_tech", "pass", "tech1@equipmentiq-demo.test");
 
     await page.goto(`${BASE}/technician`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2500);
@@ -402,7 +402,7 @@ async function main() {
         await logout(page, context);
 
         // Manager approve
-        await login(page, "manager@ridley-demo.test");
+        await login(page, "manager@equipmentiq-demo.test");
         await page.goto(`${BASE}/work-orders/${ids.woId}`, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(2000);
         const approve = page.getByRole("button", { name: /Approve & complete/i });
@@ -585,8 +585,8 @@ async function main() {
     }
 
     // ── 4) Billing: create & send → pay ──────────────────────────────────
-    await login(page, "billing@ridley-demo.test");
-    log("login_billing", "pass", "billing@ridley-demo.test");
+    await login(page, "billing@equipmentiq-demo.test");
+    log("login_billing", "pass", "billing@equipmentiq-demo.test");
 
     await page.goto(`${BASE}/billing`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2500);

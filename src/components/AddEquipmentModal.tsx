@@ -65,7 +65,7 @@ export function AddEquipmentModal({ supabase, customerId, open, onClose, onAdded
     if (insertError) {
       setError(
         insertError.message.includes("permission") || insertError.code === "42501"
-          ? "Unable to register equipment. Please contact Ridley Equipment Services."
+          ? "Unable to register equipment. Please contact EquipmentIQ."
           : insertError.message,
       );
       setBusy(false);

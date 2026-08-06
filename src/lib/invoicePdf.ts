@@ -37,7 +37,7 @@ export async function buildInvoicePdfBlob(
 
   doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
-  doc.text("Ridley Equipment Services", margin, y);
+  doc.text("EquipmentIQ", margin, y);
 
   y += 8;
   doc.setFontSize(10);

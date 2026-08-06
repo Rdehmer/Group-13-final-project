@@ -642,7 +642,7 @@ export default function ContractsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const note = [contract.notes, "Rejected by Ridley (customer request not approved)."]
+    const note = [contract.notes, "Rejected by EquipmentIQ (customer request not approved)."]
       .filter(Boolean)
       .join("\n");
     const { error: updateError } = await supabase

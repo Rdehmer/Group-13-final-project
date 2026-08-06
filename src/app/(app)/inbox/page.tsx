@@ -282,7 +282,7 @@ export default function ManagerInboxPage() {
                   busy={busy}
                   viewerRole="staff"
                   customerLabel={customerName}
-                  staffLabel="Ridley Equipment Services"
+                  staffLabel="EquipmentIQ"
                   onReplyChange={setReply}
                   onSend={() => void handleSendReply()}
                 />

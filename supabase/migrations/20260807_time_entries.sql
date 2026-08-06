@@ -226,10 +226,10 @@ declare
   eq1 uuid;
   seed_count int;
 begin
-  select id into tech1 from public.profiles where email = 'tech1@ridley-demo.test' limit 1;
-  select id into tech2 from public.profiles where email = 'tech2@ridley-demo.test' limit 1;
-  select id into tech3 from public.profiles where lower(email) like 'tech%@ridley-demo.test' and id <> tech1 limit 1;
-  select id into mgr from public.profiles where email = 'manager@ridley-demo.test' limit 1;
+  select id into tech1 from public.profiles where email = 'tech1@equipmentiq-demo.test' limit 1;
+  select id into tech2 from public.profiles where email = 'tech2@equipmentiq-demo.test' limit 1;
+  select id into tech3 from public.profiles where lower(email) like 'tech%@equipmentiq-demo.test' and id <> tech1 limit 1;
+  select id into mgr from public.profiles where email = 'manager@equipmentiq-demo.test' limit 1;
 
   if tech1 is null then
     raise notice 'time_entries seed skipped: demo techs not found';

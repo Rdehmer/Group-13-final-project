@@ -1,5 +1,5 @@
 -- Demo seed for vendor portal (idempotent).
--- Auth user: vendor1@ridley-demo.test / DemoPass123!
+-- Auth user: vendor1@equipmentiq-demo.test / DemoPass123!
 -- Linked to Midwest Parts Supply vendor when present.
 
 do $$
@@ -14,7 +14,7 @@ begin
     returning id into vendor_uuid;
   end if;
 
-  if not exists (select 1 from auth.users where email = 'vendor1@ridley-demo.test') then
+  if not exists (select 1 from auth.users where email = 'vendor1@equipmentiq-demo.test') then
     insert into auth.users (
       instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
       raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
@@ -24,7 +24,7 @@ begin
       v_id,
       'authenticated',
       'authenticated',
-      'vendor1@ridley-demo.test',
+      'vendor1@equipmentiq-demo.test',
       crypt('DemoPass123!', gen_salt('bf')),
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
@@ -42,7 +42,7 @@ begin
     ) values (
       v_id,
       v_id,
-      format('{"sub":"%s","email":"vendor1@ridley-demo.test"}', v_id)::jsonb,
+      format('{"sub":"%s","email":"vendor1@equipmentiq-demo.test"}', v_id)::jsonb,
       'email',
       v_id::text,
       now(),
@@ -50,7 +50,7 @@ begin
       now()
     );
   else
-    select id into v_id from auth.users where email = 'vendor1@ridley-demo.test';
+    select id into v_id from auth.users where email = 'vendor1@equipmentiq-demo.test';
   end if;
 
   update public.profiles

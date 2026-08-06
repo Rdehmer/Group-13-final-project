@@ -156,12 +156,12 @@ export async function POST(req: Request) {
         amount: amountCents,
         currency: "usd",
         automatic_payment_methods: { enabled: true },
-        description: `Ridley payment for ${allocations.map((a) => a.invoiceNumber).join(", ")}`,
+        description: `EquipmentIQ payment for ${allocations.map((a) => a.invoiceNumber).join(", ")}`,
         receipt_email: profile.email || user.email || undefined,
         metadata: {
           customer_id: profile.customer_id,
           user_id: user.id,
-          application: "ridley_customer_portal",
+          application: "equipmentiq_customer_portal",
           allocations: allocationMeta,
           memo: (body.memo ?? "").slice(0, 200),
           invoice_numbers: allocations
@@ -171,7 +171,7 @@ export async function POST(req: Request) {
         },
       },
       {
-        idempotencyKey: `ridley-${profile.customer_id}-${invoiceIds.sort().join("-")}-${amountCents}-${Date.now().toString().slice(-6)}`,
+        idempotencyKey: `equipmentiq-${profile.customer_id}-${invoiceIds.sort().join("-")}-${amountCents}-${Date.now().toString().slice(-6)}`,
       },
     );
 

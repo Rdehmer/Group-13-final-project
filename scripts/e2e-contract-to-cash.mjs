@@ -25,11 +25,11 @@ async function shot(page, name) {
 }
 
 const PERSONA_BY_EMAIL = {
-  "admin@ridley-demo.test": "Admin",
-  "billing@ridley-demo.test": "Billing",
-  "manager@ridley-demo.test": "Manager",
-  "tech1@ridley-demo.test": "Technician",
-  "customer1@ridley-demo.test": "Contract Customer",
+  "admin@equipmentiq-demo.test": "Admin",
+  "billing@equipmentiq-demo.test": "Billing",
+  "manager@equipmentiq-demo.test": "Manager",
+  "tech1@equipmentiq-demo.test": "Technician",
+  "customer1@equipmentiq-demo.test": "Contract Customer",
 };
 
 async function login(page, email) {
@@ -74,8 +74,8 @@ async function main() {
 
   try {
     // 1) Contracts (admin can see contracts; billing may too)
-    await login(page, "admin@ridley-demo.test");
-    log("login_admin", "pass", "admin@ridley-demo.test");
+    await login(page, "admin@equipmentiq-demo.test");
+    log("login_admin", "pass", "admin@equipmentiq-demo.test");
     await page.goto(`${BASE}/contracts`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1500);
     const bodyText = await page.locator("body").innerText();
@@ -99,8 +99,8 @@ async function main() {
     await context.clearCookies();
 
     // 2) Billing: create invoice from completed unbilled WO (prefer contract-linked)
-    await login(page, "billing@ridley-demo.test");
-    log("login_billing", "pass", "billing@ridley-demo.test");
+    await login(page, "billing@equipmentiq-demo.test");
+    log("login_billing", "pass", "billing@equipmentiq-demo.test");
     await page.goto(`${BASE}/billing`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2000);
     await shot(page, "02-billing");

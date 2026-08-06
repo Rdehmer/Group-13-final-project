@@ -4,25 +4,25 @@ import { CheckCircle2, ListOrdered } from "lucide-react";
 const DEMO_STEPS = [
   {
     role: "Admin / Manager",
-    login: "admin@ridley-demo.test or manager@ridley-demo.test",
+    login: "admin@equipmentiq-demo.test or manager@equipmentiq-demo.test",
     path: "Dashboard → book/confirm a job → open job → attach equipment (model/serial/install)",
     href: "/work-orders",
   },
   {
     role: "Technician",
-    login: "tech1@ridley-demo.test",
+    login: "tech1@equipmentiq-demo.test",
     path: "Technician schedule → arrive/start → labor + parts → New PO + receipt → Ready for Review",
     href: "/technician",
   },
   {
     role: "Billing",
-    login: "billing@ridley-demo.test",
+    login: "billing@equipmentiq-demo.test",
     path: "Billing → Ready to invoice → draft → status/assignee → PO/equipment → payments",
     href: "/billing",
   },
   {
     role: "Customer",
-    login: "customer1@ridley-demo.test",
+    login: "customer1@equipmentiq-demo.test",
     path: "My Portal → review equipment & open a service request",
     href: "/customer",
   },

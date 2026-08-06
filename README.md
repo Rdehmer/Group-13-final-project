@@ -1,6 +1,6 @@
 # Equipment Service Manager
 
-Local web app for **Ridley Equipment Services** to manage customers, commercial equipment, service contracts, work orders, technicians, parts, billing, simulated payments, and profitability.
+Local web app for **EquipmentIQ** to manage customers, commercial equipment, service contracts, work orders, technicians, parts, billing, simulated payments, and profitability.
 
 Built with Next.js, React, Tailwind CSS, daisyUI, Supabase, and Recharts.
 
@@ -38,13 +38,13 @@ Password for all demo users: **`DemoPass123!`**
 
 | Email | Role | Where you land |
 |-------|------|----------------|
-| admin@ridley-demo.test | Administrator | Management dashboard |
-| manager@ridley-demo.test | Service Manager | Management dashboard |
-| tech1@ridley-demo.test | Technician | Technician schedule |
-| billing@ridley-demo.test | Billing Employee | Billing |
-| customer1@ridley-demo.test | Customer | Customer portal (Northwind Cold Storage) |
+| admin@equipmentiq-demo.test | Administrator | Management dashboard |
+| manager@equipmentiq-demo.test | Service Manager | Management dashboard |
+| tech1@equipmentiq-demo.test | Technician | Technician schedule |
+| billing@equipmentiq-demo.test | Billing Employee | Billing |
+| customer1@equipmentiq-demo.test | Customer | Customer portal (Northwind Cold Storage) |
 
-Extra technicians: tech2–tech5@ridley-demo.test
+Extra technicians: tech2–tech5@equipmentiq-demo.test
 
 ## What to click to test (quick tour)
 

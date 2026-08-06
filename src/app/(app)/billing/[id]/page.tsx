@@ -937,7 +937,7 @@ export default function InvoiceDetailPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider opacity-60">
-                Ridley Equipment Services
+                EquipmentIQ
               </p>
               <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{inv.invoice_number}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-2">

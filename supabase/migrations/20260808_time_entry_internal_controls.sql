@@ -590,9 +590,9 @@ declare
   cust1 uuid;
   cnt int;
 begin
-  select id into tech1 from public.profiles where email = 'tech1@ridley-demo.test' limit 1;
+  select id into tech1 from public.profiles where email = 'tech1@equipmentiq-demo.test' limit 1;
   select id into tech2 from public.profiles where email ilike 'tech2@%' limit 1;
-  select id into mgr from public.profiles where email = 'manager@ridley-demo.test' limit 1;
+  select id into mgr from public.profiles where email = 'manager@equipmentiq-demo.test' limit 1;
   if tech1 is null then return; end if;
   if tech2 is null then tech2 := tech1; end if;
   if mgr is null then mgr := tech1; end if;

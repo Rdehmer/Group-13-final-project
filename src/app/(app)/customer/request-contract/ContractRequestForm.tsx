@@ -210,7 +210,7 @@ export function ContractRequestForm({
     if (insertError) {
       setError(
         insertError.message.includes("permission") || insertError.code === "42501"
-          ? "Unable to submit contract request. Please contact Ridley Equipment Services."
+          ? "Unable to submit contract request. Please contact EquipmentIQ."
           : insertError.message,
       );
       setBusy(false);
@@ -283,7 +283,7 @@ export function ContractRequestForm({
                   {o.equipmentName} is already covered by {o.contractName}.
                 </span>
               ))}
-              You can still submit, or contact Ridley to amend your existing agreement.
+              You can still submit, or Contact EquipmentIQ to amend your existing agreement.
             </span>
           </div>
         ) : null}
@@ -470,7 +470,7 @@ export function ContractRequestForm({
                 </select>
               </FormRow>
               <p className="text-xs opacity-70">
-                Ridley will confirm final pricing before your agreement is activated.
+                EquipmentIQ will confirm final pricing before your agreement is activated.
               </p>
             </>
           ) : null}

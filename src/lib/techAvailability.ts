@@ -17,8 +17,8 @@ import type {
   TechnicianShiftStatus,
 } from "@/lib/types";
 
-const KEY_AVAIL = "ridley_tech_availability_v1";
-const KEY_SHIFTS = "ridley_tech_shifts_v1";
+const KEY_AVAIL = "equipmentiq_tech_availability_v1";
+const KEY_SHIFTS = "equipmentiq_tech_shifts_v1";
 
 export type StorageMode = "remote" | "local" | "unknown";
 let storageMode: StorageMode = "unknown";

@@ -88,7 +88,7 @@ const ENTRY_SELECT_NESTED = `
   customers(id, name)
 `;
 const ENTRY_SELECT_FLAT = "*";
-const FALLBACK_KEY = "ridley_time_entries_fallback_v2";
+const FALLBACK_KEY = "equipmentiq_time_entries_fallback_v2";
 
 type BackendMode = "time_entries" | "fallback" | "unknown";
 let cachedMode: BackendMode = "unknown";

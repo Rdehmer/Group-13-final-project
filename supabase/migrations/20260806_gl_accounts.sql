@@ -45,7 +45,7 @@ create policy "auth all gl_posting_defaults"
   using (true) with check (true);
 
 comment on table public.gl_accounts is
-  'Chart of accounts for Ridley GL export and reporting mappings.';
+  'Chart of accounts for EquipmentIQ GL export and reporting mappings.';
 comment on table public.gl_posting_defaults is
   'Maps operational posting purposes (AR, cash, revenue, tax, COGS) to GL accounts.';
 

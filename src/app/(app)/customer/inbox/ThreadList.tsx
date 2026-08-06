@@ -23,7 +23,7 @@ export function ThreadList({
   onSelect,
   showCustomer = false,
   showUnread = false,
-  emptyHint = "No messages yet. Start a conversation with Ridley.",
+  emptyHint = "No messages yet. Start a conversation with EquipmentIQ.",
 }: Props) {
   if (threads.length === 0) {
     return (

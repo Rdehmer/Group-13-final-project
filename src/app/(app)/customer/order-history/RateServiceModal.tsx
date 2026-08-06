@@ -120,7 +120,7 @@ export function RateServiceModal({
         insertError.code === "23505"
           ? "You have already rated this visit."
           : insertError.message.includes("permission") || insertError.code === "42501"
-            ? "Unable to submit rating. Please contact Ridley Equipment Services."
+            ? "Unable to submit rating. Please contact EquipmentIQ."
             : insertError.message,
       );
       setBusy(false);
@@ -173,7 +173,7 @@ export function RateServiceModal({
             <div>
               <p className="text-lg font-semibold">Thank You for Your Feedback</p>
               <p className="mt-1 text-sm opacity-70">
-                Your rating helps Ridley Equipment Services improve every visit.
+                Your rating helps EquipmentIQ improve every visit.
               </p>
             </div>
             <button type="button" className="btn btn-primary btn-sm mt-2" onClick={handleClose}>

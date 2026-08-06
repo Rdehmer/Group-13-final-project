@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
 @plugin "daisyui" {
-  themes: ridley --default;
+  themes: equipmentiq --default;
 }
 
 /* EquipmentIQ brand system — navy + teal, modern operations UI */
 @plugin "daisyui/theme" {
-  name: "ridley";
+  name: "equipmentiq";
   default: true;
   prefersdark: false;
   color-scheme: light;
@@ -811,7 +811,7 @@ a.link:hover,
   color: #ffffff !important;
 }
 
-/* Marketing home — dark industrial Ridley hero */
+/* Marketing home — dark industrial EquipmentIQ hero */
 .home-hero {
   color: oklch(98% 0.01 185);
   background-color: oklch(28% 0.03 240);

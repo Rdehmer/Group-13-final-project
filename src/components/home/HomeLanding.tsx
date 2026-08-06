@@ -181,7 +181,7 @@ export function HomeLanding() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-center sm:flex-row sm:text-left">
           <div className="flex flex-col items-center gap-2 sm:items-start">
             <EquipmentIQLogo variant="footer" />
-            <p className="text-sm text-slate-500">Powered by Ridley Equipment Services</p>
+            <p className="text-sm text-slate-500">Powered by EquipmentIQ</p>
           </div>
           <div className="flex gap-4 text-sm">
             <button type="button" className="link link-hover text-teal-700" onClick={() => openAuth("login")}>

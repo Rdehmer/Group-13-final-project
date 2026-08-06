@@ -222,7 +222,7 @@ function CustomerDashboardPageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -261,7 +261,7 @@ function CustomerDashboardPageInner() {
           <HomePrimaryAction
             href="/customer/request-contract"
             title="Request a contract"
-            description="Choose coverage for your equipment and send a request to Ridley."
+            description="Choose coverage for your equipment and send a request to EquipmentIQ."
             icon={<FilePlus2 className="h-5 w-5" aria-hidden />}
             isGateActive={isGateActive}
             blockNavigation={blockNavigation}

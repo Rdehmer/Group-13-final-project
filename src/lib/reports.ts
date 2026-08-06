@@ -1,5 +1,5 @@
 /**
- * GAAP-oriented financial report engines for Ridley Equipment Service Manager.
+ * GAAP-oriented financial report engines for EquipmentIQ.
  *
  * Policies documented in ACCOUNTING_POLICIES (surfaced in the UI).
  * Numbers are derived from posted transactional data — not arbitrary plugs —

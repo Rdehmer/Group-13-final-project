@@ -39,7 +39,7 @@ export function buildFollowUpDraft(wo: FollowUpWorkOrderContext): string {
     : "";
 
   return [
-    "Hi Ridley team,",
+    "Hi EquipmentIQ team,",
     "",
     `I'm following up on work order ${wo.work_order_number} (${wo.work_order_type}${equipmentPart}).`,
     "",

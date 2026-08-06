@@ -1,5 +1,5 @@
 /**
- * Ridley chart of accounts — used by journal postings and trial balance.
+ * EquipmentIQ chart of accounts — used by journal postings and trial balance.
  * Codes are stable for CSV / QBO-style export.
  */
 

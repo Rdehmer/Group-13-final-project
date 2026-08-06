@@ -8,7 +8,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { format } from "date-fns";
 import type { TechnicianDayClock } from "@/lib/types";
 
-const KEY = "ridley_tech_day_clocks_v1";
+const KEY = "equipmentiq_tech_day_clocks_v1";
 
 type StorageMode = "remote" | "local" | "unknown";
 let storageMode: StorageMode = "unknown";

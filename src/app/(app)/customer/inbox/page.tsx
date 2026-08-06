@@ -2,7 +2,7 @@
 
 /**
  * This business faces customer communication gap risk when updates live only in phone or email.
- * Our app reduces the risk by giving customers a dedicated inbox tied to their Ridley account.
+ * Our app reduces the risk by giving customers a dedicated inbox tied to their EquipmentIQ account.
  */
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -329,7 +329,7 @@ function CustomerInboxPageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -338,7 +338,7 @@ function CustomerInboxPageInner() {
     <div>
       <PageHeader
         title="Inbox"
-        description="Messages with Ridley Equipment Services about your service, billing, and contracts."
+        description="Messages with EquipmentIQ about your service, billing, and contracts."
         actions={
           <button
             type="button"

@@ -185,7 +185,7 @@ export function monthEndPackCsv(input: {
     );
   };
 
-  push(["Ridley Equipment Services — Month-end pack", input.period]);
+  push(["EquipmentIQ — Month-end pack", input.period]);
   push([]);
   push(["Section", "Trial balance"]);
   push(["Account", "Name", "Debit", "Credit", "Balance"]);

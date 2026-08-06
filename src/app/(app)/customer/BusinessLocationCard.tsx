@@ -92,7 +92,7 @@ export function BusinessLocationCard({ address, onUpdated }: Props) {
           <p className="whitespace-pre-line text-sm leading-relaxed">
             {hasCustomerAddress(address)
               ? formatCustomerAddress(address)
-              : "No business address on file yet. Add one so Ridley knows where to send your technician."}
+              : "No business address on file yet. Add one so EquipmentIQ knows where to send your technician."}
           </p>
         </div>
       </div>

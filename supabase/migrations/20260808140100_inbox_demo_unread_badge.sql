@@ -8,7 +8,7 @@ SELECT
   'Quick follow-up — we are still coordinating your WO-77715073 visit window. We will post the confirmed time here shortly.'
 FROM public.customer_inbox_threads t
 JOIN public.profiles p ON p.customer_id = t.customer_id
-WHERE p.email = 'customer1@ridley-demo.test'
+WHERE p.email = 'customer1@equipmentiq-demo.test'
   AND t.subject = 'Update on WO-77715073'
   AND NOT EXISTS (
     SELECT 1
@@ -22,5 +22,5 @@ UPDATE public.customer_inbox_threads t
 SET customer_last_read_at = NULL
 FROM public.profiles p
 WHERE p.customer_id = t.customer_id
-  AND p.email = 'customer1@ridley-demo.test'
+  AND p.email = 'customer1@equipmentiq-demo.test'
   AND t.subject = 'Update on WO-77715073';

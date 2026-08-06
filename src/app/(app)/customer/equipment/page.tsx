@@ -93,7 +93,7 @@ export default function CustomerEquipmentPage() {
 
   if (!profile.customer_id) {
     return (
-      <EmptyState title="No customer account linked" description="Contact Ridley Equipment Services to link your portal account." />
+      <EmptyState title="No customer account linked" description="Contact EquipmentIQ to link your portal account." />
     );
   }
 

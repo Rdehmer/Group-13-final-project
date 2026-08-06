@@ -11,8 +11,8 @@ import {
   coerceServiceTierId,
 } from "@/lib/contract-cap-profiles";
 
-export const CONTRACT_PLANS_STORAGE_KEY = "ridley_contract_plans_v2";
-const CONTRACT_PLANS_STORAGE_KEY_V1 = "ridley_contract_plans_v1";
+export const CONTRACT_PLANS_STORAGE_KEY = "equipmentiq_contract_plans_v2";
+const CONTRACT_PLANS_STORAGE_KEY_V1 = "equipmentiq_contract_plans_v1";
 
 /** Dynamic plan level id (seed defaults: gold | silver | bronze). */
 export type ServiceLevelId = string;
