@@ -29,9 +29,12 @@ import {
   clockOutDay,
   formatDayClockSince,
   getActiveDayClock,
+  syncLocalDayClocksToRemote,
 } from "@/lib/day-clock";
 import {
+  canOpenFieldJob,
   customerName,
+  fieldJobLockReason,
   firstNameFromProfile,
   formatElapsedLabel,
   greetForTime,
@@ -51,6 +54,7 @@ import {
   todayIso,
   type FieldJob,
 } from "@/lib/technician-field";
+import { isActiveDispatchJob, normalizeDispatchStatus } from "@/lib/dispatch-flow";
 import {
   formatTimeOffLabel,
   timeOffCoversDay,
@@ -63,12 +67,14 @@ const POLL_MS = 45_000;
 
 function JobCard({
   job,
+  allJobs,
   cta,
   onOpen,
   onApprovedLeave,
   emphasized,
 }: {
   job: FieldJob;
+  allJobs: FieldJob[];
   cta: string;
   onOpen: () => void;
   onApprovedLeave?: boolean;
@@ -76,7 +82,9 @@ function JobCard({
 }) {
   const address = jobAddress(job);
   const phone = jobPhone(job);
-  const active = isActivelyWorking(job);
+  const active = isActiveDispatchJob(job) || isActivelyWorking(job);
+  const unlocked = canOpenFieldJob(job, allJobs);
+  const lockReason = fieldJobLockReason(job, allJobs);
   const hint = relativeScheduleHint(job);
   const step = nextChecklistStep(job);
   const [showCustomerPhone, setShowCustomerPhone] = useState(false);
@@ -84,17 +92,22 @@ function JobCard({
   return (
     <div
       className={`overflow-hidden rounded-2xl border bg-base-100 shadow-sm transition ${
-        onApprovedLeave
-          ? "border-warning/50 opacity-90"
-          : active || emphasized
-            ? "border-primary ring-1 ring-primary/30"
-            : "border-base-300 hover:border-primary/40"
+        !unlocked
+          ? "border-base-300 opacity-60"
+          : onApprovedLeave
+            ? "border-warning/50 opacity-90"
+            : active || emphasized
+              ? "border-primary ring-1 ring-primary/30"
+              : "border-base-300 hover:border-primary/40"
       }`}
     >
       <button
         type="button"
-        onClick={onOpen}
-        className="w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        onClick={() => {
+          if (unlocked) onOpen();
+        }}
+        disabled={!unlocked}
+        className="w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed"
       >
         <div className={`h-1.5 w-full ${priorityBarClass(job.priority)}`} aria-hidden />
         <div className="flex items-start gap-3 p-4 pb-2">
@@ -104,12 +117,17 @@ function JobCard({
                 {job.work_order_number}
               </span>
               <StatusBadge label={job.priority} tone={statusTone(job.priority)} />
-              {active ? <span className="badge badge-primary badge-sm">Active</span> : null}
-              {hint && !active ? (
+              {unlocked && isActiveDispatchJob(job) ? (
+                <span className="badge badge-primary badge-sm">Active</span>
+              ) : null}
+              {!unlocked ? <span className="badge badge-ghost badge-sm">Locked</span> : null}
+              {hint && unlocked ? (
                 <span className="badge badge-ghost badge-sm">{hint}</span>
               ) : null}
-              {job.dispatch_status && !active ? (
-                <span className="badge badge-outline badge-sm">{job.dispatch_status}</span>
+              {job.dispatch_status ? (
+                <span className="badge badge-outline badge-sm">
+                  {normalizeDispatchStatus(job.dispatch_status)}
+                </span>
               ) : null}
               {onApprovedLeave ? (
                 <span className="badge badge-warning badge-sm">Leave day</span>
@@ -121,9 +139,9 @@ function JobCard({
             <p className="line-clamp-2 text-sm leading-snug">
               {job.problem_description || job.requested_service || "No description"}
             </p>
-            <p className="pt-1 text-sm font-semibold text-primary">
-              {cta}
-              {step === "complete" ? " · timesheet running" : ""}
+            <p className={`pt-1 text-sm font-semibold ${unlocked ? "text-primary" : "opacity-60"}`}>
+              {unlocked ? cta : lockReason}
+              {unlocked && step === "complete" ? " · timesheet running" : ""}
             </p>
           </div>
           <ChevronRight className="mt-1 h-5 w-5 shrink-0 opacity-40" aria-hidden />
@@ -320,6 +338,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
 
   const loadDayClock = useCallback(async () => {
     try {
+      await syncLocalDayClocksToRemote(supabase);
       setDayClock(await getActiveDayClock(supabase, profile.id));
     } catch {
       setDayClock(null);
@@ -396,7 +415,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
 
   useEffect(() => {
     if (!dayClock?.clock_in_at || dayClock.clock_out_at) return;
-    const id = window.setInterval(() => setElapsedTick(new Date()), 30_000);
+    const id = window.setInterval(() => setElapsedTick(new Date()), 1_000);
     return () => window.clearInterval(id);
   }, [dayClock?.clock_in_at, dayClock?.clock_out_at]);
 
@@ -475,12 +494,18 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   // URL job id but not in list (reassigned) — clear quietly after load
   useEffect(() => {
     if (!loading && selectedId && !selected && jobs.length >= 0) {
-      const stillLoadingJobs = false;
-      if (!stillLoadingJobs && !jobs.some((j) => j.id === selectedId)) {
+      if (!jobs.some((j) => j.id === selectedId)) {
         setJobSelection(null);
       }
     }
   }, [loading, selectedId, selected, jobs, setJobSelection]);
+
+  // Locked job via deep link — bounce home
+  useEffect(() => {
+    if (!loading && selected && !canOpenFieldJob(selected, jobs)) {
+      setJobSelection(null);
+    }
+  }, [loading, selected, jobs, setJobSelection]);
 
   if (selected) {
     return (
@@ -489,10 +514,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         profile={profile}
         catalogParts={catalogParts}
         usedParts={usedParts}
-        laborRows={laborRows}
-        otherOpenJobs={jobs.filter((j) => j.id !== selected.id && isOpenJob(j))}
         onBack={() => setJobSelection(null)}
-        onSwitchJob={(id) => setJobSelection(id)}
         onRefresh={refreshAll}
       />
     );
@@ -705,10 +727,11 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta={stepCta(job)}
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}
-                  emphasized={isActivelyWorking(job)}
+                  emphasized={isActivelyWorking(job) || isActiveDispatchJob(job)}
                 />
               ))
             )}
@@ -720,6 +743,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta={stepCta(job)}
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}
@@ -734,6 +758,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta={stepCta(job)}
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}
@@ -748,6 +773,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta="Close out past job"
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}

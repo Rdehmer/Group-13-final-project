@@ -3,7 +3,7 @@
  * Pure validation + exception detection used by UI and write path.
  */
 
-import { differenceInMinutes, parseISO, startOfWeek, endOfWeek, format, addDays } from "date-fns";
+import { differenceInMinutes, differenceInSeconds, parseISO, startOfWeek, endOfWeek, format, addDays } from "date-fns";
 import type {
   Profile,
   TimeApprovalStatus,
@@ -35,6 +35,19 @@ export const BILLING_STATUS_LABELS: Record<TimeBillingControlStatus, string> = {
   nonbillable: "Nonbillable",
   disputed: "Disputed",
 };
+
+/** Completed job that still needs an invoice — show Create Invoice instead of Not Ready. */
+export function workOrderReadyToInvoice(wo: {
+  status?: string | null;
+  billing_status?: string | null;
+  dispatch_status?: string | null;
+} | null | undefined): boolean {
+  if (!wo) return false;
+  if (wo.billing_status === "Billed") return false;
+  if (wo.status === "Completed" || wo.status === "Closed") return true;
+  if (wo.dispatch_status === "Done") return true;
+  return false;
+}
 
 export type ExceptionSeverity = "critical" | "warning" | "review" | "resolved";
 
@@ -123,6 +136,12 @@ export function durationMinutes(clockIn: string | null, clockOut: string | null)
   return Number.isFinite(m) ? m : 0;
 }
 
+function durationSeconds(clockIn: string | null, clockOut: string | null): number {
+  if (!clockIn || !clockOut) return 0;
+  const s = differenceInSeconds(parseISO(clockOut), parseISO(clockIn));
+  return Number.isFinite(s) ? s : 0;
+}
+
 export type DurationValidation = {
   ok: boolean;
   error?: string;
@@ -135,9 +154,10 @@ export function validateDuration(
   clockOut: string,
   options?: { allowActive?: boolean },
 ): DurationValidation {
+  const secs = durationSeconds(clockIn, clockOut);
   const mins = durationMinutes(clockIn, clockOut);
-  if (mins < 0) return { ok: false, error: "Clock-out cannot be before clock-in." };
-  if (mins === 0 && !options?.allowActive) {
+  if (secs < 0) return { ok: false, error: "Clock-out cannot be before clock-in." };
+  if (secs === 0 && !options?.allowActive) {
     return { ok: false, error: "Zero-duration entries are not allowed." };
   }
   if (mins > 24 * 60) return { ok: false, error: "Entries longer than 24 hours are not allowed." };

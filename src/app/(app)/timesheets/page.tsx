@@ -28,6 +28,7 @@ import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
 import type {
   Profile,
+  TechnicianDayClock,
   TimeActivityType,
   TimeApprovalStatus,
   TimeEntry,
@@ -42,6 +43,7 @@ import {
   clockOut,
   createManualEntry,
   flagEntry,
+  formatDurationSeconds,
   formatHours,
   getActiveClock,
   getTimesheetBackend,
@@ -57,6 +59,7 @@ import {
   shiftWeek,
   softDeleteEntry,
   submitWeeklyTimesheet,
+  sumDispatchJobHours,
   sumEntries,
   supabaseErrorMessage,
   timesheetHref,
@@ -65,12 +68,22 @@ import {
   parseTimesheetDeepLink,
 } from "@/lib/timesheets";
 import {
+  dayClocksFromTimeEntries,
+  loadDayClocksForRange,
+  loadDayClocksForTechnicians,
+  mergeDayClocksWithDerived,
+  persistMissingDayClocks,
+  sumTodayAndWeekDayClockHours,
+  syncLocalDayClocksToRemote,
+} from "@/lib/day-clock";
+import {
   BILLING_STATUS_LABELS,
   controlsExplainer,
   detectExceptions,
   managerApprovalWarnings,
   severityTone,
   weeklyOtWarnings,
+  workOrderReadyToInvoice,
   type TimesheetException,
 } from "@/lib/time-entry-controls";
 
@@ -81,7 +94,7 @@ function approvalTone(status: TimeApprovalStatus): ReturnType<typeof statusTone>
 function shortIso(iso: string | null) {
   if (!iso) return "—";
   try {
-    return format(parseISO(iso), "MMM d, h:mm a");
+    return format(parseISO(iso), "MMM d, h:mm:ss a");
   } catch {
     return iso;
   }
@@ -113,6 +126,8 @@ export default function TimesheetsPage() {
   const [techs, setTechs] = useState<Profile[]>([]);
   const [linkedJobLabel, setLinkedJobLabel] = useState<string | null>(null);
   const scrollDoneForEntry = useRef<string | null>(null);
+  const [dayClocksWeek, setDayClocksWeek] = useState<TechnicianDayClock[]>([]);
+  const [dayClockTick, setDayClockTick] = useState(() => new Date());
 
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
@@ -269,6 +284,34 @@ export default function TimesheetsPage() {
         setActive(null);
       }
 
+      // My Day shift clocks → Today / Week hours (all techs when filter is All)
+      try {
+        await syncLocalDayClocksToRemote(supabase);
+
+        let weekRows: TechnicianDayClock[] = [];
+        if (!manager) {
+          weekRows = await loadDayClocksForRange(supabase, meP.id, week.start, week.end);
+        } else if (filterTech !== "all") {
+          weekRows = await loadDayClocksForRange(supabase, filterTech, week.start, week.end);
+        } else {
+          weekRows = await loadDayClocksForTechnicians(supabase, "all", week.start, week.end);
+        }
+
+        // Fill empty days from timesheet punches so cards aren't stuck at 0 after table create
+        const weekEntries = filtered.filter(
+          (e) => e.entry_date >= week.start && e.entry_date <= week.end,
+        );
+        const derived = dayClocksFromTimeEntries(weekEntries);
+        const merged = mergeDayClocksWithDerived(weekRows, derived);
+        setDayClocksWeek(merged);
+
+        if (manager) {
+          void persistMissingDayClocks(supabase, merged).catch(() => undefined);
+        }
+      } catch {
+        setDayClocksWeek([]);
+      }
+
       try {
         setWeeklySheet(await loadWeeklyTimesheet(supabase, meP.id, week.start));
       } catch {
@@ -322,11 +365,24 @@ export default function TimesheetsPage() {
   }, [highlightId, loading, entries]);
 
   const totals = useMemo(() => sumEntries(entries), [entries]);
-  const todayRows = useMemo(
-    () => entries.filter((e) => e.entry_date === todayIso()),
-    [entries],
+  const jobBillableHours = useMemo(() => sumDispatchJobHours(entries), [entries]);
+  const otherHours = useMemo(() => {
+    const job = jobBillableHours;
+    const rest = Math.max(0, totals.totalHours - job);
+    return Math.round(rest * 100) / 100;
+  }, [totals.totalHours, jobBillableHours]);
+
+  const { todayHours: todayShiftHours, weekHours: weekShiftHours } = useMemo(
+    () => sumTodayAndWeekDayClockHours(dayClocksWeek, todayIso(), dayClockTick),
+    [dayClocksWeek, dayClockTick],
   );
-  const todayTotals = useMemo(() => sumEntries(todayRows), [todayRows]);
+
+  useEffect(() => {
+    const open = dayClocksWeek.some((r) => !r.clock_out_at);
+    if (!open) return;
+    const id = window.setInterval(() => setDayClockTick(new Date()), 1_000);
+    return () => window.clearInterval(id);
+  }, [dayClocksWeek]);
 
   const weekByTech = useMemo(() => {
     const map = new Map<string, number>();
@@ -343,7 +399,10 @@ export default function TimesheetsPage() {
   }, [entries]);
 
   const exceptions = useMemo(() => detectExceptions(entries), [entries]);
-  const otMsgs = useMemo(() => weeklyOtWarnings(totals.totalHours), [totals.totalHours]);
+  const otMsgs = useMemo(
+    () => (isManager && filterTech === "all" ? [] : weeklyOtWarnings(weekShiftHours)),
+    [weekShiftHours, isManager, filterTech],
+  );
   const controlCards = useMemo(() => controlsExplainer(), []);
 
   async function run<T>(id: string, fn: () => Promise<T>, ok: string) {
@@ -547,20 +606,34 @@ export default function TimesheetsPage() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Today hours"
-          value={formatHours(todayTotals.totalHours)}
+          value={formatHours(todayShiftHours)}
+          hint={
+            isManager && filterTech === "all"
+              ? "All technicians · My Day clock out − clock in today"
+              : dayClocksWeek.filter((r) => r.work_date === todayIso()).length === 0
+                ? "My Day clock in / out (synced)"
+                : dayClocksWeek.some((r) => r.work_date === todayIso() && !r.clock_out_at)
+                  ? "My Day shift (live)"
+                  : "My Day clock out − clock in"
+          }
           scrollTarget="timesheet-entries"
           onClick={() => setFilterStatus("all")}
         />
         <StatCard
           label="Week hours"
-          value={formatHours(totals.totalHours)}
-          hint={`${formatHours(totals.regularHours)} reg · ${formatHours(totals.overtimeHours)} OT`}
-          danger={totals.totalHours > 40}
+          value={formatHours(weekShiftHours)}
+          hint={
+            isManager && filterTech === "all"
+              ? "Sum of all technicians’ My Day hours this week"
+              : "Sum of My Day clock in → out for each day this week"
+          }
+          danger={!(isManager && filterTech === "all") && weekShiftHours > 40}
           scrollTarget="timesheet-entries"
         />
         <StatCard
-          label="Billable / nonbillable"
-          value={`${formatHours(totals.billableHours)} / ${formatHours(totals.nonbillableHours)}`}
+          label="Billable / other"
+          value={`${formatHours(jobBillableHours)} / ${formatHours(otherHours)}`}
+          hint="Billable = En Route → Done job time"
           scrollTarget="timesheet-entries"
         />
         <StatCard
@@ -584,7 +657,7 @@ export default function TimesheetsPage() {
       {otMsgs.map((m) => (
         <div
           key={m}
-          className={`alert text-sm ${totals.totalHours > 40 ? "alert-warning" : "alert-info"}`}
+          className={`alert text-sm ${weekShiftHours > 40 ? "alert-warning" : "alert-info"}`}
         >
           <TriangleAlert className="h-4 w-4" />
           {m} Overtime hours are calculated from weekly totals — users cannot manually reclassify OT.
@@ -916,7 +989,7 @@ export default function TimesheetsPage() {
                 {isManager ? <th>Tech</th> : null}
                 <th>Job / customer</th>
                 <th>Activity</th>
-                <th className="text-right">Hrs</th>
+                <th className="text-right">Duration</th>
                 {showCost ? <th className="text-right">Cost</th> : null}
                 <th>Status</th>
                 <th>Billing</th>
@@ -932,13 +1005,14 @@ export default function TimesheetsPage() {
                 const cust =
                   entry.customers?.name || entry.work_orders?.customers?.name || "—";
                 const wo = entry.work_orders;
-                const hrs = formatHours(
+                const hrsLabel =
                   (entry.approval_status === "active" ||
                     entry.approval_status === "missing_clock_out") &&
-                    entry.clock_in_at
-                    ? (Date.now() - parseISO(entry.clock_in_at).getTime()) / 3_600_000
-                    : Number(entry.regular_hours) + Number(entry.overtime_hours),
-                );
+                  entry.clock_in_at
+                    ? formatDurationSeconds(entry.clock_in_at)
+                    : entry.clock_in_at && entry.clock_out_at
+                      ? formatDurationSeconds(entry.clock_in_at, entry.clock_out_at)
+                      : formatHours(Number(entry.regular_hours) + Number(entry.overtime_hours));
                 return (
                   <tr
                     key={entry.id}
@@ -950,7 +1024,7 @@ export default function TimesheetsPage() {
                       <div className="opacity-60">
                         {shortIso(entry.clock_in_at)}
                         {entry.clock_out_at
-                          ? ` → ${format(parseISO(entry.clock_out_at), "h:mm a")}`
+                          ? ` → ${format(parseISO(entry.clock_out_at), "h:mm:ss a")}`
                           : " → …"}
                       </div>
                       {entry.original_clock_in_at || entry.edit_reason ? (
@@ -1043,7 +1117,7 @@ export default function TimesheetsPage() {
                       <div className="text-[10px] opacity-50">{entry.billable_status}</div>
                     </td>
                     <td className="text-right tabular-nums">
-                      {hrs}
+                      <span className="font-mono text-xs">{hrsLabel}</span>
                       {Number(entry.overtime_hours) > 0 ? (
                         <div className="text-[10px] text-warning">
                           OT {formatHours(entry.overtime_hours)}
@@ -1063,9 +1137,21 @@ export default function TimesheetsPage() {
                       />
                     </td>
                     <td className="text-[10px]">
-                      {BILLING_STATUS_LABELS[entry.billing_status ?? "not_ready"] ??
+                      {entry.billing_status === "billed" ||
+                      entry.billing_status === "included_on_draft" ? (
+                        BILLING_STATUS_LABELS[entry.billing_status] ?? entry.billing_status
+                      ) : workOrderReadyToInvoice(wo) && entry.work_order_id ? (
+                        <Link
+                          href={`/billing?wo=${entry.work_order_id}`}
+                          className="link link-primary font-semibold text-xs"
+                        >
+                          Create Invoice
+                        </Link>
+                      ) : (
+                        BILLING_STATUS_LABELS[entry.billing_status ?? "not_ready"] ??
                         entry.billing_status ??
-                        "—"}
+                        "—"
+                      )}
                     </td>
                     <td className="text-[10px] leading-tight space-y-0.5">
                       {flags.missingClockOut || entry.approval_status === "missing_clock_out" ? (

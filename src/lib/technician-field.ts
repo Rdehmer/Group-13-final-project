@@ -1,5 +1,6 @@
 import { format, isSameDay, isBefore, parseISO, startOfDay } from "date-fns";
 import type { WorkOrder } from "@/lib/types";
+import { isActiveDispatchJob } from "@/lib/dispatch-flow";
 import {
   customerName,
   parseFlexibleTime,
@@ -31,9 +32,9 @@ export function todayIso(now = new Date()): string {
   return format(now, "yyyy-MM-dd");
 }
 
-/** Local `HH:mm` for ServiceTitan-style Add Entry start prefills. */
+/** Local `HH:mm:ss` for Add Entry start prefills. */
 export function nowTimeInput(now = new Date()): string {
-  return format(now, "HH:mm");
+  return format(now, "HH:mm:ss");
 }
 
 export const TIMESHEET_ACTIVITIES = ["Working", "Travel", "Meal Break", "Other"] as const;
@@ -49,11 +50,11 @@ export function splitRegularOt(totalHours: number): { regular_hours: number; ove
 
 export function formatElapsedLabel(startIso: string, now = new Date()): string {
   const ms = Math.max(0, now.getTime() - new Date(startIso).getTime());
-  const totalMin = Math.floor(ms / 60_000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h <= 0) return `${m}m`;
-  return `${h}h ${String(m).padStart(2, "0")}m`;
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 export function timesheetActivityLabel(notes: string | null | undefined): string {
@@ -104,6 +105,38 @@ export function sortFieldJobs(jobs: FieldJob[]): FieldJob[] {
   });
 }
 
+/** Job currently in the field pipeline (not Done/Completed). */
+export function findActiveFieldJob(jobs: FieldJob[]): FieldJob | null {
+  const active = sortFieldJobs(jobs.filter((j) => isOpenJob(j) && isActiveDispatchJob(j)));
+  return active[0] ?? null;
+}
+
+/**
+ * Which job cards can be opened on My Day.
+ * - If any job is active: only that job.
+ * - Else: only the highest-priority open job (Not Started / Scheduled).
+ */
+export function canOpenFieldJob(job: FieldJob, jobs: FieldJob[]): boolean {
+  if (!isOpenJob(job)) return false;
+  const active = findActiveFieldJob(jobs);
+  if (active) return active.id === job.id;
+  const unlocked = sortFieldJobs(jobs.filter(isOpenJob))[0];
+  return unlocked?.id === job.id;
+}
+
+export function fieldJobLockReason(job: FieldJob, jobs: FieldJob[]): string | null {
+  if (canOpenFieldJob(job, jobs)) return null;
+  const active = findActiveFieldJob(jobs);
+  if (active) {
+    return `Finish ${active.work_order_number} first`;
+  }
+  const top = sortFieldJobs(jobs.filter(isOpenJob))[0];
+  if (top && top.id !== job.id) {
+    return `Complete higher-priority ${top.work_order_number} first`;
+  }
+  return "Job locked";
+}
+
 export function partitionMyDay(jobs: FieldJob[], now = new Date()) {
   const open = jobs.filter(isOpenJob);
   const closeout = sortFieldJobs(open.filter((j) => isCloseoutNeeded(j, now)));
@@ -113,16 +146,12 @@ export function partitionMyDay(jobs: FieldJob[], now = new Date()) {
   );
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-  const nowNext: FieldJob[] = [];
+  let nowNext: FieldJob[] = [];
   const later: FieldJob[] = [];
 
   for (const job of today) {
     const timed = withDerivedTimes(job);
-    const inFlight =
-      job.status === "In Progress" ||
-      job.dispatch_status === "Arrived" ||
-      job.dispatch_status === "Working" ||
-      job.dispatch_status === "Paused";
+    const inFlight = isActiveDispatchJob(job);
     const startingSoon = timed.startMinutes <= nowMinutes + 45;
     if (inFlight || (nowNext.length === 0 && startingSoon) || nowNext.length === 0) {
       if (nowNext.length < 2 || inFlight) nowNext.push(job);
@@ -135,6 +164,14 @@ export function partitionMyDay(jobs: FieldJob[], now = new Date()) {
   // If nothing today, surface the next upcoming job in Now/Next so techs always have a next action.
   if (nowNext.length === 0 && upcoming.length > 0) {
     nowNext.push(upcoming[0]!);
+  }
+
+  // Active (or highest-priority) job always leads Now/Next.
+  const active = findActiveFieldJob(open);
+  if (active) {
+    nowNext = [active, ...nowNext.filter((j) => j.id !== active.id)];
+  } else {
+    nowNext = sortFieldJobs(nowNext);
   }
 
   return {
@@ -382,12 +419,16 @@ export function hoursFromTimeRange(start: string, end: string): number | null {
   return Math.round(((endMin - startMin) / 60) * 100) / 100;
 }
 
-/** Normalize time for display (strip seconds if present). */
+/** Normalize time for display as `HH:mm:ss`. */
 export function formatLaborClock(time: string | null | undefined): string {
   if (!time) return "—";
   const raw = String(time).trim();
-  if (raw.length >= 5) return raw.slice(0, 5);
-  return raw;
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return raw.length >= 8 ? raw.slice(0, 8) : raw;
+  const hh = match[1]!.padStart(2, "0");
+  const mm = match[2]!;
+  const ss = match[3] ?? "00";
+  return `${hh}:${mm}:${ss}`;
 }
 
 /** Ensure DB time value includes seconds. */

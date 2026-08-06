@@ -7,12 +7,22 @@ import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
-import type { Profile } from "@/lib/types";
-
-/** Main path — always starts at Not Started, first action is En Route. */
-const DISPATCH_FLOW = ["Not Started", "En Route", "In Progress", "Ready for Review", "Done"] as const;
-
-type DispatchStatus = (typeof DISPATCH_FLOW)[number] | "Paused";
+import { ProofOfCompletion } from "@/components/ProofOfCompletion";
+import {
+  applyDispatchStatusTransition,
+  clockOutIfActive,
+  markWorkOrderTimeReadyToBill,
+  type DispatchFlowStatus,
+} from "@/lib/timesheets";
+import {
+  canPauseDispatch,
+  dispatchStatusTone,
+  getNextDispatchStatus,
+  getPreviousDispatchStatus,
+  normalizeDispatchStatus,
+  type DispatchStatus,
+} from "@/lib/dispatch-flow";
+import type { Profile, WorkOrder } from "@/lib/types";
 
 type DispatchWorkOrder = {
   id: string;
@@ -25,67 +35,17 @@ type DispatchWorkOrder = {
   dispatch_status: string;
   dispatch_note: string | null;
   dispatch_updated_at: string | null;
+  completion_proof_requirement?: WorkOrder["completion_proof_requirement"] | null;
   customers?: { name: string }[] | { name: string } | null;
 };
 
 type DispatchTechnician = Pick<Profile, "id" | "full_name" | "email" | "is_active">;
-
-/** DB uses Working; UI shows In Progress. Arrived counts as En Route step done. */
-function normalizeStatus(status: string | null | undefined): string {
-  if (!status) return "Not Started";
-  if (status === "Working") return "In Progress";
-  if (status === "Arrived") return "En Route";
-  return status;
-}
-
-/** Values allowed by work_orders_dispatch_status_check. */
-function toDbDispatchStatus(status: DispatchStatus): string {
-  if (status === "In Progress") return "Working";
-  return status;
-}
-
-function flowIndex(status: string): number {
-  const normalized = normalizeStatus(status);
-  if (normalized === "Paused") return DISPATCH_FLOW.indexOf("In Progress");
-  return DISPATCH_FLOW.indexOf(normalized as (typeof DISPATCH_FLOW)[number]);
-}
-
-/** Next action on the main path (or resume from Paused). */
-function getNextStatus(status: string): DispatchStatus | null {
-  const normalized = normalizeStatus(status);
-  if (normalized === "Paused") return "In Progress";
-  const index = flowIndex(normalized);
-  if (index < 0) return "En Route";
-  if (index >= DISPATCH_FLOW.length - 1) return null;
-  return DISPATCH_FLOW[index + 1];
-}
-
-/** Previous step for mis-clicks (can undo back to Not Started). */
-function getPreviousStatus(status: string): DispatchStatus | null {
-  const normalized = normalizeStatus(status);
-  if (normalized === "Paused") return "In Progress";
-  const index = flowIndex(normalized);
-  if (index <= 0) return null;
-  return DISPATCH_FLOW[index - 1];
-}
-
-function canPause(status: string): boolean {
-  return normalizeStatus(status) === "In Progress";
-}
 
 function customerName(workOrder: DispatchWorkOrder): string {
   const c = workOrder.customers;
   if (!c) return "Unknown customer";
   if (Array.isArray(c)) return c[0]?.name ?? "Unknown customer";
   return c.name ?? "Unknown customer";
-}
-
-function dispatchTone(status: string): "success" | "warning" | "error" | "info" | "neutral" {
-  const normalized = normalizeStatus(status);
-  if (normalized === "Done" || normalized === "In Progress") return "success";
-  if (normalized === "Paused") return "warning";
-  if (normalized === "En Route" || normalized === "Ready for Review") return "info";
-  return "neutral";
 }
 
 function WorkOrderCard({
@@ -105,10 +65,10 @@ function WorkOrderCard({
   onStatusChange: (status: DispatchStatus) => void;
   onSaveNote: () => void;
 }) {
-  const current = normalizeStatus(workOrder.dispatch_status);
-  const nextStatus = getNextStatus(workOrder.dispatch_status);
-  const previousStatus = getPreviousStatus(workOrder.dispatch_status);
-  const showPause = canPause(workOrder.dispatch_status);
+  const current = normalizeDispatchStatus(workOrder.dispatch_status);
+  const nextStatus = getNextDispatchStatus(workOrder.dispatch_status);
+  const previousStatus = getPreviousDispatchStatus(workOrder.dispatch_status);
+  const showPause = canPauseDispatch(workOrder.dispatch_status);
 
   return (
     <div className="rounded-box border border-base-300 bg-base-100 p-4">
@@ -123,7 +83,7 @@ function WorkOrderCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge label={workOrder.priority} tone={workOrder.priority === "Critical" ? "error" : "neutral"} />
-          <StatusBadge label={current} tone={dispatchTone(current)} />
+          <StatusBadge label={current} tone={dispatchStatusTone(current)} />
         </div>
       </div>
 
@@ -143,7 +103,7 @@ function WorkOrderCard({
                   disabled={saving}
                   onClick={() => onStatusChange(nextStatus)}
                 >
-                  {current === "Paused" ? `Resume — ${nextStatus}` : nextStatus}
+                  {current === "Paused" ? `Resume — ${nextStatus}` : nextStatus === "Done" ? "Done — customer sign-off" : nextStatus}
                 </button>
               ) : (
                 <p className="rounded-box bg-success/10 px-3 py-2 text-sm font-medium text-success">
@@ -223,6 +183,7 @@ export default function DispatchPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [proofJob, setProofJob] = useState<DispatchWorkOrder | null>(null);
 
   const isDispatcher = profile?.role === "administrator" || profile?.role === "service_manager";
 
@@ -261,7 +222,9 @@ export default function DispatchPage() {
 
     let workOrdersQuery = supabase
       .from("work_orders")
-      .select("id, work_order_number, assigned_technician_id, scheduled_date, scheduled_start_time, priority, problem_description, dispatch_status, dispatch_note, dispatch_updated_at, customers(name)")
+      .select(
+        "id, work_order_number, assigned_technician_id, scheduled_date, scheduled_start_time, priority, problem_description, dispatch_status, dispatch_note, dispatch_updated_at, completion_proof_requirement, customers(name)",
+      )
       .or(`scheduled_date.eq.${today},dispatch_updated_at.gte.${startOfToday.toISOString()}`)
       .not("assigned_technician_id", "is", null)
       .not("status", "in", '("Closed","Canceled")')
@@ -295,38 +258,98 @@ export default function DispatchPage() {
     void loadBoard();
   }, []);
 
+  async function finishDoneWithProof(workOrder: DispatchWorkOrder) {
+    if (!profile) return;
+    setSavingId(workOrder.id);
+    setError(null);
+    setMessage(null);
+    try {
+      // Close any open travel/work punch before customer sign-off.
+      try {
+        await clockOutIfActive(supabase, {
+          profile,
+          notes: "Dispatch → Done",
+          skipWorkOrderDispatchUpdate: true,
+        });
+      } catch {
+        /* best-effort */
+      }
+      setProofJob(workOrder);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function onProofCompleted() {
+    if (!profile || !proofJob) return;
+    const job = proofJob;
+    setProofJob(null);
+    setSavingId(job.id);
+    setError(null);
+    try {
+      // RPC sets Completed + Done; ensure billing queue can pick it up.
+      const { data: woBilling } = await supabase
+        .from("work_orders")
+        .select("billing_status")
+        .eq("id", job.id)
+        .maybeSingle();
+      if ((woBilling as { billing_status?: string } | null)?.billing_status !== "Billed") {
+        await supabase
+          .from("work_orders")
+          .update({ billing_status: "Unbilled", updated_at: new Date().toISOString() })
+          .eq("id", job.id);
+      }
+      try {
+        await markWorkOrderTimeReadyToBill(supabase, job.id, profile.id);
+      } catch {
+        /* best-effort */
+      }
+      await logActivity(supabase, {
+        userId: profile.id,
+        action: "dispatch_status_change",
+        recordType: "work_order",
+        recordId: job.id,
+        previousValue: job.dispatch_status,
+        newValue: "Done",
+      });
+      setMessage(`${job.work_order_number} marked complete — available for billing.`);
+      await loadBoard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      void loadBoard();
+    }
+    setSavingId(null);
+  }
+
   async function updateDispatchStatus(workOrder: DispatchWorkOrder, status: DispatchStatus) {
     if (!profile || isDispatcher) return;
+
+    // Done requires customer photo/signature before status can become Completed.
+    if (status === "Done") {
+      await finishDoneWithProof(workOrder);
+      return;
+    }
+
     setSavingId(workOrder.id);
     setError(null);
     setMessage(null);
 
-    const dbStatus = toDbDispatchStatus(status);
-    const updates: Record<string, string> = {
-      dispatch_status: dbStatus,
-      dispatch_updated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    try {
+      const result = await applyDispatchStatusTransition(supabase, {
+        profile,
+        workOrderId: workOrder.id,
+        workOrderNumber: workOrder.work_order_number,
+        nextStatus: status as DispatchFlowStatus,
+      });
 
-    // Only sync WO status values known to pass work_orders_status_check.
-    if (status === "In Progress" || status === "Paused") {
-      updates.status = "In Progress";
-    } else if (status === "Ready for Review") {
-      updates.status = "Ready for Review";
-    }
-
-    const { error: updateError } = await supabase
-      .from("work_orders")
-      .update(updates)
-      .eq("id", workOrder.id);
-
-    if (updateError) {
-      setError(updateError.message);
-    } else {
       setWorkOrders((current) =>
         current.map((order) =>
           order.id === workOrder.id
-            ? { ...order, dispatch_status: dbStatus, dispatch_updated_at: updates.dispatch_updated_at }
+            ? {
+                ...order,
+                dispatch_status: result.dispatchStatus,
+                dispatch_updated_at: new Date().toISOString(),
+              }
             : order,
         ),
       );
@@ -336,9 +359,13 @@ export default function DispatchPage() {
         recordType: "work_order",
         recordId: workOrder.id,
         previousValue: workOrder.dispatch_status,
-        newValue: dbStatus,
+        newValue: result.dispatchStatus,
       });
-      setMessage(`${workOrder.work_order_number} → ${normalizeStatus(dbStatus)}`);
+      setMessage(result.message ?? `${workOrder.work_order_number} → ${normalizeDispatchStatus(result.dispatchStatus)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      // Refresh so UI matches DB if WO updated before the failure
+      void loadBoard();
     }
     setSavingId(null);
   }
@@ -386,6 +413,16 @@ export default function DispatchPage() {
 
       {error ? <div role="alert" className="alert alert-error mb-4"><span>{error}</span></div> : null}
       {message ? <div role="status" className="alert alert-success mb-4"><span>{message}</span></div> : null}
+
+      {proofJob && profile ? (
+        <ProofOfCompletion
+          jobId={proofJob.id}
+          technicianId={profile.id}
+          requirement={proofJob.completion_proof_requirement ?? "photo_or_signature"}
+          onCancel={() => setProofJob(null)}
+          onCompleted={() => void onProofCompleted()}
+        />
+      ) : null}
 
       {loading ? (
         <div className="p-8 text-center opacity-60">Loading dispatch board…</div>

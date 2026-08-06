@@ -6,7 +6,7 @@
 
 import {
   addDays,
-  differenceInMinutes,
+  differenceInSeconds,
   endOfWeek,
   format,
   parseISO,
@@ -81,7 +81,7 @@ const ENTRY_SELECT_NESTED = `
   *,
   technician:profiles!time_entries_technician_id_fkey(id, full_name, email),
   work_orders(
-    id, work_order_number, work_order_type, problem_description,
+    id, work_order_number, work_order_type, problem_description, status, billing_status, dispatch_status,
     customers(id, name, service_address, city, state),
     equipment(id, name, serial_number)
   ),
@@ -181,8 +181,37 @@ function num(n: number | null | undefined): number {
   return Number.isFinite(v) ? Math.round(v * 100) / 100 : 0;
 }
 
+/** Hours precision for field punches (2 decimal places — matches DB numeric(10,2)). */
+function numHours(n: number | null | undefined): number {
+  const v = Number(n ?? 0);
+  return Number.isFinite(v) ? Math.round(v * 100) / 100 : 0;
+}
+
 export function formatHours(n: number): string {
   return num(n).toFixed(2);
+}
+
+/** Live / closed span as `Hh MMm SSs` (second precision for field testing). */
+export function formatDurationSeconds(
+  clockIn: string,
+  clockOut?: string | null,
+  now = new Date(),
+): string {
+  const end = clockOut ? parseISO(clockOut) : now;
+  const secs = Math.max(0, differenceInSeconds(end, parseISO(clockIn)));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return `${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
+}
+
+/** Fractional hours from an ISO range — second precision for display math. */
+export function hoursFromSecondsRange(clockIn: string, clockOut: string): number {
+  const secs = differenceInSeconds(parseISO(clockOut), parseISO(clockIn));
+  if (!Number.isFinite(secs) || secs <= 0) return 0;
+  const h = secs / 3600;
+  // Match time_entries.regular_hours numeric(10,2); keep short punches ≥ 0.01h
+  return Math.max(Math.round(h * 100) / 100, 0.01);
 }
 
 export function money(n: number): string {
@@ -225,18 +254,17 @@ export function splitWeeklyOt(
   const room = Math.max(0, weeklyThreshold - priorWeekRegular);
   const reg = Math.min(hours, room);
   const ot = Math.max(0, hours - reg);
-  return { regular_hours: num(reg), overtime_hours: num(ot) };
+  return { regular_hours: numHours(reg), overtime_hours: numHours(ot) };
 }
 
 export function hoursFromRange(clockIn: string, clockOut: string): number {
-  const mins = differenceInMinutes(parseISO(clockOut), parseISO(clockIn));
-  if (!Number.isFinite(mins) || mins <= 0) return 0;
-  return num(mins / 60);
+  return hoursFromSecondsRange(clockIn, clockOut);
 }
 
 export function minutesFromRange(clockIn: string, clockOut: string): number {
-  const mins = differenceInMinutes(parseISO(clockOut), parseISO(clockIn));
-  return Math.max(0, mins);
+  const secs = differenceInSeconds(parseISO(clockOut), parseISO(clockIn));
+  if (!Number.isFinite(secs) || secs <= 0) return 0;
+  return Math.max(1, Math.ceil(secs / 60));
 }
 
 export function computeMoney(
@@ -735,7 +763,7 @@ async function loadFallbackEntries(
   const store = readStore();
   let laborQ = supabase
     .from("technician_labor")
-    .select("*, work_orders(id, work_order_number, work_order_type, problem_description, customers(id, name, service_address, city, state), equipment(id, name, serial_number))")
+    .select("*, work_orders(id, work_order_number, work_order_type, problem_description, status, billing_status, dispatch_status, customers(id, name, service_address, city, state), equipment(id, name, serial_number))")
     .gte("work_date", opts.from)
     .lte("work_date", opts.to)
     .order("work_date", { ascending: false });
@@ -1363,6 +1391,68 @@ export function sumEntries(entries: TimeEntry[]): EntryTotals {
   return t;
 }
 
+/** Job field time from En Route → Done (travel + regular/OT on a work order). */
+export function isDispatchJobSegment(entry: TimeEntry): boolean {
+  if (!entry.work_order_id) return false;
+  return (
+    entry.activity_type === "travel" ||
+    entry.activity_type === "regular_work" ||
+    entry.activity_type === "overtime"
+  );
+}
+
+/** Hours on WO punches (En Route travel + In Progress work), including live open clocks. */
+export function sumDispatchJobHours(entries: TimeEntry[], now = new Date()): number {
+  let total = 0;
+  for (const e of entries) {
+    if (isVoided(e) || e.approval_status === "rejected") continue;
+    if (!isDispatchJobSegment(e)) continue;
+    if (e.approval_status === "active" || e.approval_status === "missing_clock_out") {
+      if (e.clock_in_at) total += hoursFromRange(e.clock_in_at, now.toISOString());
+      continue;
+    }
+    total += Number(e.regular_hours) + Number(e.overtime_hours);
+  }
+  return num(total);
+}
+
+/**
+ * Face-clock hours for one timesheet row: clock_out − clock_in
+ * (live elapsed while still clocked in).
+ */
+export function hoursFromEntryClock(entry: TimeEntry, now = new Date()): number {
+  if (isVoided(entry) || entry.approval_status === "rejected") return 0;
+  if (!entry.clock_in_at) return 0;
+  if (entry.clock_out_at) {
+    return hoursFromRange(entry.clock_in_at, entry.clock_out_at);
+  }
+  if (entry.approval_status === "active" || entry.approval_status === "missing_clock_out") {
+    return hoursFromRange(entry.clock_in_at, now.toISOString());
+  }
+  return 0;
+}
+
+/** Sum clock-in → clock-out spans on the timesheet face. */
+export function sumEntryClockHours(entries: TimeEntry[], now = new Date()): number {
+  return num(entries.reduce((sum, e) => sum + hoursFromEntryClock(e, now), 0));
+}
+
+/**
+ * Today = punches on `dayIso`; Week = sum of those same clock spans for every day in the set
+ * (typically the selected week’s entries).
+ */
+export function sumTodayAndWeekClockHours(
+  entries: TimeEntry[],
+  dayIso: string,
+  now = new Date(),
+): { todayHours: number; weekHours: number } {
+  const todayEntries = entries.filter((e) => e.entry_date === dayIso);
+  return {
+    todayHours: sumEntryClockHours(todayEntries, now),
+    weekHours: sumEntryClockHours(entries, now),
+  };
+}
+
 function normalizeJoin<T>(value: T | T[] | null | undefined): T | null {
   if (value == null) return null;
   return Array.isArray(value) ? (value[0] ?? null) : value;
@@ -1387,6 +1477,8 @@ export async function clockIn(
     workOrderId: string;
     activityType?: TimeActivityType;
     notes?: string;
+    /** When true, do not stamp WO started_at / Working (dispatch owns WO fields). */
+    skipWorkOrderStamp?: boolean;
   },
 ): Promise<TimeEntry> {
   const existing = await getActiveClock(supabase, input.profile.id);
@@ -1408,7 +1500,7 @@ export async function clockIn(
   const { data: wo, error: woErr } = await supabase
     .from("work_orders")
     .select(
-      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, service_type, customers(id, name, service_address, city, state)",
+      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, customers(id, name, service_address, city, state)",
     )
     .eq("id", input.workOrderId)
     .single();
@@ -1439,18 +1531,20 @@ export async function clockIn(
     },
   );
 
-  // Always stamp WO (required for dispatch / fallback active clock)
-  await supabase
-    .from("work_orders")
-    .update({
-      started_at: now,
-      dispatch_status: "Working",
-      status: "In Progress",
-      dispatch_updated_at: now,
-      updated_at: now,
-      assigned_technician_id: input.profile.id,
-    })
-    .eq("id", input.workOrderId);
+  // Always stamp WO (required for dispatch / fallback active clock) unless dispatch owns the transition
+  if (!input.skipWorkOrderStamp) {
+    await supabase
+      .from("work_orders")
+      .update({
+        started_at: now,
+        dispatch_status: "Working",
+        status: "In Progress",
+        dispatch_updated_at: now,
+        updated_at: now,
+        assigned_technician_id: input.profile.id,
+      })
+      .eq("id", input.workOrderId);
+  }
 
   const mode = await resolveMode(supabase);
   if (mode === "time_entries") {
@@ -1606,7 +1700,13 @@ async function insertLaborMirror(
 
 export async function clockOut(
   supabase: SupabaseClient,
-  input: { profile: Profile; entryId?: string; notes?: string },
+  input: {
+    profile: Profile;
+    entryId?: string;
+    notes?: string;
+    /** When true, do not set WO dispatch_status to Completed (dispatch owns WO fields). */
+    skipWorkOrderDispatchUpdate?: boolean;
+  },
 ): Promise<TimeEntry> {
   let entry =
     input.entryId
@@ -1711,8 +1811,8 @@ export async function clockOut(
   const laborId = await insertLaborMirror(supabase, completed);
   if (laborId) completed.technician_labor_id = laborId;
 
-  // Clear WO open clock
-  if (entry.work_order_id) {
+  // Clear WO open clock (unless dispatch transition owns WO fields)
+  if (entry.work_order_id && !input.skipWorkOrderDispatchUpdate) {
     await supabase
       .from("work_orders")
       .update({
@@ -1735,6 +1835,175 @@ export async function clockOut(
   }
   writeStore(store);
   return completed;
+}
+
+/** Clock out the tech's active entry if any; no-op when already clocked out. */
+export async function clockOutIfActive(
+  supabase: SupabaseClient,
+  input: {
+    profile: Profile;
+    notes?: string;
+    skipWorkOrderDispatchUpdate?: boolean;
+  },
+): Promise<TimeEntry | null> {
+  const active = await getActiveClock(supabase, input.profile.id);
+  if (!active || active.approval_status !== "active") return null;
+  return clockOut(supabase, {
+    profile: input.profile,
+    entryId: active.id,
+    notes: input.notes,
+    skipWorkOrderDispatchUpdate: input.skipWorkOrderDispatchUpdate ?? true,
+  });
+}
+
+export type DispatchFlowStatus =
+  | "Not Started"
+  | "En Route"
+  | "In Progress"
+  | "Ready for Review"
+  | "Done"
+  | "Paused";
+
+function activityForDispatchStatus(status: DispatchFlowStatus): TimeActivityType | null {
+  if (status === "En Route") return "travel";
+  if (status === "In Progress") return "regular_work";
+  return null;
+}
+
+function dbDispatchStatus(status: DispatchFlowStatus): string {
+  if (status === "In Progress") return "Working";
+  return status;
+}
+
+/**
+ * Advance/back a dispatch step: close any open timesheet segment, update WO,
+ * and open a new segment for En Route (travel) or In Progress (regular_work).
+ * Done → Completed + Unbilled so billing can invoice.
+ */
+export async function applyDispatchStatusTransition(
+  supabase: SupabaseClient,
+  input: {
+    profile: Profile;
+    workOrderId: string;
+    workOrderNumber?: string;
+    nextStatus: DispatchFlowStatus;
+  },
+): Promise<{ dispatchStatus: string; message: string | null }> {
+  // Close any open punch first (best-effort — never block status advance).
+  try {
+    await clockOutIfActive(supabase, {
+      profile: input.profile,
+      notes: `Dispatch → ${input.nextStatus}`,
+      skipWorkOrderDispatchUpdate: true,
+    });
+  } catch (err) {
+    // Force-close stuck DB active clocks so En Route can proceed.
+    const active = await getActiveClock(supabase, input.profile.id);
+    if (active && !active.id.startsWith("active-wo-") && !active.id.startsWith("labor-")) {
+      const nowIso = new Date().toISOString();
+      await supabase
+        .from("time_entries")
+        .update({
+          clock_out_at: nowIso,
+          approval_status: "complete",
+          notes: active.notes ?? `Force-closed for dispatch → ${input.nextStatus}`,
+          updated_at: nowIso,
+          updated_by: input.profile.id,
+        })
+        .eq("id", active.id)
+        .eq("approval_status", "active");
+    } else {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  const now = new Date().toISOString();
+  const dbStatus = dbDispatchStatus(input.nextStatus);
+  const updates: Record<string, unknown> = {
+    dispatch_status: dbStatus,
+    dispatch_updated_at: now,
+    updated_at: now,
+  };
+
+  if (input.nextStatus === "In Progress" || input.nextStatus === "Paused") {
+    updates.status = "In Progress";
+    if (input.nextStatus === "In Progress") {
+      updates.started_at = now;
+      updates.paused_at = null;
+      updates.dispatch_status = "Working";
+    } else {
+      updates.paused_at = now;
+    }
+  } else if (input.nextStatus === "Ready for Review") {
+    updates.status = "Ready for Review";
+  } else if (input.nextStatus === "Done") {
+    updates.status = "Completed";
+    const { data: woBilling } = await supabase
+      .from("work_orders")
+      .select("billing_status")
+      .eq("id", input.workOrderId)
+      .maybeSingle();
+    const billed = (woBilling as { billing_status?: string } | null)?.billing_status === "Billed";
+    if (!billed) updates.billing_status = "Unbilled";
+  }
+
+  const { error: updateError } = await supabase
+    .from("work_orders")
+    .update(updates)
+    .eq("id", input.workOrderId);
+  if (updateError) throw new Error(updateError.message);
+
+  const activity = activityForDispatchStatus(input.nextStatus);
+  let timeWarning: string | null = null;
+  if (activity) {
+    try {
+      await clockIn(supabase, {
+        profile: input.profile,
+        workOrderId: input.workOrderId,
+        activityType: activity,
+        notes: `Dispatch: ${input.nextStatus}`,
+        skipWorkOrderStamp: true,
+      });
+    } catch (err) {
+      timeWarning = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  const label = input.workOrderNumber ?? "Job";
+  const baseMessage =
+    input.nextStatus === "Done"
+      ? `${label} marked complete — available for billing.`
+      : `${label} → ${input.nextStatus === "In Progress" ? "In Progress" : dbStatus}`;
+
+  return {
+    dispatchStatus: dbStatus,
+    message: timeWarning ? `${baseMessage} (time punch issue: ${timeWarning})` : baseMessage,
+  };
+}
+
+/**
+ * After a job is Completed/Unbilled, promote its billable time punches out of Not Ready
+ * so the timesheet Billing column can show Create Invoice.
+ */
+export async function markWorkOrderTimeReadyToBill(
+  supabase: SupabaseClient,
+  workOrderId: string,
+  actorId?: string,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const mode = await resolveMode(supabase);
+  if (mode !== "time_entries") return;
+  await supabase
+    .from("time_entries")
+    .update({
+      billing_status: "ready_to_bill",
+      updated_at: now,
+      ...(actorId ? { updated_by: actorId } : {}),
+    })
+    .eq("work_order_id", workOrderId)
+    .eq("billing_status", "not_ready")
+    .eq("billable_status", "billable")
+    .is("deleted_at", null);
 }
 
 export async function createManualEntry(

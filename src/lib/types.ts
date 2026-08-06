@@ -809,6 +809,8 @@ export type TimeEntry = {
     work_order_type?: string | null;
     problem_description?: string | null;
     status?: string | null;
+    billing_status?: string | null;
+    dispatch_status?: string | null;
     customers?: {
       id: string;
       name: string;
