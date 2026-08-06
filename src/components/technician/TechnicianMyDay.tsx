@@ -13,6 +13,7 @@ import {
   CalendarDays,
   CalendarOff,
   ChevronRight,
+  Clock,
   MapPin,
   Package,
   Phone,
@@ -24,8 +25,15 @@ import { StatusBadge, statusTone } from "@/components/ui";
 import { JobSheet } from "@/components/technician/JobSheet";
 import { createClient } from "@/lib/supabase/client";
 import {
+  clockInDay,
+  clockOutDay,
+  formatDayClockSince,
+  getActiveDayClock,
+} from "@/lib/day-clock";
+import {
   customerName,
   firstNameFromProfile,
+  formatElapsedLabel,
   greetForTime,
   humanizeFieldError,
   isActivelyWorking,
@@ -49,7 +57,7 @@ import {
   type TimeOffRange,
 } from "@/lib/time-off";
 import { timesheetHref } from "@/lib/timesheets";
-import type { Part, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
+import type { Part, Profile, TechnicianDayClock, TechnicianLabor, WorkOrderPart } from "@/lib/types";
 
 const POLL_MS = 45_000;
 
@@ -239,6 +247,10 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [dayClock, setDayClock] = useState<TechnicianDayClock | null>(null);
+  const [clockBusy, setClockBusy] = useState(false);
+  const [clockMessage, setClockMessage] = useState<string | null>(null);
+  const [elapsedTick, setElapsedTick] = useState(() => new Date());
   const [, startTransition] = useTransition();
   const mountedRef = useRef(true);
 
@@ -306,6 +318,14 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
     setTimeOff((data as TimeOffRange[]) ?? []);
   }, [profile.id, supabase]);
 
+  const loadDayClock = useCallback(async () => {
+    try {
+      setDayClock(await getActiveDayClock(supabase, profile.id));
+    } catch {
+      setDayClock(null);
+    }
+  }, [profile.id, supabase]);
+
   const loadCatalog = useCallback(async () => {
     const { data, error: loadError } = await supabase.from("parts").select("*").order("name");
     if (loadError) {
@@ -351,19 +371,19 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadJobs(), loadCatalog(), loadTimeOff()]);
+    await Promise.all([loadJobs(), loadCatalog(), loadTimeOff(), loadDayClock()]);
     if (selectedId) {
       await Promise.all([loadUsedParts(selectedId), loadLabor(selectedId)]);
     }
     setLastSynced(new Date());
     setRefreshing(false);
-  }, [loadJobs, loadCatalog, loadTimeOff, loadUsedParts, loadLabor, selectedId]);
+  }, [loadJobs, loadCatalog, loadTimeOff, loadDayClock, loadUsedParts, loadLabor, selectedId]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      await Promise.all([loadJobs(), loadCatalog(), loadTimeOff()]);
+      await Promise.all([loadJobs(), loadCatalog(), loadTimeOff(), loadDayClock()]);
       if (!cancelled) {
         setLastSynced(new Date());
         setLoading(false);
@@ -372,7 +392,35 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
     return () => {
       cancelled = true;
     };
-  }, [loadJobs, loadCatalog, loadTimeOff]);
+  }, [loadJobs, loadCatalog, loadTimeOff, loadDayClock]);
+
+  useEffect(() => {
+    if (!dayClock?.clock_in_at || dayClock.clock_out_at) return;
+    const id = window.setInterval(() => setElapsedTick(new Date()), 30_000);
+    return () => window.clearInterval(id);
+  }, [dayClock?.clock_in_at, dayClock?.clock_out_at]);
+
+  async function runDayClock(action: "in" | "out") {
+    setClockBusy(true);
+    setClockMessage(null);
+    setError(null);
+    try {
+      if (action === "in") {
+        const row = await clockInDay(supabase, profile.id);
+        setDayClock(row);
+        setElapsedTick(new Date());
+        setClockMessage("Clocked in for the day. Job labor still clocks on each work order.");
+      } else {
+        await clockOutDay(supabase, profile.id);
+        setDayClock(null);
+        setClockMessage("Clocked out for the day.");
+      }
+    } catch (e) {
+      setError(humanizeFieldError(e instanceof Error ? e.message : "Clock action failed."));
+    } finally {
+      setClockBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (selectedId) return;
@@ -479,6 +527,68 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
           <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           Refresh
         </button>
+      </div>
+
+      <div
+        className={`rounded-2xl border px-4 py-3 ${
+          dayClock
+            ? "border-success/50 bg-success/10"
+            : "border-base-300 bg-base-100 shadow-sm"
+        }`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            {dayClock ? (
+              <>
+                <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-success">
+                  <Clock className="h-3.5 w-3.5" />
+                  Clocked in for the day
+                </p>
+                <p className="mt-0.5 text-sm opacity-80">
+                  Since {formatDayClockSince(dayClock.clock_in_at)}
+                  {" · "}
+                  <span className="font-mono font-semibold tabular-nums text-base-content">
+                    {formatElapsedLabel(dayClock.clock_in_at, elapsedTick)}
+                  </span>
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="flex items-center gap-1.5 text-sm font-semibold">
+                  <Clock className="h-4 w-4 opacity-70" />
+                  Start your day
+                </p>
+                <p className="mt-0.5 text-sm opacity-70">
+                  Clock in when you get to work. Job labor still punches on each work order.
+                </p>
+              </>
+            )}
+            {clockMessage ? <p className="mt-1 text-xs text-success">{clockMessage}</p> : null}
+          </div>
+          {dayClock ? (
+            <button
+              type="button"
+              className="btn btn-warning btn-sm min-h-11"
+              disabled={clockBusy}
+              onClick={() => void runDayClock("out")}
+            >
+              {clockBusy ? <span className="loading loading-spinner loading-xs" /> : null}
+              Clock out
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-success btn-sm min-h-11"
+              disabled={clockBusy}
+              onClick={() => void runDayClock("in")}
+            >
+              {clockBusy ? <span className="loading loading-spinner loading-xs" /> : null}
+              Clock in
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">

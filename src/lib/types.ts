@@ -888,6 +888,18 @@ export type TechnicianShift = {
   updated_at: string;
 };
 
+/** Day attendance punch (arrive / leave work) — separate from job labor. */
+export type TechnicianDayClock = {
+  id: string;
+  technician_id: string;
+  work_date: string;
+  clock_in_at: string;
+  clock_out_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export const ROLE_LABELS: Record<UserRole, string> = {
   administrator: "Administrator",
   service_manager: "Service Manager",
