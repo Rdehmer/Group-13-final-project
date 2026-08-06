@@ -24,15 +24,17 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
-import { PageHeader, FormRow } from "@/components/PageHeader";
+import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/ui";
 import {
   WEEKDAY_FULL,
   availabilityForDay,
+  availabilityWindowsForDay,
   cancelShift,
   cellCaption,
   cellClass,
   cellKind,
+  formatAvailabilityClocks,
   formatShiftClock,
   getWeekDays,
   isUsingLocalScheduleStore,
@@ -95,6 +97,9 @@ export default function SchedulingPage() {
   const [form, setForm] = useState({
     start_time: "08:00",
     end_time: "17:00",
+    start_time_2: "13:00",
+    end_time_2: "17:00",
+    has_second_window: false,
     is_available: true,
     note: "",
     status: "published" as "published" | "draft",
@@ -182,12 +187,17 @@ export default function SchedulingPage() {
   }, [load]);
 
   function openAvailabilityEditor(technicianId: string, dayOfWeek: number, date: string) {
-    const existing = availabilityForDay(availability, technicianId, dayOfWeek);
+    const windows = availabilityWindowsForDay(availability, technicianId, dayOfWeek);
+    const first = windows[0] ?? null;
+    const second = windows[1] ?? null;
     setForm({
-      start_time: existing ? timeInputVal(existing.start_time) : "08:00",
-      end_time: existing ? timeInputVal(existing.end_time) : "17:00",
-      is_available: existing?.is_available ?? dayOfWeek !== 0,
-      note: existing?.note ?? "",
+      start_time: first ? timeInputVal(first.start_time) : "08:00",
+      end_time: first ? timeInputVal(first.end_time) : "17:00",
+      start_time_2: second ? timeInputVal(second.start_time) : "13:00",
+      end_time_2: second ? timeInputVal(second.end_time) : "17:00",
+      has_second_window: Boolean(second),
+      is_available: first?.is_available ?? dayOfWeek !== 0,
+      note: first?.note ?? "",
       status: "published",
     });
     setEditor({ mode: "availability", technicianId, dayOfWeek, date });
@@ -211,6 +221,9 @@ export default function SchedulingPage() {
         : avail
           ? timeInputVal(avail.end_time)
           : "17:00",
+      start_time_2: "13:00",
+      end_time_2: "17:00",
+      has_second_window: false,
       is_available: true,
       note: existing?.note ?? "",
       status: (existing?.status as "published" | "draft") || "published",
@@ -237,13 +250,21 @@ export default function SchedulingPage() {
         setBusy(false);
         return;
       }
+      const windows = form.is_available
+        ? form.has_second_window
+          ? [
+              { start_time: form.start_time, end_time: form.end_time },
+              { start_time: form.start_time_2, end_time: form.end_time_2 },
+            ]
+          : [{ start_time: form.start_time, end_time: form.end_time }]
+        : [{ start_time: form.start_time, end_time: form.end_time }];
+
       const res = await saveDayAvailability(supabase, {
         technician_id: editor.technicianId,
         day_of_week: editor.dayOfWeek,
-        start_time: form.start_time,
-        end_time: form.end_time,
         is_available: form.is_available,
         note: form.note || null,
+        windows,
       });
       if (res.error) {
         setError(res.error);
@@ -333,7 +354,8 @@ export default function SchedulingPage() {
   ): { kind: CellKind; line1: string; line2?: string } {
     const onPto = timeOff.some((r) => r.technician_id === techId && timeOffCoversDay(r, day.date));
     const dayShifts = shiftsForCell(shifts, techId, day.date);
-    const avail = availabilityForDay(availability, techId, day.dayOfWeek);
+    const windows = availabilityWindowsForDay(availability, techId, day.dayOfWeek);
+    const avail = windows[0] ?? null;
     const kind = cellKind({
       onPto,
       hasShift: dayShifts.length > 0,
@@ -354,10 +376,18 @@ export default function SchedulingPage() {
         line2: dayShifts.length > 1 ? `+${dayShifts.length - 1} more` : "Shift",
       };
     }
-    if (kind === "available" && avail) {
+    if (kind === "available" && windows.length > 0) {
+      const clocks = formatAvailabilityClocks(windows);
+      if (windows.length > 1) {
+        return {
+          kind,
+          line1: formatShiftClock(windows[0]!.start_time, windows[0]!.end_time),
+          line2: formatShiftClock(windows[1]!.start_time, windows[1]!.end_time),
+        };
+      }
       return {
         kind,
-        line1: formatShiftClock(avail.start_time, avail.end_time),
+        line1: clocks,
         line2: "Preferred",
       };
     }
@@ -589,7 +619,8 @@ export default function SchedulingPage() {
       {isTech ? (
         <p className="text-sm opacity-60">
           Tip: availability is your <strong>preferred weekly pattern</strong> (same days every
-          week). Managers publish specific shifts on top. Approved{" "}
+          week). Use a second window for split shifts (e.g. morning and evening). Managers
+          publish specific shifts on top. Approved{" "}
           <Link href="/time-off" className="link link-primary">
             time off
           </Link>{" "}
@@ -636,30 +667,101 @@ export default function SchedulingPage() {
             ) : null}
 
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <FormRow label="Start">
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-sm font-medium">
+                  {editor.mode === "availability" ? "Window 1 start" : "Start"}
+                </span>
                 <input
                   type="time"
-                  className="input input-bordered input-sm w-full"
+                  className="input input-bordered w-full min-h-11"
                   value={form.start_time}
                   disabled={editor.mode === "availability" && !form.is_available}
                   onChange={(e) => setForm((f) => ({ ...f, start_time: e.target.value }))}
                 />
-              </FormRow>
-              <FormRow label="End">
+              </label>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-sm font-medium">
+                  {editor.mode === "availability" ? "Window 1 end" : "End"}
+                </span>
                 <input
                   type="time"
-                  className="input input-bordered input-sm w-full"
+                  className="input input-bordered w-full min-h-11"
                   value={form.end_time}
                   disabled={editor.mode === "availability" && !form.is_available}
                   onChange={(e) => setForm((f) => ({ ...f, end_time: e.target.value }))}
                 />
-              </FormRow>
+              </label>
             </div>
 
+            {editor.mode === "availability" && form.is_available ? (
+              <div className="mt-3 space-y-3">
+                {!form.has_second_window ? (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm w-full"
+                    onClick={() =>
+                      setForm((f) => {
+                        const fullDay =
+                          f.start_time === "08:00" && f.end_time === "17:00";
+                        return {
+                          ...f,
+                          has_second_window: true,
+                          end_time: fullDay ? "12:00" : f.end_time,
+                          start_time_2: fullDay ? "13:00" : f.start_time_2 || "13:00",
+                          end_time_2: fullDay ? "17:00" : f.end_time_2 || "17:00",
+                        };
+                      })
+                    }
+                  >
+                    Add second window
+                  </button>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">Window 2 (split shift)</p>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setForm((f) => ({ ...f, has_second_window: false }))}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-sm font-medium">Start</span>
+                        <input
+                          type="time"
+                          className="input input-bordered w-full min-h-11"
+                          value={form.start_time_2}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, start_time_2: e.target.value }))
+                          }
+                        />
+                      </label>
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-sm font-medium">End</span>
+                        <input
+                          type="time"
+                          className="input input-bordered w-full min-h-11"
+                          value={form.end_time_2}
+                          onChange={(e) => setForm((f) => ({ ...f, end_time_2: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <p className="text-xs opacity-60">
+                      Second window must start at or after the first window ends.
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : null}
+
             {editor.mode === "shift" ? (
-              <FormRow label="Status">
+              <label className="mt-3 flex w-full flex-col gap-1.5">
+                <span className="text-sm font-medium">Status</span>
                 <select
-                  className="select select-bordered select-sm w-full"
+                  className="select select-bordered w-full min-h-11"
                   value={form.status}
                   onChange={(e) =>
                     setForm((f) => ({
@@ -671,17 +773,18 @@ export default function SchedulingPage() {
                   <option value="published">Published</option>
                   <option value="draft">Draft</option>
                 </select>
-              </FormRow>
+              </label>
             ) : null}
 
-            <FormRow label="Note">
+            <label className="mt-3 flex w-full flex-col gap-1.5">
+              <span className="text-sm font-medium">Note</span>
               <input
-                className="input input-bordered input-sm w-full"
+                className="input input-bordered w-full min-h-11"
                 value={form.note}
                 onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
                 placeholder="Optional"
               />
-            </FormRow>
+            </label>
 
             {isManager && editor.mode === "shift" ? (
               <p className="mt-2 text-xs opacity-50">

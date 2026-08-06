@@ -811,7 +811,7 @@ export type TimeEntryAudit = {
   created_at: string;
 };
 
-/** Weekly preferred availability window (0=Sun … 6=Sat). */
+/** Weekly preferred availability window (0=Sun … 6=Sat). Multiple rows per day = split shifts. */
 export type TechnicianAvailability = {
   id: string;
   technician_id: string;
