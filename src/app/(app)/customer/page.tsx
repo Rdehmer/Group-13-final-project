@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Star, Wrench } from "lucide-react";
+import { Star, UserCircle, Wrench } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatCard } from "@/components/ui";
@@ -12,7 +12,8 @@ import { shouldPromptForRating } from "@/lib/service-ratings";
 import { parseCustomerContracts } from "@/lib/contracts";
 import type { Profile, WorkOrder } from "@/lib/types";
 import type { CustomerAddressFields } from "@/lib/customer-address";
-import { BusinessLocationCard, emptyBusinessLocationAddress } from "./BusinessLocationCard";
+import { formatCustomerAddress, hasCustomerAddress } from "@/lib/customer-address";
+import { emptyBusinessLocationAddress } from "./BusinessLocationCard";
 
 function GatedDashboardLink({
   href,
@@ -58,6 +59,7 @@ function CustomerDashboardPageInner() {
   const [contractCount, setContractCount] = useState(0);
   const [activeContractCount, setActiveContractCount] = useState(0);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+  const [customerName, setCustomerName] = useState<string | null>(null);
   const [customerAddress, setCustomerAddress] = useState<CustomerAddressFields>(
     emptyBusinessLocationAddress(),
   );
@@ -77,7 +79,7 @@ function CustomerDashboardPageInner() {
         .eq("customer_id", customerId),
       supabase
         .from("customers")
-        .select("service_address, billing_address, city, state, zip_code")
+        .select("name, service_address, billing_address, city, state, zip_code")
         .eq("id", customerId)
         .single(),
     ]);
@@ -88,6 +90,7 @@ function CustomerDashboardPageInner() {
     setContractCount(parsedContracts.length);
     setActiveContractCount(parsedContracts.filter((c) => c.status === "Active").length);
     if (customer) {
+      setCustomerName(customer.name ?? null);
       setCustomerAddress({
         service_address: customer.service_address,
         billing_address: customer.billing_address,
@@ -227,7 +230,38 @@ function CustomerDashboardPageInner() {
           </div>
         </div>
 
-        <BusinessLocationCard address={customerAddress} onUpdated={setCustomerAddress} />
+        <div className="card bg-base-100 shadow">
+          <div className="card-body gap-3">
+            <div className="flex items-start gap-3">
+              <div className="rounded-box bg-primary/10 p-2.5 text-primary">
+                <UserCircle className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="card-title text-base">Account information</h2>
+                <p className="text-sm font-medium">{customerName ?? "Your business"}</p>
+                <p className="mt-1 text-sm opacity-70 line-clamp-2">
+                  {hasCustomerAddress(customerAddress)
+                    ? formatCustomerAddress(customerAddress)
+                    : "No service location on file yet."}
+                </p>
+              </div>
+            </div>
+            {isGateActive ? (
+              <span
+                role="link"
+                aria-disabled="true"
+                className="btn btn-outline btn-sm w-fit pointer-events-none cursor-not-allowed opacity-50"
+                onClick={blockNavigation}
+              >
+                View account information
+              </span>
+            ) : (
+              <Link href="/customer/account" className="btn btn-outline btn-sm w-fit">
+                View account information →
+              </Link>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
