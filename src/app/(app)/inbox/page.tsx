@@ -22,6 +22,8 @@ import {
   type InboxThread,
 } from "@/app/(app)/customer/inbox/inbox-types";
 import { markInboxThreadReadByStaff } from "@/lib/manager-inbox";
+import { usesStaffInbox } from "@/lib/topbar-config";
+import { homeForRole } from "@/lib/roles";
 
 const THREAD_SELECT = `
   *,
@@ -100,8 +102,8 @@ export default function ManagerInboxPage() {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       const next = p as Profile | null;
       setProfile(next);
-      if (next?.role !== "service_manager" && next?.role !== "administrator") {
-        router.replace("/dashboard");
+      if (!next || !usesStaffInbox(next.role)) {
+        router.replace(next ? homeForRole(next.role) : "/login");
         return;
       }
       setReady(true);
@@ -185,10 +187,7 @@ export default function ManagerInboxPage() {
     setBusy(false);
   }
 
-  if (
-    !ready ||
-    (profile?.role !== "service_manager" && profile?.role !== "administrator")
-  ) {
+  if (!ready || !profile || !usesStaffInbox(profile.role)) {
     return <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>;
   }
 
