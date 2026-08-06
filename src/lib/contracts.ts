@@ -434,6 +434,19 @@ export const CONTRACT_SERVICE_REQUEST_WAIT_DAYS = 45;
 export const CONTRACT_START_DATE_BLOCK_MESSAGE =
   "You cannot make a service request within 45 days of your contract start date.";
 
+export const CONTRACT_START_DATE_ONE_OFF_TITLE = "One-Off Call";
+
+export const CONTRACT_START_DATE_ONE_OFF_DESCRIPTION =
+  "Request a billable service visit outside your contract coverage. Standard rates apply and this visit will not count toward included contract visits.";
+
+export function isContractStartDateBlockError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    message.includes(CONTRACT_START_DATE_BLOCK_MESSAGE) ||
+    normalized.includes("within 45 days of your contract start date")
+  );
+}
+
 export function daysSinceContractStart(startDate: string, asOf = new Date()): number | null {
   if (!startDate) return null;
   const start = new Date(`${startDate}T00:00:00`);

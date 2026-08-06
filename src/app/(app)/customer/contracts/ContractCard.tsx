@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import Link from "next/link";
 import {
   CONTRACT_TYPE_HELP,
@@ -15,9 +16,11 @@ import { StatusBadge, statusTone } from "@/components/ui";
 
 type Props = {
   contract: CustomerContract;
+  highlighted?: boolean;
+  highlightRef?: Ref<HTMLElement>;
 };
 
-export function ContractCard({ contract }: Props) {
+export function ContractCard({ contract, highlighted = false, highlightRef }: Props) {
   const tier = inferContractTier(contract.name);
   const renewal = formatRenewalNote(contract.renewal_option);
   const expiringSoon = contract.status.toLowerCase() === "active" && isExpiringSoon(contract.end_date);
@@ -25,8 +28,18 @@ export function ContractCard({ contract }: Props) {
   const typeHelp = CONTRACT_TYPE_HELP[contract.contract_type];
 
   return (
-    <article className="card bg-base-100 shadow">
+    <article
+      ref={highlightRef}
+      className={`card bg-base-100 shadow transition-all duration-500 ${
+        highlighted
+          ? "ring-2 ring-primary/40 border border-primary/25 bg-primary/[0.04] shadow-md"
+          : ""
+      }`}
+    >
       <div className="card-body gap-4">
+        {highlighted ? (
+          <p className="text-xs font-medium uppercase tracking-wide text-primary">Just Submitted</p>
+        ) : null}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -65,7 +78,7 @@ export function ContractCard({ contract }: Props) {
             View details
           </Link>
           {isActive ? (
-            <Link href="/customer" className="btn btn-outline btn-sm">
+            <Link href="/customer/request-service" className="btn btn-outline btn-sm">
               Request service
             </Link>
           ) : null}

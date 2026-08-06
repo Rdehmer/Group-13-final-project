@@ -255,7 +255,7 @@ export default function CustomerEquipmentPage() {
                                 </div>
                                 <div className="sm:col-span-2 lg:col-span-3">
                                   <Link
-                                    href={`/customer?equipment_id=${eq.id}`}
+                                    href={`/customer/request-service?equipment_id=${eq.id}`}
                                     className="btn btn-outline btn-sm"
                                     onClick={(e) => e.stopPropagation()}
                                   >

@@ -34,7 +34,7 @@ type Props = {
   equipment: Equipment[];
   activeContracts: CustomerContract[];
   selectedTier: ContractTierId;
-  onSuccess: (contractName: string) => void;
+  onSuccess: (contract: { id: string; name: string }) => void;
   onEquipmentAdded?: (equipment: Equipment) => void;
 };
 
@@ -203,7 +203,7 @@ export function ContractRequestForm({
 
     clearContractDraft(customerId);
     setBusy(false);
-    onSuccess(payload.name);
+    onSuccess({ id: contract.id, name: payload.name });
   }
 
   function handleSubmitClick(e: React.MouseEvent<HTMLButtonElement>) {
@@ -350,10 +350,10 @@ export function ContractRequestForm({
                 <textarea className="textarea textarea-bordered w-full" rows={2} value={form.notes} onChange={(e) => update({ notes: e.target.value })} placeholder="Site access, hours, dock info, or other details" />
               </FormRow>
 
-              <div>
+              <div className="flex justify-end pt-1">
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs"
+                  className="btn btn-outline btn-sm"
                   onClick={() => setCustomizeCoverage((v) => !v)}
                 >
                   {customizeCoverage ? "Hide customize coverage" : "Customize coverage details"}

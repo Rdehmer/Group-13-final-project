@@ -1,32 +1,63 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
 import { ThemeSelector } from "@/components/ThemeSelector";
+import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { NAV_ITEMS, type NavItem } from "@/lib/roles";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
+
+const CUSTOMER_HOME = "/customer";
 
 function isPathActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavLink({
+function gatedNavClassName(isBlocked: boolean, active: boolean, className?: string) {
+  const parts = [
+    active ? "active font-medium" : "",
+    isBlocked ? "pointer-events-none cursor-not-allowed opacity-50" : "",
+    className ?? "",
+  ];
+  return parts.filter(Boolean).join(" ");
+}
+
+function GatedNavLink({
   item,
   pathname,
   className,
+  isGateActive,
+  blockNavigation,
 }: {
   item: NavItem;
   pathname: string;
   className?: string;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
-  const active = item.href === "/customer"
-    ? pathname === "/customer"
+  const active = item.href === CUSTOMER_HOME
+    ? pathname === CUSTOMER_HOME
     : isPathActive(pathname, item.href);
+  const isBlocked = isGateActive && item.href !== CUSTOMER_HOME;
+
+  if (isBlocked) {
+    return (
+      <span
+        role="link"
+        aria-disabled="true"
+        className={gatedNavClassName(true, active, className)}
+        onClick={blockNavigation}
+      >
+        {item.label}
+      </span>
+    );
+  }
 
   return (
-    <Link href={item.href} className={`${active ? "active font-medium" : ""} ${className ?? ""}`.trim()}>
+    <Link href={item.href} className={gatedNavClassName(false, active, className)}>
       {item.label}
     </Link>
   );
@@ -36,29 +67,50 @@ function NavDetailsGroup({
   item,
   pathname,
   profile,
+  isGateActive,
+  blockNavigation,
 }: {
   item: NavItem;
   pathname: string;
   profile: Profile;
+  isGateActive: boolean;
+  blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   const childActive = item.children!.some((child) =>
-    child.href === "/customer"
-      ? pathname === "/customer"
+    child.href === CUSTOMER_HOME
+      ? pathname === CUSTOMER_HOME
       : isPathActive(pathname, child.href),
   );
   const sectionOpen = childActive || isPathActive(pathname, item.href);
+  const parentBlocked = isGateActive && item.href !== CUSTOMER_HOME;
 
   return (
     <li>
-      <Link href={item.href} className={sectionOpen ? "font-medium" : ""}>
-        {item.label}
-      </Link>
+      {parentBlocked ? (
+        <span
+          role="link"
+          aria-disabled="true"
+          className={gatedNavClassName(true, sectionOpen)}
+          onClick={blockNavigation}
+        >
+          {item.label}
+        </span>
+      ) : (
+        <Link href={item.href} className={sectionOpen ? "font-medium" : ""}>
+          {item.label}
+        </Link>
+      )}
       <ul>
         {item.children!
           .filter((child) => child.roles.includes(profile.role))
           .map((child) => (
             <li key={`${child.href}-${child.label}`}>
-              <NavLink item={child} pathname={pathname} />
+              <GatedNavLink
+                item={child}
+                pathname={pathname}
+                isGateActive={isGateActive}
+                blockNavigation={blockNavigation}
+              />
             </li>
           ))}
       </ul>
@@ -75,7 +127,15 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { isGateActive, blockNavigation } = useCustomerRatingGate();
+  const [mounted, setMounted] = useState(false);
   const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role));
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const gateActive = mounted && isGateActive;
 
   async function logout() {
     const supabase = createClient();
@@ -125,6 +185,12 @@ export function AppShell({
           </div>
         </div>
 
+        {gateActive ? (
+          <div role="status" className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm">
+            Submit your service rating on Home to continue using the portal.
+          </div>
+        ) : null}
+
         <main className="flex-1 p-4 md:p-6">{children}</main>
       </div>
 
@@ -143,6 +209,8 @@ export function AppShell({
                   item={item}
                   pathname={pathname}
                   profile={profile}
+                  isGateActive={gateActive}
+                  blockNavigation={blockNavigation}
                 />
               );
             }
@@ -154,9 +222,13 @@ export function AppShell({
             const active = best?.href === item.href;
             return (
               <li key={item.href}>
-                <Link href={item.href} className={active ? "active font-medium" : ""}>
-                  {item.label}
-                </Link>
+                <GatedNavLink
+                  item={item}
+                  pathname={pathname}
+                  className={active ? "active font-medium" : ""}
+                  isGateActive={gateActive}
+                  blockNavigation={blockNavigation}
+                />
               </li>
             );
           })}

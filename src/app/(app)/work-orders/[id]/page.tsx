@@ -13,6 +13,7 @@ import {
   Clock,
   CheckCircle2,
   Save,
+  Star,
   Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -26,6 +27,18 @@ import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/b
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
+import { StarRatingDisplay } from "@/components/StarRatingInput";
+import { WORK_ORDER_TYPES } from "@/lib/work-order-types";
+import { formatServiceDate } from "@/lib/invoices";
+import {
+  averageRating,
+  formatRatingAverage,
+  RATING_DIMENSIONS,
+} from "@/lib/service-ratings";
+import {
+  formatCustomerAddress,
+  type CustomerAddressFields,
+} from "@/lib/customer-address";
 import type {
   AdditionalWorkRequest,
   EmergencyPurchase,
@@ -35,15 +48,14 @@ import type {
   TechnicianLabor,
   WorkOrder,
   WorkOrderPart,
+  WorkOrderServiceRating,
 } from "@/lib/types";
 
 type JobDetail = WorkOrder & {
-  customers?: {
+  customers?: CustomerAddressFields & {
     name: string;
-    billing_address?: string | null;
     phone?: string | null;
     email?: string | null;
-    service_address?: string | null;
   };
   equipment?: EquipmentOption | null;
 };
@@ -86,13 +98,14 @@ export default function JobDetailPage() {
   const [tab, setTab] = useState<"overview" | "labor" | "parts" | "approvals" | "billing">("overview");
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchase[]>([]);
+  const [serviceRating, setServiceRating] = useState<WorkOrderServiceRating | null>(null);
 
   async function load() {
     const [{ data }, { data: { user } }, { data: settings }, { data: purchases }] = await Promise.all([
       supabase
         .from("work_orders")
         .select(
-          "*, customers(name, billing_address, phone, email, service_address), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
+          "*, customers(name, billing_address, phone, email, service_address, city, state, zip_code), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
         )
         .eq("id", id)
         .single(),
@@ -126,7 +139,7 @@ export default function JobDetailPage() {
       setProfile(p as Profile);
     }
 
-    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }] =
+    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }] =
       await Promise.all([
         supabase.from("profiles").select("*").eq("role", "technician").eq("is_active", true),
         supabase.from("technician_labor").select("*").eq("work_order_id", id).order("work_date", { ascending: false }),
@@ -134,6 +147,11 @@ export default function JobDetailPage() {
         supabase.from("additional_work_requests").select("*").eq("work_order_id", id).order("created_at", { ascending: false }),
         supabase.from("invoices").select("*").eq("work_order_id", id).order("created_at", { ascending: false }),
         supabase.from("parts").select("*").eq("is_active", true).order("name"),
+        supabase
+          .from("work_order_service_ratings")
+          .select("*")
+          .eq("work_order_id", id)
+          .maybeSingle(),
       ]);
 
     const techs = (tech as Profile[]) ?? [];
@@ -143,6 +161,7 @@ export default function JobDetailPage() {
     setAdditional((awr as AdditionalWorkRequest[]) ?? []);
     setInvoices((inv as Invoice[]) ?? []);
     setInventory((stock as Part[]) ?? []);
+    setServiceRating((rating as WorkOrderServiceRating | null) ?? null);
 
     if (w?.customer_id) {
       const { data: eqList } = await supabase
@@ -874,7 +893,9 @@ export default function JobDetailPage() {
                     <div>
                       <p className="opacity-60">Service address</p>
                       <p className="whitespace-pre-line">
-                        {wo.customers?.service_address || wo.customers?.billing_address || "—"}
+                        {wo.customers
+                          ? formatCustomerAddress(wo.customers, "—")
+                          : "—"}
                       </p>
                     </div>
                     <div className="sm:col-span-2">
@@ -935,12 +956,11 @@ export default function JobDetailPage() {
                           onChange={(e) => setWorkOrderType(e.target.value)}
                           disabled={wo.status === "Closed"}
                         >
-                          <option>Preventive Maintenance</option>
-                          <option>Repair</option>
-                          <option>Emergency</option>
-                          <option>Inspection</option>
-                          <option>Install</option>
-                          <option>Other</option>
+                          {WORK_ORDER_TYPES.map((type) => (
+                            <option key={type} value={type}>
+                              {type}
+                            </option>
+                          ))}
                         </select>
                       </FormRow>
                       <FormRow label="Priority">
@@ -1065,6 +1085,37 @@ export default function JobDetailPage() {
                   ) : null}
                 </div>
               </div>
+
+              {serviceRating ? (
+                <div className="card bg-base-100 shadow">
+                  <div className="card-body space-y-4">
+                    <h2 className="card-title text-base gap-2">
+                      <Star className="h-4 w-4 text-warning" /> Customer Feedback
+                    </h2>
+                    <p className="text-sm opacity-70">
+                      Submitted {formatServiceDate(serviceRating.created_at)} · Average{" "}
+                      {formatRatingAverage(averageRating(serviceRating))} / 5
+                    </p>
+                    <div className="space-y-3 rounded-box border border-base-300 bg-base-200/30 p-4">
+                      {RATING_DIMENSIONS.map((dimension) => (
+                        <StarRatingDisplay
+                          key={dimension.key}
+                          label={dimension.label}
+                          value={serviceRating[dimension.field]}
+                        />
+                      ))}
+                    </div>
+                    {serviceRating.comments ? (
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide opacity-60">
+                          Additional Feedback
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm">{serviceRating.comments}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </>
           ) : null}
 

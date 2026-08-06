@@ -9,6 +9,7 @@ import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import type { Customer, Equipment, WorkOrder, ServiceContract, Invoice } from "@/lib/types";
 import { formatMoney } from "@/lib/calculations";
+import { formatCustomerAddress, hasCustomerAddress } from "@/lib/customer-address";
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -87,6 +88,53 @@ export default function CustomerDetailPage() {
             <FormRow label="Phone">
               <input className="input input-bordered w-full" value={customer.phone ?? ""} onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} />
             </FormRow>
+
+            <div className="divider my-1 text-xs opacity-60">Address</div>
+            {hasCustomerAddress(customer) ? (
+              <p className="whitespace-pre-line rounded-box border border-base-300 bg-base-200/40 p-3 text-sm leading-relaxed">
+                {formatCustomerAddress(customer)}
+              </p>
+            ) : null}
+            <FormRow label="Street address">
+              <input
+                className="input input-bordered w-full"
+                value={customer.service_address ?? ""}
+                onChange={(e) => setCustomer({ ...customer, service_address: e.target.value })}
+                autoComplete="street-address"
+              />
+            </FormRow>
+            <FormRow label="Address line 2">
+              <input
+                className="input input-bordered w-full"
+                value={customer.billing_address ?? ""}
+                onChange={(e) => setCustomer({ ...customer, billing_address: e.target.value })}
+                placeholder="Suite, unit, building (optional)"
+              />
+            </FormRow>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FormRow label="City">
+                <input
+                  className="input input-bordered w-full"
+                  value={customer.city ?? ""}
+                  onChange={(e) => setCustomer({ ...customer, city: e.target.value })}
+                />
+              </FormRow>
+              <FormRow label="State / Province">
+                <input
+                  className="input input-bordered w-full"
+                  value={customer.state ?? ""}
+                  onChange={(e) => setCustomer({ ...customer, state: e.target.value })}
+                />
+              </FormRow>
+            </div>
+            <FormRow label="ZIP / Postal code">
+              <input
+                className="input input-bordered w-full"
+                value={customer.zip_code ?? ""}
+                onChange={(e) => setCustomer({ ...customer, zip_code: e.target.value })}
+              />
+            </FormRow>
+
             <FormRow label="Status">
               <select className="select select-bordered w-full" value={customer.status} onChange={(e) => setCustomer({ ...customer, status: e.target.value as Customer["status"] })}>
                 <option value="Active">Active</option>

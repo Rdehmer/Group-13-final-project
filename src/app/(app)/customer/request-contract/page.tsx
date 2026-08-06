@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { ContractRequestForm } from "@/app/(app)/customer/request-contract/ContractRequestForm";
-import { ContractRequestSuccess } from "@/app/(app)/customer/request-contract/ContractRequestSuccess";
 import { ContractTierCards } from "@/app/(app)/customer/request-contract/ContractTierCards";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatCard } from "@/components/ui";
@@ -20,12 +20,12 @@ import type { Equipment, Profile } from "@/lib/types";
 
 export default function RequestContractPage() {
   const supabase = createClient();
+  const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
   const [selectedTier, setSelectedTier] = useState<ContractTierId>("silver");
   const [tiersCollapsed, setTiersCollapsed] = useState(false);
-  const [submittedName, setSubmittedName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -94,15 +94,6 @@ export default function RequestContractPage() {
     );
   }
 
-  if (submittedName) {
-    return (
-      <div>
-        <PageHeader title="Request a Service Contract" description="Your request has been received." />
-        <ContractRequestSuccess contractName={submittedName} />
-      </div>
-    );
-  }
-
   return (
     <div>
       <PageHeader
@@ -145,7 +136,9 @@ export default function RequestContractPage() {
               equipment={equipment}
               activeContracts={contracts}
               selectedTier={selectedTier}
-              onSuccess={(name) => setSubmittedName(name)}
+              onSuccess={({ id }) => {
+                router.push(`/customer/contracts?filter=pending&highlight=${id}`);
+              }}
               onEquipmentAdded={(item) => {
                 setEquipment((prev) =>
                   prev.some((e) => e.id === item.id)

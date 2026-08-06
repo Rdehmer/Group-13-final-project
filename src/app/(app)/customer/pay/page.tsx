@@ -4,7 +4,7 @@
  * Customer bill-pay portal (QBO-style) with Stripe Payment Element.
  */
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -18,7 +18,6 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
-import { StripeCheckout } from "@/components/StripeCheckout";
 import { formatMoney } from "@/lib/calculations";
 import { daysPastDue } from "@/lib/billing";
 import type { Invoice, Payment, Profile } from "@/lib/types";
@@ -41,6 +40,193 @@ type StripeSession = {
   paymentIntentId: string;
   amount: number;
 };
+
+type StripeElementsInstance = {
+  create: (type: "payment", options?: { layout?: string }) => {
+    mount: (el: HTMLElement) => void;
+    unmount: () => void;
+  };
+};
+
+type StripeInstance = {
+  elements: (options: {
+    clientSecret: string;
+    appearance?: { theme?: string; variables?: Record<string, string> };
+  }) => StripeElementsInstance;
+  confirmPayment: (options: {
+    elements: StripeElementsInstance;
+    redirect?: string;
+    confirmParams?: { return_url?: string };
+  }) => Promise<{ error?: { message?: string }; paymentIntent?: { id?: string; status?: string } }>;
+};
+
+declare global {
+  interface Window {
+    Stripe?: (publishableKey: string) => StripeInstance;
+  }
+}
+
+const STRIPE_SCRIPT_ID = "stripe-js-v3";
+const STRIPE_SCRIPT_SRC = "https://js.stripe.com/v3/";
+
+function loadStripeScript(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (window.Stripe) return Promise.resolve();
+
+  const existing = document.getElementById(STRIPE_SCRIPT_ID) as HTMLScriptElement | null;
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const script = existing ?? document.createElement("script");
+    script.id = STRIPE_SCRIPT_ID;
+    script.src = STRIPE_SCRIPT_SRC;
+    script.async = true;
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      resolve();
+    };
+    script.onerror = () => reject(new Error("Could not load Stripe.js."));
+    if (!existing) document.head.appendChild(script);
+  });
+}
+
+function PayPageStripeForm({
+  clientSecret,
+  publishableKey,
+  amount,
+  paymentIntentId,
+  onSuccess,
+  onError,
+  onCancel,
+}: StripeSession & {
+  onSuccess: (paymentIntentId: string) => void;
+  onError: (message: string) => void;
+  onCancel: () => void;
+}) {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const stripeRef = useRef<StripeInstance | null>(null);
+  const elementsRef = useRef<StripeElementsInstance | null>(null);
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let paymentElement: { mount: (el: HTMLElement) => void; unmount: () => void } | null = null;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        await loadStripeScript();
+        if (cancelled || !mountRef.current || !window.Stripe) {
+          throw new Error("Stripe is unavailable in this browser.");
+        }
+
+        const stripe = window.Stripe(publishableKey);
+        const elements = stripe.elements({
+          clientSecret,
+          appearance: {
+            theme: "stripe",
+            variables: {
+              colorPrimary: "#047857",
+              borderRadius: "8px",
+            },
+          },
+        });
+
+        paymentElement = elements.create("payment", { layout: "tabs" });
+        paymentElement.mount(mountRef.current);
+
+        stripeRef.current = stripe;
+        elementsRef.current = elements;
+        if (!cancelled) setReady(true);
+      } catch (err) {
+        if (!cancelled) {
+          onError(err instanceof Error ? err.message : "Could not load Stripe checkout.");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      paymentElement?.unmount();
+      stripeRef.current = null;
+      elementsRef.current = null;
+    };
+  }, [clientSecret, publishableKey, onError]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const stripe = stripeRef.current;
+    const elements = elementsRef.current;
+    if (!stripe || !elements) return;
+
+    setBusy(true);
+    setMessage(null);
+
+    const { error, paymentIntent } = await stripe.confirmPayment({
+      elements,
+      redirect: "if_required",
+      confirmParams: {
+        return_url:
+          typeof window !== "undefined"
+            ? `${window.location.origin}/customer/pay?stripe=return`
+            : undefined,
+      },
+    });
+
+    if (error) {
+      const msg = error.message ?? "Payment failed.";
+      setMessage(msg);
+      onError(msg);
+      setBusy(false);
+      return;
+    }
+
+    const status = paymentIntent?.status;
+    if (status === "succeeded" || status === "processing") {
+      onSuccess(paymentIntent?.id ?? paymentIntentId);
+      setBusy(false);
+      return;
+    }
+
+    const msg = `Payment not completed (${status ?? "unknown"}).`;
+    setMessage(msg);
+    onError(msg);
+    setBusy(false);
+  }
+
+  return (
+    <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6">
+      {!ready ? (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-base-200 bg-base-200/30 py-12">
+          <span className="loading loading-spinner loading-md text-success" />
+          <p className="text-sm opacity-70">Loading secure payment form…</p>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-base-200 bg-base-100 p-4">
+          <div ref={mountRef} className="min-h-[220px]" />
+        </div>
+      )}
+      {message ? (
+        <div role="alert" className="alert alert-error text-sm">
+          <span>{message}</span>
+        </div>
+      ) : null}
+      <div className="space-y-3 pt-1">
+        <button type="submit" className="btn btn-success btn-lg w-full gap-2" disabled={!ready || busy}>
+          {busy ? <span className="loading loading-spinner loading-sm" /> : <Lock className="h-4 w-4" />}
+          {busy ? "Processing…" : `Pay ${formatMoney(amount)} Securely`}
+        </button>
+        <button type="button" className="btn btn-ghost w-full" disabled={busy} onClick={onCancel}>
+          Cancel Payment
+        </button>
+      </div>
+      <p className="text-center text-xs leading-relaxed opacity-60">
+        Secured by Stripe. Test card: 4242 4242 4242 4242 · Any future expiry · Any CVC.
+      </p>
+    </form>
+  );
+}
 
 function PayPortalInner() {
   const supabase = createClient();
@@ -99,7 +285,9 @@ function PayPortalInner() {
         .order("payment_date", { ascending: false })
         .limit(50),
       supabase.from("customers").select("name").eq("id", p.customer_id).maybeSingle(),
-      fetch("/api/stripe/config").then((r) => r.json()).catch(() => ({ configured: false })),
+      Promise.resolve({
+        configured: Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY),
+      }),
     ]);
 
     const open = (inv as OpenInvoice[]) ?? [];
@@ -321,7 +509,7 @@ function PayPortalInner() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Pay bills"
+        title="Payments"
         description={`${customerName} · Secure Stripe checkout for Ridley Equipment Services`}
         actions={
           <button
@@ -368,14 +556,14 @@ function PayPortalInner() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Balance due" value={formatMoney(totalDue)} danger={totalDue > 0} />
+        <StatCard label="Balance Due" value={formatMoney(totalDue)} danger={totalDue > 0} />
         <StatCard
-          label="Past due"
+          label="Past Due"
           value={formatMoney(overdueDue)}
           hint={overdueDue > 0 ? "Include these first" : "Nothing overdue"}
           danger={overdueDue > 0}
         />
-        <StatCard label="Open invoices" value={invoices.length} hint="Select which to pay" />
+        <StatCard label="Open Invoices" value={invoices.length} hint="Select which to pay" />
       </div>
 
       {error ? (
@@ -393,7 +581,7 @@ function PayPortalInner() {
           <div className="flex items-start gap-3">
             <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
             <div className="space-y-1">
-              <p className="text-lg font-bold">Payment received</p>
+              <p className="text-lg font-bold">Payment Received</p>
               <p className="text-sm opacity-80">
                 {formatMoney(success.totalPaid)} via {success.method}
               </p>
@@ -411,18 +599,18 @@ function PayPortalInner() {
 
       <div className="grid gap-5 lg:grid-cols-5">
         <section className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-200 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-base-200 px-5 py-4">
             <div>
-              <h2 className="flex items-center gap-2 font-bold">
-                <FileText className="h-4 w-4" /> Open invoices
+              <h2 className="flex items-center gap-2 text-lg font-bold">
+                <FileText className="h-5 w-5" /> Open Invoices
               </h2>
-              <p className="text-xs opacity-55">Select invoices to include in this payment</p>
+              <p className="mt-1 text-sm opacity-60">Select invoices to include in this payment</p>
             </div>
-            <div className="flex gap-1">
-              <button type="button" className="btn btn-ghost btn-xs" onClick={selectAll} disabled={!invoices.length}>
-                Select all
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={selectAll} disabled={!invoices.length}>
+                Select All
               </button>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={selectNone} disabled={!invoices.length}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={selectNone} disabled={!invoices.length}>
                 Clear
               </button>
             </div>
@@ -485,7 +673,7 @@ function PayPortalInner() {
                         <td className="tabular-nums text-sm">
                           {inv.due_date}
                           {late ? (
-                            <span className="mt-0.5 block text-[10px] font-medium">Past due</span>
+                            <span className="mt-0.5 block text-xs font-medium">Past Due</span>
                           ) : null}
                         </td>
                         <td className="text-right tabular-nums text-sm">{formatMoney(inv.invoice_total)}</td>
@@ -501,7 +689,7 @@ function PayPortalInner() {
                 </tbody>
                 <tfoot>
                   <tr className="font-bold">
-                    <td colSpan={5}>Selected balance</td>
+                    <td colSpan={5}>Selected Balance</td>
                     <td className="text-right tabular-nums">{formatMoney(selectedTotal)}</td>
                     <td />
                   </tr>
@@ -512,19 +700,51 @@ function PayPortalInner() {
         </section>
 
         <section className="lg:col-span-2 rounded-2xl border border-base-300 bg-base-100 shadow-sm lg:sticky lg:top-20 lg:self-start">
-          <div className="border-b border-base-200 bg-base-200/40 px-4 py-3">
-            <h2 className="font-bold">Make a payment</h2>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
-              {formatMoney(payAmount)}
-            </p>
-            <p className="text-xs opacity-55">
-              {selectedInvoices.length} invoice{selectedInvoices.length === 1 ? "" : "s"} selected
-            </p>
+          <div className="border-b border-base-200 px-6 py-5">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-700/10 text-emerald-700 dark:text-emerald-400">
+                <CreditCard className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-bold">Make a Payment</h2>
+                <p className="mt-0.5 text-sm opacity-60">Review your total and continue to secure checkout</p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-emerald-700/15 bg-emerald-50 px-5 py-4 dark:bg-emerald-950/20">
+              <p className="text-sm font-medium uppercase tracking-wide text-emerald-800/70 dark:text-emerald-300/70">
+                Payment Amount
+              </p>
+              <p className="mt-1 text-3xl font-bold tabular-nums text-emerald-800 dark:text-emerald-300">
+                {formatMoney(payAmount)}
+              </p>
+              <p className="mt-2 text-sm opacity-70">
+                {selectedInvoices.length === 0
+                  ? "No invoices selected"
+                  : `${selectedInvoices.length} Invoice${selectedInvoices.length === 1 ? "" : "s"} Selected`}
+              </p>
+            </div>
+
+            {selectedInvoices.length > 0 ? (
+              <ul className="mt-4 space-y-2 border-t border-base-200 pt-4">
+                {selectedInvoices.map((inv) => (
+                  <li
+                    key={inv.id}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
+                    <span className="truncate font-medium">{inv.invoice_number}</span>
+                    <span className="shrink-0 tabular-nums opacity-80">
+                      {formatMoney(inv.remaining_balance)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
 
-          <div className="space-y-4 p-4">
+          <div className="space-y-6 p-6">
             {stripeSession ? (
-              <StripeCheckout
+              <PayPageStripeForm
                 clientSecret={stripeSession.clientSecret}
                 publishableKey={stripeSession.publishableKey}
                 amount={stripeSession.amount}
@@ -536,10 +756,10 @@ function PayPortalInner() {
             ) : (
               <>
                 {selectedInvoices.length === 1 ? (
-                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-base-200 bg-base-200/20 px-4 py-4">
                     <input
                       type="checkbox"
-                      className="checkbox checkbox-sm"
+                      className="checkbox checkbox-sm mt-0.5"
                       checked={partialMode}
                       onChange={(e) => {
                         setPartialMode(e.target.checked);
@@ -550,57 +770,70 @@ function PayPortalInner() {
                         }
                       }}
                     />
-                    Pay a different amount
+                    <span>
+                      <span className="block text-sm font-medium">Pay a Different Amount</span>
+                      <span className="mt-0.5 block text-sm opacity-60">
+                        Enter a partial payment toward this invoice
+                      </span>
+                    </span>
                   </label>
                 ) : null}
 
                 {partialMode && selectedInvoices.length === 1 ? (
-                  <label className="form-control">
-                    <span className="label-text text-xs">Amount to pay</span>
+                  <label className="form-control w-full gap-2">
+                    <span className="text-sm font-medium">Amount to Pay</span>
                     <input
                       type="number"
                       min="0.50"
                       step="0.01"
                       max={Number(selectedInvoices[0].remaining_balance)}
-                      className="input input-bordered input-sm"
+                      className="input input-bordered w-full"
                       value={customAmount}
                       onChange={(e) => setCustomAmount(e.target.value)}
                     />
+                    <span className="text-xs opacity-60">
+                      Maximum {formatMoney(selectedInvoices[0].remaining_balance)} remaining on this invoice
+                    </span>
                   </label>
                 ) : null}
 
-                <label className="form-control">
-                  <span className="label-text text-xs">Memo (optional)</span>
+                <label className="form-control w-full gap-2">
+                  <span className="text-sm font-medium">Memo (Optional)</span>
                   <input
-                    className="input input-bordered input-sm"
+                    className="input input-bordered w-full"
                     value={memo}
                     onChange={(e) => setMemo(e.target.value)}
-                    placeholder="Note for your records"
+                    placeholder="Add a note for your records"
                   />
                 </label>
 
-                <button
-                  type="button"
-                  className="btn btn-success w-full gap-2"
-                  disabled={
-                    busy ||
-                    selectedInvoices.length === 0 ||
-                    payAmount < 0.5 ||
-                    stripeConfigured === false
-                  }
-                  onClick={() => void startStripeCheckout()}
-                >
-                  {busy ? (
-                    <span className="loading loading-spinner loading-sm" />
-                  ) : (
-                    <CreditCard className="h-4 w-4" />
-                  )}
-                  Continue to Stripe · {formatMoney(payAmount)}
-                </button>
+                <div className="space-y-3 border-t border-base-200 pt-2">
+                  <button
+                    type="button"
+                    className="btn btn-success btn-lg w-full gap-2"
+                    disabled={
+                      busy ||
+                      selectedInvoices.length === 0 ||
+                      payAmount < 0.5 ||
+                      stripeConfigured === false
+                    }
+                    onClick={() => void startStripeCheckout()}
+                  >
+                    {busy ? (
+                      <span className="loading loading-spinner loading-sm" />
+                    ) : (
+                      <CreditCard className="h-5 w-5" />
+                    )}
+                    Continue to Secure Checkout
+                  </button>
+                  <p className="text-center text-sm font-medium tabular-nums opacity-80">
+                    Total: {formatMoney(payAmount)}
+                  </p>
+                </div>
 
-                <p className="text-[11px] leading-snug opacity-50">
-                  Card data is entered on Stripe&apos;s secure form (never stored in Ridley). Minimum charge
-                  $0.50.
+                <p className="text-center text-xs leading-relaxed opacity-60">
+                  Card and bank details are entered on Stripe&apos;s secure form and are never stored by Ridley
+                  Equipment Services. Minimum charge $0.50.
                 </p>
               </>
             )}
@@ -609,9 +842,9 @@ function PayPortalInner() {
       </div>
 
       <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
-        <div className="border-b border-base-200 px-4 py-3">
-          <h2 className="font-bold">Payment history</h2>
-          <p className="text-xs opacity-55">Recent payments on this account</p>
+        <div className="border-b border-base-200 px-5 py-4">
+          <h2 className="text-lg font-bold">Payment History</h2>
+          <p className="mt-1 text-sm opacity-60">Recent payments on this account</p>
         </div>
         {history.length === 0 ? (
           <p className="p-6 text-sm opacity-50">No payments recorded yet.</p>

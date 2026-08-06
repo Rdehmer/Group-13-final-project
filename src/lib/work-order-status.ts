@@ -3,6 +3,8 @@
  * Schedule placement and Work Orders status edits stay in sync via these helpers.
  */
 
+import type { WorkOrder } from "@/lib/types";
+
 export const WO_STATUSES = [
   "Requested",
   "Awaiting Approval",
@@ -85,4 +87,117 @@ export function scheduleFieldsForStatusChange(
 
 export function isTerminalWoStatus(status: string): boolean {
   return TERMINAL_STATUSES.has(status);
+}
+
+/** Customer Active Service progress stages (matches open-request UI order). */
+export const CUSTOMER_REQUEST_STAGE_KEYS = [
+  "Requested",
+  "Awaiting Approval",
+  "Scheduled",
+  "Assigned",
+  "In Progress",
+  "Waiting on Parts",
+  "Completed",
+] as const;
+
+export type CustomerRequestStageKey = (typeof CUSTOMER_REQUEST_STAGE_KEYS)[number];
+
+/** Customer-facing labels for progress bar and inbox drafts (matches open-request UI). */
+const CUSTOMER_REQUEST_STAGE_LABELS: Record<CustomerRequestStageKey, string> = {
+  Requested: "Submitted",
+  "Awaiting Approval": "Under Review",
+  Scheduled: "Scheduled",
+  Assigned: "Technician Assigned",
+  "In Progress": "In Progress",
+  "Waiting on Parts": "Waiting on Parts",
+  Completed: "Completed",
+};
+
+/** Maps internal WO status to the label customers see in Active Service. */
+export function customerRequestStageLabel(status: string): string {
+  if (status === "Canceled") return "Canceled";
+  if (status === "Closed") return "Completed";
+  if (status === "Ready for Review") return "In Progress";
+  return CUSTOMER_REQUEST_STAGE_LABELS[status as CustomerRequestStageKey] ?? status;
+}
+
+export type WorkOrderStatusActivity = {
+  action: string;
+  new_value: string | null;
+  created_at: string;
+};
+
+type StageDateWorkOrder = Pick<
+  WorkOrder,
+  "created_at" | "scheduled_date" | "started_at" | "completion_date" | "approved_at" | "status"
+>;
+
+/** Index of the work order's current stage in the customer progress bar. */
+export function customerRequestStageIndex(status: string): number {
+  if (status === "Closed") return CUSTOMER_REQUEST_STAGE_KEYS.length - 1;
+  if (status === "Canceled") return -1;
+  // Staff-only stage — customer stays on In Progress until Completed.
+  if (status === "Ready for Review") {
+    return CUSTOMER_REQUEST_STAGE_KEYS.indexOf("In Progress");
+  }
+  const idx = CUSTOMER_REQUEST_STAGE_KEYS.indexOf(status as CustomerRequestStageKey);
+  return idx >= 0 ? idx : 0;
+}
+
+function isoTimestamp(value: string): string {
+  return value.includes("T") ? value : `${value}T12:00:00`;
+}
+
+function earliestActivityDate(
+  logs: WorkOrderStatusActivity[],
+  status: string,
+): string | null {
+  const match = logs.find(
+    (row) => row.action === "status_change" && row.new_value === status,
+  );
+  return match?.created_at ?? null;
+}
+
+/**
+ * Best-effort stage dates for the customer progress bar.
+ * Status transitions are not fully audited; missing stages omit dates.
+ */
+export function buildWorkOrderStageDates(
+  wo: StageDateWorkOrder,
+  activityLogs: WorkOrderStatusActivity[] = [],
+): Partial<Record<CustomerRequestStageKey, string>> {
+  const currentIdx = customerRequestStageIndex(wo.status);
+  if (currentIdx < 0) return {};
+
+  const statusLogs = [...activityLogs]
+    .filter((row) => row.action === "status_change")
+    .sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+
+  const candidates: Record<CustomerRequestStageKey, string | null> = {
+    Requested: wo.created_at,
+    "Awaiting Approval": earliestActivityDate(statusLogs, "Awaiting Approval"),
+    Scheduled: wo.scheduled_date
+      ? isoTimestamp(wo.scheduled_date)
+      : earliestActivityDate(statusLogs, "Scheduled"),
+    Assigned: earliestActivityDate(statusLogs, "Assigned"),
+    "In Progress":
+      wo.started_at ?? earliestActivityDate(statusLogs, "In Progress"),
+    "Waiting on Parts": earliestActivityDate(statusLogs, "Waiting on Parts"),
+    Completed:
+      (wo.completion_date ? isoTimestamp(wo.completion_date) : null) ??
+      wo.approved_at ??
+      earliestActivityDate(statusLogs, "Completed") ??
+      earliestActivityDate(statusLogs, "Closed"),
+  };
+
+  const result: Partial<Record<CustomerRequestStageKey, string>> = {};
+  CUSTOMER_REQUEST_STAGE_KEYS.forEach((key, idx) => {
+    if (idx <= currentIdx && candidates[key]) {
+      result[key] = candidates[key]!;
+    }
+  });
+  return result;
 }

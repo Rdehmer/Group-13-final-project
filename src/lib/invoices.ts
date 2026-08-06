@@ -1,4 +1,5 @@
 import type { Equipment, Invoice, WorkOrder } from "@/lib/types";
+import type { ServiceHistoryRating } from "@/lib/service-ratings";
 
 export type ServiceHistoryInvoice = Pick<
   Invoice,
@@ -23,6 +24,7 @@ export type ServiceHistoryInvoice = Pick<
 export type ServiceHistoryWorkOrder = WorkOrder & {
   equipment?: Pick<Equipment, "id" | "name" | "location"> | null;
   invoices?: ServiceHistoryInvoice[] | null;
+  work_order_service_ratings?: ServiceHistoryRating[] | ServiceHistoryRating | null;
 };
 
 export type ServiceHistoryFilterTab = "all" | "completed" | "invoiced" | "open_balance";
@@ -106,12 +108,56 @@ export function invoicePaymentMessage(
         year: "numeric",
       })
     : null;
-  return due ? `Invoice unpaid — due ${due}` : "Invoice unpaid";
+  return due ? `Invoice Unpaid — Due ${due}` : "Invoice Unpaid";
+}
+
+export type InvoiceLineItem = {
+  label: string;
+  amount: number;
+  negative?: boolean;
+};
+
+/** Itemized charge rows for customer-facing invoice display (matches PDF / billing breakdown). */
+export function buildInvoiceLineItems(
+  invoice: Pick<
+    ServiceHistoryInvoice,
+    | "labor_charges"
+    | "parts_charges"
+    | "recurring_service_charge"
+    | "additional_charges"
+    | "warranty_deductions"
+    | "discounts"
+    | "tax"
+    | "invoice_total"
+  >,
+): InvoiceLineItem[] {
+  const lines: InvoiceLineItem[] = [];
+  const labor = Number(invoice.labor_charges ?? 0);
+  const parts = Number(invoice.parts_charges ?? 0);
+  const recurring = Number(invoice.recurring_service_charge ?? 0);
+  const additional = Number(invoice.additional_charges ?? 0);
+  const warranty = Number(invoice.warranty_deductions ?? 0);
+  const discounts = Number(invoice.discounts ?? 0);
+  const tax = Number(invoice.tax ?? 0);
+
+  if (labor > 0) lines.push({ label: "Labor", amount: labor });
+  if (parts > 0) lines.push({ label: "Parts / Materials", amount: parts });
+  if (recurring > 0) lines.push({ label: "Recurring Service", amount: recurring });
+  if (additional > 0) lines.push({ label: "Additional Charges", amount: additional });
+  if (warranty > 0) lines.push({ label: "Warranty Deductions", amount: warranty, negative: true });
+  if (discounts > 0) lines.push({ label: "Discounts", amount: discounts, negative: true });
+  if (tax > 0) lines.push({ label: "Tax", amount: tax });
+
+  if (lines.length === 0) {
+    lines.push({ label: "Service Charges", amount: Number(invoice.invoice_total ?? 0) });
+  }
+
+  return lines;
 }
 
 export function formatServiceDate(date: string | null | undefined): string {
   if (!date) return "—";
-  const parsed = new Date(`${date}T00:00:00`);
+  const parsed = date.includes("T") ? new Date(date) : new Date(`${date}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
   return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }

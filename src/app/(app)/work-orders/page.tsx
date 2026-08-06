@@ -7,6 +7,7 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Customer, Equipment, Profile, WorkOrder } from "@/lib/types";
+import { WORK_ORDER_TYPES } from "@/lib/work-order-types";
 
 function nextWoNumber() {
   return `WO-${Date.now().toString().slice(-8)}`;
@@ -111,12 +112,11 @@ export default function WorkOrdersPage() {
               </FormRow>
               <FormRow label="Type">
                 <select className="select select-bordered w-full" value={form.work_order_type} onChange={(e) => setForm({ ...form, work_order_type: e.target.value })}>
-                  <option>Preventive Maintenance</option>
-                  <option>Emergency Repair</option>
-                  <option>Inspection</option>
-                  <option>Warranty Repair</option>
-                  <option>Installation</option>
-                  <option>Follow-Up Service</option>
+                  {WORK_ORDER_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
                 </select>
               </FormRow>
               <FormRow label="Priority">

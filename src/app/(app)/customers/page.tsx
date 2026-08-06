@@ -7,6 +7,14 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import type { Customer } from "@/lib/types";
+import {
+  buildCustomerAddressPayload,
+  emptyCustomerAddressForm,
+  emptyToNull,
+  formatCustomerAddress,
+  formatCustomerLocationLabel,
+  nonEmpty,
+} from "@/lib/customer-address";
 
 type CustomerLocation = Customer;
 
@@ -17,26 +25,9 @@ const emptyCustomerForm = {
   primary_contact_name: "",
   email: "",
   phone: "",
-  service_address: "",
-  billing_address: "",
-  city: "",
-  state: "",
-  zip_code: "",
-  region: "",
-  country: "",
+  ...emptyCustomerAddressForm(),
   status: "Active" as Customer["status"],
 };
-
-function emptyToNull(value: string): string | null {
-  const t = value.trim();
-  return t.length > 0 ? t : null;
-}
-
-function nonEmpty(value: string | null | undefined): string | null {
-  if (value == null) return null;
-  const t = value.trim();
-  return t.length > 0 ? t : null;
-}
 
 function uniqueSorted(values: Array<string | null | undefined>): string[] {
   const set = new Set<string>();
@@ -58,25 +49,6 @@ function customerStatusTone(status: string): "success" | "warning" | "error" | "
   if (n === "inactive") return "error";
   if (n === "on hold" || n === "pending") return "warning";
   return "neutral";
-}
-
-function formatFullAddress(c: CustomerLocation): string {
-  const street = nonEmpty(c.service_address) ?? nonEmpty(c.billing_address);
-  const city = nonEmpty(c.city);
-  const state = nonEmpty(c.state);
-  const zip = nonEmpty(c.zip_code);
-  const region = nonEmpty(c.region);
-  const country = nonEmpty(c.country);
-
-  const cityState = [city, state].filter(Boolean).join(", ");
-  const cityStateZip = [cityState || null, zip].filter(Boolean).join(" ");
-
-  const lines = [street, cityStateZip || null, region, country].filter(Boolean) as string[];
-  return lines.length > 0 ? lines.join("\n") : "Address not provided";
-}
-
-function formatLocationLabel(c: CustomerLocation): string {
-  return [nonEmpty(c.city), nonEmpty(c.state)].filter(Boolean).join(", ") || "—";
 }
 
 function formatContactTip(c: CustomerLocation): string {
@@ -216,19 +188,13 @@ export default function CustomersPage() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    const street = emptyToNull(form.service_address);
+    const addressPayload = buildCustomerAddressPayload(form);
     const payload = {
       name: form.name.trim(),
       primary_contact_name: emptyToNull(form.primary_contact_name),
       email: emptyToNull(form.email),
       phone: emptyToNull(form.phone),
-      service_address: street,
-      billing_address: emptyToNull(form.billing_address) ?? street,
-      city: emptyToNull(form.city),
-      state: emptyToNull(form.state),
-      zip_code: emptyToNull(form.zip_code),
-      region: emptyToNull(form.region),
-      country: emptyToNull(form.country),
+      ...addressPayload,
       status: form.status,
     };
 
@@ -482,7 +448,7 @@ export default function CustomersPage() {
                 </thead>
                 <tbody>
                   {filteredCustomers.map((c) => {
-                    const locationLabel = formatLocationLabel(c);
+                    const locationLabel = formatCustomerLocationLabel(c);
                     const contactLabel = nonEmpty(c.primary_contact_name) ?? "—";
                     return (
                       <tr key={c.id}>
@@ -503,7 +469,7 @@ export default function CustomersPage() {
                           </InfoTip>
                         </td>
                         <td>
-                          <InfoTip tip={formatFullAddress(c)} label={`Full address for ${c.name}`}>
+                          <InfoTip tip={formatCustomerAddress(c)} label={`Full address for ${c.name}`}>
                             {locationLabel}
                           </InfoTip>
                         </td>

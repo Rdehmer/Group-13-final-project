@@ -31,7 +31,7 @@ export function FormRow({
     <label className="form-control grid grid-cols-1 items-center gap-1 sm:grid-cols-[8rem_1fr] sm:gap-3">
       <span className="label-text font-medium">
         {label}
-        {required ? " *" : ""}
+        {required ? <span className="text-error"> *</span> : null}
       </span>
       <div className="w-full">{children}</div>
     </label>

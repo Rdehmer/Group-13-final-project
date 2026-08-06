@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatCard } from "@/components/ui";
@@ -12,6 +13,8 @@ import {
   type ServiceHistoryFilterTab,
   type ServiceHistoryWorkOrder,
 } from "@/lib/invoices";
+import type { ServiceHistoryRating } from "@/lib/service-ratings";
+import { normalizeWorkOrderRating } from "@/lib/service-ratings";
 import type { Profile } from "@/lib/types";
 import { ServiceHistoryRow } from "./ServiceHistoryRow";
 
@@ -30,20 +33,48 @@ const SERVICE_HISTORY_SELECT = `
     labor_charges, parts_charges, recurring_service_charge,
     additional_charges, warranty_deductions, discounts, tax,
     invoice_total, amount_paid, remaining_balance, created_at
+  ),
+  work_order_service_ratings (
+    id, work_order_id, overall_rating, technician_rating,
+    timeliness_rating, quality_rating, comments, created_at
   )
 `;
 
-/**
- * This business faces customer communication gap risk when past service is hard to review.
- * Our app reduces the risk by giving customers a service history view with invoices and downloads.
- */
-export default function CustomerOrderHistoryPage() {
+function CustomerOrderHistoryPageInner() {
+  const searchParams = useSearchParams();
+  const rateWorkOrderId = searchParams.get("rate");
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [customer, setCustomer] = useState<InvoicePdfCustomer | null>(null);
   const [workOrders, setWorkOrders] = useState<ServiceHistoryWorkOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<ServiceHistoryFilterTab>("all");
+
+  const loadData = useCallback(async (customerId: string) => {
+    const [{ data: wo }, { data: cust }] = await Promise.all([
+      supabase
+        .from("work_orders")
+        .select(SERVICE_HISTORY_SELECT)
+        .eq("customer_id", customerId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("customers")
+        .select("name, email, phone, city, state")
+        .eq("id", customerId)
+        .single(),
+    ]);
+
+    setWorkOrders((wo as ServiceHistoryWorkOrder[]) ?? []);
+    if (cust) {
+      setCustomer({
+        name: cust.name,
+        email: cust.email,
+        phone: cust.phone,
+        city: cust.city,
+        state: cust.state,
+      });
+    }
+  }, [supabase]);
 
   useEffect(() => {
     (async () => {
@@ -55,33 +86,10 @@ export default function CustomerOrderHistoryPage() {
         setLoading(false);
         return;
       }
-
-      const [{ data: wo }, { data: cust }] = await Promise.all([
-        supabase
-          .from("work_orders")
-          .select(SERVICE_HISTORY_SELECT)
-          .eq("customer_id", p.customer_id)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("customers")
-          .select("name, email, phone, city, state")
-          .eq("id", p.customer_id)
-          .single(),
-      ]);
-
-      setWorkOrders((wo as ServiceHistoryWorkOrder[]) ?? []);
-      if (cust) {
-        setCustomer({
-          name: cust.name,
-          email: cust.email,
-          phone: cust.phone,
-          city: cust.city,
-          state: cust.state,
-        });
-      }
+      await loadData(p.customer_id);
       setLoading(false);
     })();
-  }, [supabase]);
+  }, [loadData, supabase]);
 
   const stats = useMemo(() => computeServiceHistoryStats(workOrders), [workOrders]);
 
@@ -89,6 +97,16 @@ export default function CustomerOrderHistoryPage() {
     () => workOrders.filter((wo) => serviceHistoryFilterTab(wo, filter)),
     [workOrders, filter],
   );
+
+  function handleRated(workOrderId: string, rating: ServiceHistoryRating) {
+    setWorkOrders((prev) =>
+      prev.map((wo) =>
+        wo.id === workOrderId
+          ? { ...wo, work_order_service_ratings: [rating] }
+          : wo,
+      ),
+    );
+  }
 
   if (loading || !profile) return <div className="p-8 text-center opacity-60">Loading…</div>;
 
@@ -106,20 +124,12 @@ export default function CustomerOrderHistoryPage() {
       <PageHeader
         title="Service History"
         description="Review past visits and download invoices when available."
-        actions={
-          <Link href="/customer/pay" className="btn btn-success btn-sm">
-            Pay bills
-          </Link>
-        }
       />
 
       {workOrders.length > 0 ? (
-        <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <div className="mb-6 grid gap-4 sm:grid-cols-2">
           <StatCard label="Total visits" value={stats.totalVisits} hint="All service records" />
           <StatCard label="Completed" value={stats.completed} hint="Finished visits" />
-          <Link href="/customer/pay" className="block rounded-box transition hover:opacity-90">
-            <StatCard label="Pay online" value="Portal" hint="QBO-style checkout →" />
-          </Link>
         </div>
       ) : null}
 
@@ -128,7 +138,7 @@ export default function CustomerOrderHistoryPage() {
           title="No service history"
           description="Your work orders will appear here after you submit a service request."
           action={
-            <Link href="/customer" className="btn btn-primary btn-sm">
+            <Link href="/customer/request-service" className="btn btn-primary btn-sm">
               Request Service
             </Link>
           }
@@ -161,12 +171,32 @@ export default function CustomerOrderHistoryPage() {
           ) : (
             <div className="space-y-3">
               {filteredOrders.map((wo) => (
-                <ServiceHistoryRow key={wo.id} workOrder={wo} customer={customer} />
+                <ServiceHistoryRow
+                  key={wo.id}
+                  workOrder={wo}
+                  customer={customer}
+                  customerId={profile.customer_id!}
+                  rating={normalizeWorkOrderRating(wo)}
+                  autoOpenRate={wo.id === rateWorkOrderId}
+                  onRated={(rating) => handleRated(wo.id, rating)}
+                />
               ))}
             </div>
           )}
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * This business faces customer communication gap risk when past service is hard to review.
+ * Our app reduces the risk by giving customers a service history view with invoices and downloads.
+ */
+export default function CustomerOrderHistoryPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center opacity-60">Loading…</div>}>
+      <CustomerOrderHistoryPageInner />
+    </Suspense>
   );
 }

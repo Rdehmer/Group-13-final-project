@@ -1,10 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CheckCircle2, MessageSquare } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { formatServiceDate } from "@/lib/invoices";
+import {
+  buildWorkOrderStageDates,
+  customerRequestStageIndex,
+  customerRequestStageLabel,
+  type WorkOrderStatusActivity,
+} from "@/lib/work-order-status";
 import type { Equipment, Profile, WorkOrder } from "@/lib/types";
 
 /** Customer-facing stages for tracking where a service request sits in the process. */
@@ -15,36 +24,35 @@ const REQUEST_STAGES = [
   { key: "Assigned", label: "Technician Assigned" },
   { key: "In Progress", label: "In Progress" },
   { key: "Waiting on Parts", label: "Waiting on Parts" },
-  { key: "Ready for Review", label: "Ready for Review" },
   { key: "Completed", label: "Completed" },
 ] as const;
 
 function stageIndex(status: string): number {
-  if (status === "Closed") return REQUEST_STAGES.length - 1;
-  if (status === "Canceled") return -1;
-  const idx = REQUEST_STAGES.findIndex((s) => s.key === status);
-  return idx >= 0 ? idx : 0;
+  return customerRequestStageIndex(status);
 }
 
 function stageLabel(status: string): string {
-  if (status === "Canceled") return "Canceled";
-  if (status === "Closed") return "Completed";
-  return REQUEST_STAGES.find((s) => s.key === status)?.label ?? status;
+  return customerRequestStageLabel(status);
 }
 
 type OpenWorkOrder = WorkOrder & {
   equipment?: Pick<Equipment, "id" | "name"> | null;
 };
 
-/**
- * This business faces customer communication gap risk when service status is opaque.
- * Our app reduces the risk by showing customers request status and process stage.
- */
-export default function OpenRequestPage() {
+function OpenRequestPageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const supabase = createClient();
+  const highlightId = searchParams.get("highlight");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [workOrders, setWorkOrders] = useState<OpenWorkOrder[]>([]);
+  const [statusActivities, setStatusActivities] = useState<
+    Record<string, WorkOrderStatusActivity[]>
+  >({});
   const [loading, setLoading] = useState(true);
+  const [showSubmittedBanner, setShowSubmittedBanner] = useState(Boolean(highlightId));
+  const highlightRef = useRef<HTMLElement>(null);
+  const scrolledToHighlight = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -64,10 +72,71 @@ export default function OpenRequestPage() {
         .eq("customer_id", p.customer_id)
         .not("status", "in", '("Completed","Closed","Canceled")')
         .order("created_at", { ascending: false });
-      setWorkOrders((wo as OpenWorkOrder[]) ?? []);
+      const orders = (wo as OpenWorkOrder[]) ?? [];
+      setWorkOrders(orders);
+
+      if (orders.length > 0) {
+        const { data: logs, error } = await supabase
+          .from("activity_logs")
+          .select("record_id, action, new_value, created_at")
+          .eq("record_type", "work_order")
+          .eq("action", "status_change")
+          .in(
+            "record_id",
+            orders.map((order) => order.id),
+          )
+          .order("created_at", { ascending: true });
+
+        if (!error && logs) {
+          const byWorkOrder: Record<string, WorkOrderStatusActivity[]> = {};
+          for (const row of logs) {
+            if (!row.record_id) continue;
+            const bucket = byWorkOrder[row.record_id] ?? [];
+            bucket.push({
+              action: row.action,
+              new_value: row.new_value,
+              created_at: row.created_at,
+            });
+            byWorkOrder[row.record_id] = bucket;
+          }
+          setStatusActivities(byWorkOrder);
+        }
+      }
+
       setLoading(false);
     })();
-  }, []);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (highlightId) {
+      setShowSubmittedBanner(true);
+      scrolledToHighlight.current = false;
+    }
+  }, [highlightId]);
+
+  const highlightedOrder = useMemo(
+    () => (highlightId ? workOrders.find((wo) => wo.id === highlightId) ?? null : null),
+    [workOrders, highlightId],
+  );
+
+  useEffect(() => {
+    if (loading || !highlightId || scrolledToHighlight.current) return;
+    if (!workOrders.some((wo) => wo.id === highlightId)) return;
+
+    const frame = requestAnimationFrame(() => {
+      highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      scrolledToHighlight.current = true;
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [loading, highlightId, workOrders]);
+
+  function dismissSubmittedBanner() {
+    setShowSubmittedBanner(false);
+    if (highlightId) {
+      router.replace("/customer/open-request", { scroll: false });
+    }
+  }
 
   if (loading || !profile) {
     return <div className="p-8 text-center opacity-60">Loading…</div>;
@@ -88,29 +157,62 @@ export default function OpenRequestPage() {
         title="Active Service"
         description="Track the status of your service requests and see where each one is in the process."
         actions={
-          <Link href="/customer" className="btn btn-outline btn-sm">
-            Submit new request
+          <Link href="/customer/request-service" className="btn btn-outline btn-sm">
+            Submit New Request
           </Link>
         }
       />
+
+      {showSubmittedBanner && highlightedOrder ? (
+        <div role="status" className="alert alert-success mb-6 shadow-sm">
+          <CheckCircle2 className="h-5 w-5 shrink-0" />
+          <div className="flex-1 text-sm">
+            <p className="font-medium">
+              {highlightedOrder.outside_contract ? "One-off call submitted" : "Service request submitted"}
+            </p>
+            <p className="opacity-80">
+              <span className="font-medium">{highlightedOrder.work_order_number}</span> is now in our queue.
+              {highlightedOrder.outside_contract
+                ? " A coordinator will review and schedule your billable visit at standard rates."
+                : " We'll review your request and confirm scheduling."}
+            </p>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={dismissSubmittedBanner}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {workOrders.length === 0 ? (
         <EmptyState
           title="No active service"
           description="When you submit a service request, its status and stage will appear here."
           action={
-            <Link href="/customer" className="btn btn-primary btn-sm">
-              Go to Home
+            <Link href="/customer/request-service" className="btn btn-primary btn-sm">
+              Request Service
             </Link>
           }
         />
       ) : (
         <div className="space-y-4">
           {workOrders.map((wo) => {
+            const highlighted = wo.id === highlightId;
             const current = stageIndex(wo.status);
+            const stageDates = buildWorkOrderStageDates(wo, statusActivities[wo.id] ?? []);
             return (
-              <article key={wo.id} className="card bg-base-100 shadow">
+              <article
+                key={wo.id}
+                ref={highlighted ? highlightRef : undefined}
+                className={`card bg-base-100 shadow transition-all duration-500 ${
+                  highlighted
+                    ? "ring-2 ring-primary/40 border border-primary/25 bg-primary/[0.04] shadow-md"
+                    : ""
+                }`}
+              >
                 <div className="card-body gap-4">
+                  {highlighted ? (
+                    <p className="text-xs font-medium uppercase tracking-wide text-primary">Just Submitted</p>
+                  ) : null}
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <h2 className="card-title text-base">{wo.work_order_number}</h2>
@@ -129,33 +231,55 @@ export default function OpenRequestPage() {
                   </div>
 
                   <div className="rounded-box bg-base-200/60 p-4">
-                    <p className="mb-3 text-sm font-medium">
-                      Current stage: <span className="text-primary">{stageLabel(wo.status)}</span>
-                      {wo.scheduled_date ? (
-                        <span className="ml-2 font-normal opacity-70">
-                          · Scheduled {wo.scheduled_date}
-                        </span>
-                      ) : null}
-                    </p>
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                      <p className="text-sm font-medium">
+                        Current stage: <span className="text-primary">{stageLabel(wo.status)}</span>
+                        {wo.scheduled_date ? (
+                          <span className="ml-2 font-normal opacity-70">
+                            · Scheduled {wo.scheduled_date}
+                          </span>
+                        ) : null}
+                      </p>
+                      <Link
+                        href={`/customer/inbox?work_order_id=${wo.id}`}
+                        className="btn btn-outline btn-xs gap-1 sm:btn-sm"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        Follow Up
+                      </Link>
+                    </div>
                     <ul className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-1">
                       {REQUEST_STAGES.map((stage, idx) => {
-                          const done = current > idx;
-                          const active = current === idx;
-                          return (
-                            <li
-                              key={stage.key}
-                              className={`rounded-box px-3 py-2 text-xs sm:flex-1 sm:min-w-[7rem] ${
-                                active
-                                  ? "bg-primary text-primary-content font-semibold"
-                                  : done
-                                    ? "bg-success/20 text-success"
-                                    : "bg-base-100 opacity-50"
-                              }`}
-                            >
-                              {stage.label}
-                            </li>
-                          );
-                        })}
+                        const done = current > idx;
+                        const active = current === idx;
+                        const stageDate =
+                          done || active
+                            ? stageDates[stage.key as keyof typeof stageDates]
+                            : undefined;
+                        return (
+                          <li
+                            key={stage.key}
+                            className={`rounded-box px-3 py-2 text-xs sm:min-w-[7rem] sm:flex-1 ${
+                              active
+                                ? "bg-primary font-semibold text-primary-content"
+                                : done
+                                  ? "bg-success/20 text-success"
+                                  : "bg-base-100 opacity-50"
+                            }`}
+                          >
+                            {stage.label}
+                            {stageDate ? (
+                              <span
+                                className={`mt-0.5 block text-[10px] font-normal ${
+                                  active ? "opacity-90" : "opacity-70"
+                                }`}
+                              >
+                                {formatServiceDate(stageDate)}
+                              </span>
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 </div>
@@ -165,5 +289,17 @@ export default function OpenRequestPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * This business faces customer communication gap risk when service status is opaque.
+ * Our app reduces the risk by showing customers request status and process stage.
+ */
+export default function OpenRequestPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center opacity-60">Loading…</div>}>
+      <OpenRequestPageInner />
+    </Suspense>
   );
 }

@@ -87,13 +87,28 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["customer"],
       },
       {
+        href: "/customer/contracts",
+        label: "My Contracts",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/equipment",
+        label: "My Equipment",
+        roles: ["customer"],
+      },
+      {
+        href: "/customer/request-service",
+        label: "Request Service",
+        roles: ["customer"],
+      },
+      {
         href: "/customer/open-request",
         label: "Active Service",
         roles: ["customer"],
       },
       {
-        href: "/customer/pay",
-        label: "Pay bills",
+        href: "/customer/inbox",
+        label: "Inbox",
         roles: ["customer"],
       },
       {
@@ -102,13 +117,8 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["customer"],
       },
       {
-        href: "/customer/contracts",
-        label: "My Contracts",
-        roles: ["customer"],
-      },
-      {
-        href: "/customer/equipment",
-        label: "My Equipment",
+        href: "/customer/pay",
+        label: "Payments",
         roles: ["customer"],
       },
     ],

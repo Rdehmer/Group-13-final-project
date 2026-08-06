@@ -120,6 +120,8 @@ export type WorkOrder = {
   approved_at: string | null;
   performed_before_approval: boolean;
   under_expired_contract: boolean;
+  /** Billable visit requested outside contract coverage (e.g. during 45-day start window). */
+  outside_contract?: boolean;
   costs_after_billing: boolean;
   completion_proof_requirement: "photo_or_signature" | "photo" | "signature" | "both";
   created_at: string;
@@ -134,6 +136,19 @@ export type WorkOrderCompletionProof = {
   base64_data: string | null;
   captured_at: string;
   technician_id: string;
+  created_at: string;
+};
+
+export type WorkOrderServiceRating = {
+  id: string;
+  work_order_id: string;
+  customer_id: string;
+  submitted_by: string | null;
+  overall_rating: number;
+  technician_rating: number | null;
+  timeliness_rating: number | null;
+  quality_rating: number | null;
+  comments: string | null;
   created_at: string;
 };
 
