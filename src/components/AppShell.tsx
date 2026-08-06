@@ -489,12 +489,14 @@ export function AppShell({
   const [pendingByHref, setPendingByHref] = useState<Record<string, number>>({});
   const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
   const isCustomer = profile.role === "customer";
-  const showManagerInbox = profile.role === "service_manager";
-  const canCollapseSidebar = profile.role === "service_manager";
+  const showManagerInbox =
+    profile.role === "service_manager" || profile.role === "administrator";
+  const canCollapseSidebar =
+    profile.role === "service_manager" || profile.role === "administrator";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const refreshUnread = useCallback(async () => {
-    if (profile.role !== "service_manager") {
+    if (profile.role !== "service_manager" && profile.role !== "administrator") {
       setUnreadInbox(0);
       return;
     }
@@ -509,7 +511,7 @@ export function AppShell({
 
   useEffect(() => {
     setMounted(true);
-    if (profile.role !== "service_manager") return;
+    if (profile.role !== "service_manager" && profile.role !== "administrator") return;
     try {
       setSidebarCollapsed(localStorage.getItem(MANAGER_SIDEBAR_COLLAPSED_KEY) === "1");
     } catch {

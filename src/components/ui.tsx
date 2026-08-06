@@ -40,7 +40,7 @@ export function statusTone(status: string): keyof typeof TONE {
   if (s.includes("waiting on parts") || s === "waiting for parts") return "white";
   if (s.includes("in progress")) return "progress";
   if (
-    ["emergency", "high", "pending", "on hold", "low stock", "overdue", "needs review"].some((x) =>
+    ["emergency", "high", "pending", "on hold", "low stock", "overdue", "needs review", "missing"].some((x) =>
       s.includes(x),
     )
   )
@@ -52,6 +52,7 @@ export function statusTone(status: string): keyof typeof TONE {
       "active",
       "approved",
       "accepted",
+      "submitted",
       "operational",
       "renewed",
       "reviewed",

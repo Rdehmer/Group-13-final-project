@@ -723,7 +723,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
     <div>
       <PageHeader
         title="Dashboard"
-        description="Manager overview — add widgets, resize frames, open any tile for details"
+        description="Operations overview — add widgets, resize frames, open any tile for details"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
