@@ -391,7 +391,6 @@ function SidebarNavBody({
   unreadInbox,
   badgeForHref,
   profileEmail,
-  isCustomer,
 }: {
   pathname: string;
   navItems: NavItem[];
@@ -400,30 +399,13 @@ function SidebarNavBody({
   unreadInbox: number;
   badgeForHref: (href: string) => number;
   profileEmail: string;
-  isCustomer: boolean;
 }) {
   return (
     <>
       <div className="eq-sidebar-brand">
-        {isCustomer ? (
-          <span aria-label="EquipmentIQ">
-            <EquipmentIQMark className="h-11 w-11" pop />
-          </span>
-        ) : (
-          <>
-            <div className="eq-brand-mark">
-              <Image
-                src="/equipmentiq-logo.png"
-                alt="EquipmentIQ"
-                width={200}
-                height={48}
-                className="eq-brand-logo"
-                priority
-              />
-            </div>
-            <p className="eq-brand-tag">Service operations</p>
-          </>
-        )}
+        <span aria-label="EquipmentIQ">
+          <EquipmentIQMark className="h-11 w-11" pop />
+        </span>
       </div>
 
       <div className="px-3 pb-2">
@@ -635,7 +617,6 @@ export function AppShell({
     unreadInbox,
     badgeForHref,
     profileEmail: profile.email,
-    isCustomer,
   };
 
   return (
