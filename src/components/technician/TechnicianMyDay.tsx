@@ -444,7 +444,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Link href="/parts" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <Package className="h-4 w-4" />
           Parts
@@ -452,6 +452,10 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         <Link href="/scheduling" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarDays className="h-4 w-4" />
           Hours
+        </Link>
+        <Link href="/timesheets" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
+          <CalendarDays className="h-4 w-4" />
+          Timesheet
         </Link>
         <Link href="/time-off" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarOff className="h-4 w-4" />

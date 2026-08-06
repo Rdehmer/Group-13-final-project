@@ -32,6 +32,7 @@ function gatedNavClassName(isBlocked: boolean, active: boolean, className?: stri
 function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/scheduling" && role === "technician") return "My Availability";
+  if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
   return item.label;
 }
 
