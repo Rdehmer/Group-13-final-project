@@ -12,6 +12,12 @@ function isPathActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/** Role-aware nav labels (same href, clearer names in the field). */
+function navLabel(item: NavItem, role: Profile["role"]): string {
+  if (item.href === "/technician" && role === "technician") return "My Day";
+  return item.label;
+}
+
 function NavLink({
   item,
   pathname,
@@ -30,6 +36,12 @@ function NavLink({
       {item.label}
     </Link>
   );
+}
+
+function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
+  const label = navLabel(item, role);
+  if (label === item.label) return item;
+  return { ...item, label };
 }
 
 function NavDetailsGroup({
@@ -75,7 +87,9 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role));
+  const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role)).map((item) =>
+    labeledNavItem(item, profile.role),
+  );
 
   async function logout() {
     const supabase = createClient();

@@ -1,21 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { format } from "date-fns";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, MapPin, Phone, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge, statusTone } from "@/components/ui";
 import { JobSheet } from "@/components/technician/JobSheet";
 import { createClient } from "@/lib/supabase/client";
 import {
   customerName,
+  humanizeFieldError,
+  isOpenJob,
   jobAddress,
+  jobPhone,
   jobTimeLabel,
+  mapsDirectionsUrl,
   nextChecklistStep,
   partitionMyDay,
   priorityBarClass,
+  telHref,
+  todayIso,
   type FieldJob,
 } from "@/lib/technician-field";
+import {
+  formatTimeOffLabel,
+  timeOffCoversDay,
+  type TimeOffRange,
+} from "@/lib/time-off";
 import type { Part, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
 
 type TruckRow = {
@@ -24,37 +36,85 @@ type TruckRow = {
   parts?: Part | null;
 };
 
+const POLL_MS = 45_000;
+
 function JobCard({
   job,
   cta,
   onOpen,
+  onApprovedLeave,
 }: {
   job: FieldJob;
   cta: string;
   onOpen: () => void;
+  onApprovedLeave?: boolean;
 }) {
+  const address = jobAddress(job);
+  const phone = jobPhone(job);
+
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="w-full overflow-hidden rounded-2xl border border-base-300 bg-base-100 text-left shadow-sm transition hover:border-primary/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    <div
+      className={`overflow-hidden rounded-2xl border bg-base-100 shadow-sm transition ${
+        onApprovedLeave
+          ? "border-warning/50 opacity-90"
+          : "border-base-300 hover:border-primary/40"
+      }`}
     >
-      <div className={`h-1.5 w-full ${priorityBarClass(job.priority)}`} aria-hidden />
-      <div className="flex items-start gap-3 p-4">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide opacity-60">{job.work_order_number}</span>
-            <StatusBadge label={job.priority} tone={statusTone(job.priority)} />
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      >
+        <div className={`h-1.5 w-full ${priorityBarClass(job.priority)}`} aria-hidden />
+        <div className="flex items-start gap-3 p-4 pb-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide opacity-60">
+                {job.work_order_number}
+              </span>
+              <StatusBadge label={job.priority} tone={statusTone(job.priority)} />
+              {onApprovedLeave ? (
+                <span className="badge badge-warning badge-sm">On approved leave day</span>
+              ) : null}
+            </div>
+            <p className="truncate text-lg font-bold leading-tight">{customerName(job)}</p>
+            <p className="text-sm opacity-70">{jobTimeLabel(job)}</p>
+            {address ? <p className="truncate text-sm opacity-60">{address}</p> : null}
+            <p className="line-clamp-2 text-sm leading-snug">
+              {job.problem_description || "No description"}
+            </p>
+            <p className="pt-1 text-sm font-semibold text-primary">{cta}</p>
           </div>
-          <p className="truncate text-lg font-bold leading-tight">{customerName(job)}</p>
-          <p className="text-sm opacity-70">{jobTimeLabel(job)}</p>
-          {jobAddress(job) ? <p className="truncate text-sm opacity-60">{jobAddress(job)}</p> : null}
-          <p className="line-clamp-2 text-sm leading-snug">{job.problem_description || "No description"}</p>
-          <p className="pt-1 text-sm font-semibold text-primary">{cta}</p>
+          <ChevronRight className="mt-1 h-5 w-5 shrink-0 opacity-40" aria-hidden />
         </div>
-        <ChevronRight className="mt-1 h-5 w-5 shrink-0 opacity-40" aria-hidden />
-      </div>
-    </button>
+      </button>
+      {(address || phone) && (
+        <div className="flex flex-wrap gap-2 border-t border-base-200 px-4 py-2">
+          {phone ? (
+            <a
+              href={telHref(phone)}
+              className="btn btn-outline btn-sm min-h-11 gap-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Phone className="h-4 w-4" />
+              Call
+            </a>
+          ) : null}
+          {address ? (
+            <a
+              href={mapsDirectionsUrl(address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-outline btn-sm min-h-11 gap-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MapPin className="h-4 w-4" />
+              Directions
+            </a>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -69,28 +129,45 @@ function stepCta(job: FieldJob): string {
 export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const supabase = createClient();
   const [jobs, setJobs] = useState<FieldJob[]>([]);
+  const [timeOff, setTimeOff] = useState<TimeOffRange[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [truckParts, setTruckParts] = useState<TruckRow[]>([]);
+  const [catalogParts, setCatalogParts] = useState<Part[]>([]);
   const [usedParts, setUsedParts] = useState<(WorkOrderPart & { parts?: Part | null })[]>([]);
   const [laborRows, setLaborRows] = useState<TechnicianLabor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
 
   const loadJobs = useCallback(async () => {
     setError(null);
     const { data, error: loadError } = await supabase
       .from("work_orders")
-      .select("*, customers(id, name, service_address, city, state)")
+      .select("*, customers(id, name, phone, service_address, city, state)")
       .eq("assigned_technician_id", profile.id)
       .not("status", "in", '("Canceled")')
       .order("scheduled_date", { ascending: true });
 
     if (loadError) {
-      setError(loadError.message);
+      setError(humanizeFieldError(loadError.message));
       setJobs([]);
       return;
     }
     setJobs((data as FieldJob[]) ?? []);
+  }, [profile.id, supabase]);
+
+  const loadTimeOff = useCallback(async () => {
+    const { data, error: qErr } = await supabase
+      .from("time_off_requests")
+      .select("id, technician_id, start_date, end_date, status, reason")
+      .eq("technician_id", profile.id)
+      .eq("status", "Approved");
+    if (qErr) {
+      // Table may be missing in some envs — don't block My Day
+      setTimeOff([]);
+      return;
+    }
+    setTimeOff((data as TimeOffRange[]) ?? []);
   }, [profile.id, supabase]);
 
   const loadTruck = useCallback(async () => {
@@ -99,11 +176,25 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
       .select("part_id, quantity_on_hand, parts(*)")
       .eq("technician_id", profile.id)
       .order("updated_at", { ascending: false });
-    setTruckParts(((data as unknown as TruckRow[]) ?? []).map((row) => ({
-      ...row,
-      parts: Array.isArray(row.parts) ? (row.parts[0] as Part | undefined) ?? null : row.parts ?? null,
-    })));
+    setTruckParts(
+      ((data as unknown as TruckRow[]) ?? []).map((row) => ({
+        ...row,
+        parts: Array.isArray(row.parts) ? (row.parts[0] as Part | undefined) ?? null : row.parts ?? null,
+      })),
+    );
   }, [profile.id, supabase]);
+
+  /** Same Parts catalog managers see (warehouse quantity_on_hand). */
+  const loadCatalog = useCallback(async () => {
+    const { data, error: loadError } = await supabase.from("parts").select("*").order("name");
+    if (loadError) {
+      setCatalogParts([]);
+      return;
+    }
+    const all = (data as Part[]) ?? [];
+    const active = all.filter((p) => p.is_active === true || p.is_active == null);
+    setCatalogParts(active.length > 0 ? active : all);
+  }, [supabase]);
 
   const loadUsedParts = useCallback(
     async (jobId: string) => {
@@ -131,23 +222,36 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   );
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadJobs(), loadTruck()]);
+    await Promise.all([loadJobs(), loadTruck(), loadCatalog(), loadTimeOff()]);
     if (selectedId) {
       await Promise.all([loadUsedParts(selectedId), loadLabor(selectedId)]);
     }
-  }, [loadJobs, loadTruck, loadUsedParts, loadLabor, selectedId]);
+    setLastSynced(new Date());
+  }, [loadJobs, loadTruck, loadCatalog, loadTimeOff, loadUsedParts, loadLabor, selectedId]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      await Promise.all([loadJobs(), loadTruck()]);
-      if (!cancelled) setLoading(false);
+      await Promise.all([loadJobs(), loadTruck(), loadCatalog(), loadTimeOff()]);
+      if (!cancelled) {
+        setLastSynced(new Date());
+        setLoading(false);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadJobs, loadTruck]);
+  }, [loadJobs, loadTruck, loadCatalog, loadTimeOff]);
+
+  // Quiet poll while looking at the list (dispatch reassigns, new jobs).
+  useEffect(() => {
+    if (selectedId) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshAll();
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [selectedId, refreshAll]);
 
   useEffect(() => {
     if (selectedId) {
@@ -162,14 +266,44 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const selected = useMemo(() => jobs.find((j) => j.id === selectedId) ?? null, [jobs, selectedId]);
   const { nowNext, later, closeout, upcoming } = useMemo(() => partitionMyDay(jobs), [jobs]);
 
+  const today = todayIso();
+  const leaveToday = useMemo(
+    () => timeOff.filter((r) => timeOffCoversDay(r, today)),
+    [timeOff, today],
+  );
+  const upcomingLeave = useMemo(
+    () =>
+      timeOff
+        .filter((r) => r.end_date.slice(0, 10) >= today)
+        .sort((a, b) => a.start_date.localeCompare(b.start_date)),
+    [timeOff, today],
+  );
+
+  const openWorking = useMemo(
+    () =>
+      jobs.filter(
+        (j) =>
+          isOpenJob(j) &&
+          (j.dispatch_status === "Working" || (Boolean(j.started_at) && nextChecklistStep(j) === "complete")),
+      ),
+    [jobs],
+  );
+
+  function isOnLeaveDay(job: FieldJob): boolean {
+    if (!job.scheduled_date) return false;
+    return timeOff.some((r) => timeOffCoversDay(r, job.scheduled_date!.slice(0, 10)));
+  }
+
   if (selected) {
     return (
       <JobSheet
         job={selected}
         profile={profile}
+        catalogParts={catalogParts}
         truckParts={truckParts}
         usedParts={usedParts}
         laborRows={laborRows}
+        otherOpenJobs={jobs.filter((j) => j.id !== selected.id && isOpenJob(j))}
         onBack={() => setSelectedId(null)}
         onRefresh={refreshAll}
       />
@@ -186,17 +320,67 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm opacity-70">
           {nowNext.length + later.length} today · {upcoming.length} upcoming · {closeout.length} need closeout
+          {lastSynced ? (
+            <span className="opacity-50"> · updated {format(lastSynced, "h:mm a")}</span>
+          ) : null}
         </p>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm min-h-11 gap-1"
-          onClick={() => void refreshAll()}
-          aria-label="Refresh jobs"
-        >
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Link href="/parts" className="btn btn-ghost btn-sm min-h-11">
+            Parts
+          </Link>
+          <Link href="/dispatch" className="btn btn-ghost btn-sm min-h-11">
+            Dispatch
+          </Link>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm min-h-11 gap-1"
+            onClick={() => void refreshAll()}
+            aria-label="Refresh jobs"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
+        </div>
       </div>
+
+      {leaveToday.length > 0 ? (
+        <div className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm" role="status">
+          <p className="font-semibold">You’re on approved time off today</p>
+          <p className="mt-1 opacity-80">
+            {leaveToday.map((r) => formatTimeOffLabel(r.start_date, r.end_date)).join(" · ")}
+            {leaveToday[0]?.reason ? ` — ${leaveToday[0].reason}` : ""}. Jobs below still appear if
+            dispatch left them scheduled; confirm with the office before driving.
+          </p>
+        </div>
+      ) : upcomingLeave.length > 0 ? (
+        <div className="rounded-2xl border border-base-300 bg-base-200/50 px-4 py-3 text-sm">
+          <p className="font-medium">Upcoming approved leave</p>
+          <ul className="mt-1 list-inside list-disc opacity-80">
+            {upcomingLeave.slice(0, 3).map((r) => (
+              <li key={r.id}>{formatTimeOffLabel(r.start_date, r.end_date)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {(closeout.length > 0 || openWorking.length > 0) && (
+        <div className="rounded-2xl border border-error/30 bg-error/5 px-4 py-3 text-sm" role="status">
+          <p className="font-semibold text-error">Before you log off</p>
+          <ul className="mt-1 list-inside list-disc opacity-80">
+            {openWorking.length > 0 ? (
+              <li>
+                {openWorking.length} job{openWorking.length === 1 ? "" : "s"} still in Working — clock
+                out with Complete.
+              </li>
+            ) : null}
+            {closeout.length > 0 ? (
+              <li>
+                {closeout.length} past job{closeout.length === 1 ? "" : "s"} need closeout / sign-off.
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      )}
 
       {error ? (
         <div className="rounded-xl bg-error/15 px-4 py-3 text-sm text-error" role="alert">
@@ -221,7 +405,13 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
               </p>
             ) : (
               nowNext.map((job) => (
-                <JobCard key={job.id} job={job} cta={stepCta(job)} onOpen={() => setSelectedId(job.id)} />
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  cta={stepCta(job)}
+                  onOpen={() => setSelectedId(job.id)}
+                  onApprovedLeave={isOnLeaveDay(job)}
+                />
               ))
             )}
           </section>
@@ -232,7 +422,13 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 Later today
               </h2>
               {later.map((job) => (
-                <JobCard key={job.id} job={job} cta={stepCta(job)} onOpen={() => setSelectedId(job.id)} />
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  cta={stepCta(job)}
+                  onOpen={() => setSelectedId(job.id)}
+                  onApprovedLeave={isOnLeaveDay(job)}
+                />
               ))}
             </section>
           ) : null}
@@ -243,7 +439,13 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 Upcoming
               </h2>
               {upcoming.map((job) => (
-                <JobCard key={job.id} job={job} cta={stepCta(job)} onOpen={() => setSelectedId(job.id)} />
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  cta={stepCta(job)}
+                  onOpen={() => setSelectedId(job.id)}
+                  onApprovedLeave={isOnLeaveDay(job)}
+                />
               ))}
             </section>
           ) : null}
@@ -254,7 +456,13 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 Needs closeout
               </h2>
               {closeout.map((job) => (
-                <JobCard key={job.id} job={job} cta="Close out past job" onOpen={() => setSelectedId(job.id)} />
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  cta="Close out past job"
+                  onOpen={() => setSelectedId(job.id)}
+                  onApprovedLeave={isOnLeaveDay(job)}
+                />
               ))}
             </section>
           ) : null}

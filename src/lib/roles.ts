@@ -38,6 +38,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/technician",
+    /** Managers see full schedule; techs land on “My Day” (label overridden in AppShell). */
     label: "Technician Schedule",
     roles: ["administrator", "service_manager", "technician"],
   },
