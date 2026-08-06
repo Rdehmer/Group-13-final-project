@@ -45,6 +45,7 @@ import {
 } from "@/lib/contract-monthly-economics";
 import { ClipboardList } from "lucide-react";
 import { formatMonthLabel } from "@/lib/billing";
+import { stripRequestPrefixFromContractName } from "@/lib/contracts";
 
 type ContractRow = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -439,16 +440,30 @@ export default function ContractsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const contract = contracts.find((c) => c.id === contractId);
+    const patch: {
+      status: string;
+      updated_at: string;
+      name?: string;
+    } = { status: next, updated_at: new Date().toISOString() };
+    if (contract && (next === "Active" || next === "Renewed")) {
+      const cleanedName = stripRequestPrefixFromContractName(contract.name);
+      if (cleanedName !== contract.name) patch.name = cleanedName;
+    }
     const { error: updateError } = await supabase
       .from("service_contracts")
-      .update({ status: next, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq("id", contractId);
     if (updateError) {
       setError(updateError.message);
       return;
     }
     setContracts((prev) =>
-      prev.map((c) => (c.id === contractId ? { ...c, status: next } : c)),
+      prev.map((c) =>
+        c.id === contractId
+          ? { ...c, status: next, ...(patch.name ? { name: patch.name } : {}) }
+          : c,
+      ),
     );
     await logActivity(supabase, {
       userId: user?.id ?? null,
@@ -481,10 +496,13 @@ export default function ContractsPage() {
       monthly = monthlyFromAnnual(price);
     }
 
+    const activatedName = stripRequestPrefixFromContractName(contract.name);
+
     const { error: updateError } = await supabase
       .from("service_contracts")
       .update({
         status: "Active",
+        name: activatedName,
         contract_price: price,
         monthly_amount: monthly,
         deductible,
@@ -502,6 +520,7 @@ export default function ContractsPage() {
           ? {
               ...c,
               status: "Active",
+              name: activatedName,
               contract_price: price,
               monthly_amount: monthly,
               deductible,

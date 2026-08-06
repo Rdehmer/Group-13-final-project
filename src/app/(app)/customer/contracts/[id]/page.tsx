@@ -15,6 +15,7 @@ import {
   formatRenewalNote,
   inferContractTier,
   isExpiringSoon,
+  formatContractDisplayName,
   parseCustomerContracts,
   tierBadgeClass,
   type CustomerContract,
@@ -163,6 +164,7 @@ export default function CustomerContractDetailPage() {
   }
 
   const tier = inferContractTier(contract.name);
+  const displayName = formatContractDisplayName(contract.name, contract.status);
   const renewal = formatRenewalNote(contract.renewal_option);
   const typeHelp = CONTRACT_TYPE_HELP[contract.contract_type];
   const isActive = contract.status.toLowerCase() === "active" || contract.status.toLowerCase() === "renewed";
@@ -178,7 +180,7 @@ export default function CustomerContractDetailPage() {
       </div>
 
       <PageHeader
-        title={contract.name}
+        title={displayName}
         description={typeHelp ?? contract.contract_type}
         actions={
           <div className="flex flex-wrap gap-2">

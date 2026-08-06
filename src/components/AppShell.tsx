@@ -20,7 +20,8 @@ import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
-import { countUnreadInboxThreads } from "@/lib/customer-inbox";
+import { EquipmentIQMark } from "@/components/brand/EquipmentIQLogo";
+import { countUnreadInboxThreads, CUSTOMER_INBOX_UNREAD_EVENT } from "@/lib/customer-inbox";
 import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
 
 const CUSTOMER_HOME = "/customer";
@@ -255,17 +256,22 @@ function InboxHeaderControl({
   const active = isPathActive(pathname, href);
   const showBadge = unreadCount > 0;
   const className = `eq-top-icon ${active ? "eq-top-icon--active" : ""}`;
+  const badge = showBadge ? (
+    <span className="eq-top-dot">{unreadCount > 9 ? "9+" : unreadCount}</span>
+  ) : null;
 
   if (isGateActive && blockNavigation) {
     return (
       <span
         role="link"
         aria-disabled="true"
-        aria-label="Inbox"
+        aria-label={showBadge ? `Inbox, ${unreadCount} unread` : "Inbox"}
+        title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
         className={`${className} pointer-events-none cursor-not-allowed opacity-40`}
         onClick={blockNavigation}
       >
         <Mail className="h-[18px] w-[18px]" strokeWidth={1.75} />
+        {badge}
       </span>
     );
   }
@@ -278,7 +284,7 @@ function InboxHeaderControl({
       title={showBadge ? `${unreadCount} unread message${unreadCount === 1 ? "" : "s"}` : "Inbox"}
     >
       <Mail className="h-[18px] w-[18px]" strokeWidth={1.75} />
-      {showBadge ? <span className="eq-top-dot">{unreadCount > 9 ? "9+" : unreadCount}</span> : null}
+      {badge}
     </Link>
   );
 }
@@ -293,20 +299,23 @@ function CustomerInboxHeaderControl({
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   const pathname = usePathname();
-  const supabase = createClient();
   const [unreadCount, setUnreadCount] = useState(0);
 
   const refreshUnread = useCallback(async () => {
+    const supabase = createClient();
     const count = await countUnreadInboxThreads(supabase, customerId);
     setUnreadCount(count);
-  }, [customerId, supabase]);
+  }, [customerId]);
 
   useEffect(() => {
     void refreshUnread();
-    const id = window.setInterval(() => {
-      void refreshUnread();
-    }, UNREAD_POLL_MS);
-    return () => window.clearInterval(id);
+    const onUnreadChanged = () => void refreshUnread();
+    window.addEventListener(CUSTOMER_INBOX_UNREAD_EVENT, onUnreadChanged);
+    const id = window.setInterval(() => void refreshUnread(), UNREAD_POLL_MS);
+    return () => {
+      window.removeEventListener(CUSTOMER_INBOX_UNREAD_EVENT, onUnreadChanged);
+      window.clearInterval(id);
+    };
   }, [refreshUnread, pathname]);
 
   return (
@@ -444,11 +453,11 @@ export function AppShell({
       <input id="app-drawer" type="checkbox" className="drawer-toggle" />
       <div className="drawer-content flex min-h-screen flex-col">
         <header className="eq-topbar">
-          <div className="flex flex-none items-center gap-2 lg:hidden">
-            <label htmlFor="app-drawer" className="eq-top-icon" aria-label="Open menu">
+          <div className="flex flex-none items-center gap-2">
+            <label htmlFor="app-drawer" className="eq-top-icon lg:hidden" aria-label="Open menu">
               <Menu className="h-5 w-5" strokeWidth={1.75} />
             </label>
-            <div className="relative h-8 w-[132px] sm:hidden">
+            <div className="relative h-8 w-[132px] sm:hidden lg:hidden">
               <Image
                 src="/equipmentiq-logo.png"
                 alt="EquipmentIQ"
@@ -460,44 +469,54 @@ export function AppShell({
             </div>
           </div>
 
-          <div className="eq-search min-w-0 flex-1">
-            <Search className="eq-search-icon" strokeWidth={1.75} />
-            <input
-              type="search"
-              className="eq-search-input"
-              placeholder="Search customers, invoices, work orders…"
-              aria-label="Search"
-              readOnly
-              onFocus={(e) => e.currentTarget.blur()}
-              title="Search (coming soon)"
-            />
-          </div>
+          {!isCustomer ? (
+            <div className="eq-search min-w-0 flex-1">
+              <Search className="eq-search-icon" strokeWidth={1.75} />
+              <input
+                type="search"
+                className="eq-search-input"
+                placeholder="Search customers, invoices, work orders…"
+                aria-label="Search"
+                readOnly
+                onFocus={(e) => e.currentTarget.blur()}
+                title="Search (coming soon)"
+              />
+            </div>
+          ) : (
+            <div className="min-w-0 flex-1" aria-hidden />
+          )}
 
           <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-            {!gateActive ? (
+            {!isCustomer && !gateActive ? (
               <Link href={createHref} className="eq-create-btn">
                 <Plus className="h-4 w-4" strokeWidth={2.25} />
                 <span className="hidden sm:inline">New</span>
               </Link>
             ) : null}
 
-            <div className="eq-top-divider hidden sm:block" />
+            {!isCustomer ? <div className="eq-top-divider hidden sm:block" /> : null}
 
             {inboxControl}
-            <button type="button" className="eq-top-icon" aria-label="Notifications" title="Notifications">
-              <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            </button>
-            <button type="button" className="eq-top-icon hidden sm:inline-flex" aria-label="Help" title="Help">
-              <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            </button>
-            <Link
-              href="/settings"
-              className="eq-top-icon hidden sm:inline-flex"
-              aria-label="Settings"
-              title="Settings"
-            >
-              <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            </Link>
+            {!isCustomer ? (
+              <>
+                <button type="button" className="eq-top-icon" aria-label="Notifications" title="Notifications">
+                  <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+                <button type="button" className="eq-top-icon hidden sm:inline-flex" aria-label="Help" title="Help">
+                  <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+              </>
+            ) : null}
+            {!isCustomer ? (
+              <Link
+                href="/settings"
+                className="eq-top-icon hidden sm:inline-flex"
+                aria-label="Settings"
+                title="Settings"
+              >
+                <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
+              </Link>
+            ) : null}
 
             <div className="eq-user-menu">
               <span className="eq-avatar" aria-hidden>
@@ -540,17 +559,9 @@ export function AppShell({
         />
         <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
           <div className="eq-sidebar-brand">
-            <div className="eq-brand-mark">
-              <Image
-                src="/equipmentiq-logo.png"
-                alt="EquipmentIQ"
-                width={200}
-                height={48}
-                className="eq-brand-logo"
-                priority
-              />
-            </div>
-            <p className="eq-brand-tag">Service operations</p>
+            <span aria-label="EquipmentIQ">
+              <EquipmentIQMark className="h-11 w-11" pop />
+            </span>
           </div>
 
           <div className="px-3 pb-2">

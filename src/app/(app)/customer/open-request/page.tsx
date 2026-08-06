@@ -1,39 +1,21 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, MessageSquare } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { MessageSquare } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatServiceDate } from "@/lib/invoices";
 import {
   buildWorkOrderStageDates,
+  CUSTOMER_REQUEST_STAGES,
   customerRequestStageIndex,
   customerRequestStageLabel,
   type WorkOrderStatusActivity,
 } from "@/lib/work-order-status";
 import type { Equipment, Profile, WorkOrder } from "@/lib/types";
-
-/** Customer-facing stages for tracking where a service request sits in the process. */
-const REQUEST_STAGES = [
-  { key: "Requested", label: "Submitted" },
-  { key: "Awaiting Approval", label: "Under Review" },
-  { key: "Scheduled", label: "Scheduled" },
-  { key: "Assigned", label: "Technician Assigned" },
-  { key: "In Progress", label: "In Progress" },
-  { key: "Waiting on Parts", label: "Waiting on Parts" },
-  { key: "Completed", label: "Completed" },
-] as const;
-
-function stageIndex(status: string): number {
-  return customerRequestStageIndex(status);
-}
-
-function stageLabel(status: string): string {
-  return customerRequestStageLabel(status);
-}
 
 type OpenWorkOrder = WorkOrder & {
   equipment?: Pick<Equipment, "id" | "name"> | null;
@@ -41,7 +23,6 @@ type OpenWorkOrder = WorkOrder & {
 
 function OpenRequestPageInner() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const supabase = createClient();
   const highlightId = searchParams.get("highlight");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -50,7 +31,6 @@ function OpenRequestPageInner() {
     Record<string, WorkOrderStatusActivity[]>
   >({});
   const [loading, setLoading] = useState(true);
-  const [showSubmittedBanner, setShowSubmittedBanner] = useState(Boolean(highlightId));
   const highlightRef = useRef<HTMLElement>(null);
   const scrolledToHighlight = useRef(false);
 
@@ -109,15 +89,9 @@ function OpenRequestPageInner() {
 
   useEffect(() => {
     if (highlightId) {
-      setShowSubmittedBanner(true);
       scrolledToHighlight.current = false;
     }
   }, [highlightId]);
-
-  const highlightedOrder = useMemo(
-    () => (highlightId ? workOrders.find((wo) => wo.id === highlightId) ?? null : null),
-    [workOrders, highlightId],
-  );
 
   useEffect(() => {
     if (loading || !highlightId || scrolledToHighlight.current) return;
@@ -130,13 +104,6 @@ function OpenRequestPageInner() {
 
     return () => cancelAnimationFrame(frame);
   }, [loading, highlightId, workOrders]);
-
-  function dismissSubmittedBanner() {
-    setShowSubmittedBanner(false);
-    if (highlightId) {
-      router.replace("/customer/open-request", { scroll: false });
-    }
-  }
 
   if (loading || !profile) {
     return <div className="p-8 text-center opacity-60">Loading…</div>;
@@ -163,26 +130,6 @@ function OpenRequestPageInner() {
         }
       />
 
-      {showSubmittedBanner && highlightedOrder ? (
-        <div role="status" className="alert alert-success mb-6 shadow-sm">
-          <CheckCircle2 className="h-5 w-5 shrink-0" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium">
-              {highlightedOrder.outside_contract ? "One-off call submitted" : "Service request submitted"}
-            </p>
-            <p className="opacity-80">
-              <span className="font-medium">{highlightedOrder.work_order_number}</span> is now in our queue.
-              {highlightedOrder.outside_contract
-                ? " A coordinator will review and schedule your billable visit at standard rates."
-                : " We'll review your request and confirm scheduling."}
-            </p>
-          </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={dismissSubmittedBanner}>
-            Dismiss
-          </button>
-        </div>
-      ) : null}
-
       {workOrders.length === 0 ? (
         <EmptyState
           title="No active service"
@@ -197,23 +144,17 @@ function OpenRequestPageInner() {
         <div className="space-y-4">
           {workOrders.map((wo) => {
             const highlighted = wo.id === highlightId;
-            const current = stageIndex(wo.status);
+            const current = customerRequestStageIndex(wo);
             const stageDates = buildWorkOrderStageDates(wo, statusActivities[wo.id] ?? []);
             return (
-              <article
+              <div
                 key={wo.id}
                 ref={highlighted ? highlightRef : undefined}
-                className={`card bg-base-100 shadow transition-all duration-500 ${
-                  highlighted
-                    ? "ring-2 ring-primary/40 border border-primary/25 bg-primary/[0.04] shadow-md"
-                    : ""
-                }`}
+                className={highlighted ? "customer-request-highlight-wrap" : undefined}
               >
-                <div className="card-body gap-4">
-                  {highlighted ? (
-                    <p className="text-xs font-medium uppercase tracking-wide text-primary">Just Submitted</p>
-                  ) : null}
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <article className="card bg-base-100 shadow">
+                  <div className="card-body gap-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <h2 className="card-title text-base">{wo.work_order_number}</h2>
                       <p className="mt-1 text-sm opacity-70">
@@ -233,7 +174,7 @@ function OpenRequestPageInner() {
                   <div className="rounded-box bg-base-200/60 p-4">
                     <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
                       <p className="text-sm font-medium">
-                        Current stage: <span className="text-primary">{stageLabel(wo.status)}</span>
+                        Current stage: <span className="text-primary">{customerRequestStageLabel(wo)}</span>
                         {wo.scheduled_date ? (
                           <span className="ml-2 font-normal opacity-70">
                             · Scheduled {wo.scheduled_date}
@@ -249,13 +190,11 @@ function OpenRequestPageInner() {
                       </Link>
                     </div>
                     <ul className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-1">
-                      {REQUEST_STAGES.map((stage, idx) => {
+                      {CUSTOMER_REQUEST_STAGES.map((stage, idx) => {
                         const done = current > idx;
                         const active = current === idx;
                         const stageDate =
-                          done || active
-                            ? stageDates[stage.key as keyof typeof stageDates]
-                            : undefined;
+                          done || active ? stageDates[stage.key] : undefined;
                         return (
                           <li
                             key={stage.key}
@@ -284,6 +223,7 @@ function OpenRequestPageInner() {
                   </div>
                 </div>
               </article>
+              </div>
             );
           })}
         </div>

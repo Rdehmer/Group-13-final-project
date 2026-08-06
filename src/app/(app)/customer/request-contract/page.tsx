@@ -162,7 +162,7 @@ export default function RequestContractPage() {
               selectedTier={selectedTier}
               selectedPackId={selectedPackId}
               onSuccess={({ id }) => {
-                router.push(`/customer/contracts?filter=pending&highlight=${id}`);
+                router.push(`/customer/contracts?highlight=${id}`);
               }}
               onEquipmentAdded={(item) => {
                 setEquipment((prev) =>

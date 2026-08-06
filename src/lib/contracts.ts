@@ -273,6 +273,25 @@ export function buildCustomerRequestContractName(input: {
   return `[Request] ${customer} · ${middle} · ${date} · REQ-${code}`;
 }
 
+const REQUEST_CONTRACT_NAME_PREFIX = "[Request]";
+
+/** Strip portal submission prefix once a contract is active (or for display). */
+export function stripRequestPrefixFromContractName(name: string): string {
+  const trimmed = name.trimStart();
+  if (trimmed.startsWith(REQUEST_CONTRACT_NAME_PREFIX)) {
+    return trimmed.slice(REQUEST_CONTRACT_NAME_PREFIX.length).trimStart();
+  }
+  return name;
+}
+
+export function formatContractDisplayName(name: string, status: string): string {
+  const s = status.toLowerCase();
+  if (s === "active" || s === "renewed") {
+    return stripRequestPrefixFromContractName(name);
+  }
+  return name;
+}
+
 type BuildSubmissionInput = {
   customerId: string;
   customerName: string;

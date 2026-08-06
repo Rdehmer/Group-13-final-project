@@ -2,8 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatCard } from "@/components/ui";
@@ -30,7 +29,6 @@ const FILTER_TABS: { id: ContractFilterTab; label: string }[] = [
 
 function CustomerContractsPageInner() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [contracts, setContracts] = useState<CustomerContract[]>([]);
@@ -45,7 +43,6 @@ function CustomerContractsPageInner() {
         ? "pending"
         : "all",
   );
-  const [showSubmittedBanner, setShowSubmittedBanner] = useState(Boolean(highlightId));
   const highlightRef = useRef<HTMLElement>(null);
   const scrolledToHighlight = useRef(false);
 
@@ -85,15 +82,9 @@ function CustomerContractsPageInner() {
   useEffect(() => {
     if (highlightId) {
       setFilter("pending");
-      setShowSubmittedBanner(true);
       scrolledToHighlight.current = false;
     }
   }, [highlightId]);
-
-  const highlightedContract = useMemo(
-    () => (highlightId ? contracts.find((c) => c.id === highlightId) ?? null : null),
-    [contracts, highlightId],
-  );
 
   const activeContracts = useMemo(
     () => contracts.filter((c) => contractFilterTab(c, "active")),
@@ -139,13 +130,6 @@ function CustomerContractsPageInner() {
     return () => cancelAnimationFrame(frame);
   }, [loading, highlightId, filteredContracts]);
 
-  function dismissSubmittedBanner() {
-    setShowSubmittedBanner(false);
-    if (highlightId) {
-      router.replace("/customer/contracts?filter=pending", { scroll: false });
-    }
-  }
-
   if (loading || !profile) return <div className="p-8 text-center opacity-60">Loading…</div>;
 
   if (!profile.customer_id) {
@@ -165,22 +149,6 @@ function CustomerContractsPageInner() {
           </Link>
         }
       />
-
-      {showSubmittedBanner && highlightedContract ? (
-        <div role="status" className="alert alert-success mb-6 shadow-sm">
-          <CheckCircle2 className="h-5 w-5 shrink-0" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium">Contract request submitted</p>
-            <p className="opacity-80">
-              <span className="font-medium">{highlightedContract.name}</span> is pending Ridley&apos;s review.
-              Pricing will be confirmed before activation.
-            </p>
-          </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={dismissSubmittedBanner}>
-            Dismiss
-          </button>
-        </div>
-      ) : null}
 
       {contracts.length === 0 ? (
         <EmptyState
@@ -259,15 +227,21 @@ function CustomerContractsPageInner() {
             />
           ) : (
             <div className="space-y-4">
-              {filteredContracts.map((contract) => (
-                <ContractCard
-                  key={contract.id}
-                  contract={contract}
-                  standing={standingById.get(contract.id)}
-                  highlighted={contract.id === highlightId}
-                  highlightRef={contract.id === highlightId ? highlightRef : undefined}
-                />
-              ))}
+              {filteredContracts.map((contract) => {
+                const highlighted = contract.id === highlightId;
+                return (
+                  <div
+                    key={contract.id}
+                    ref={highlighted ? highlightRef : undefined}
+                    className={highlighted ? "customer-request-highlight-wrap" : undefined}
+                  >
+                    <ContractCard
+                      contract={contract}
+                      standing={standingById.get(contract.id)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
         </>

@@ -95,36 +95,92 @@ export function isTerminalWoStatus(status: string): boolean {
   return TERMINAL_STATUSES.has(status);
 }
 
-/** Customer Active Service progress stages (matches open-request UI order). */
-export const CUSTOMER_REQUEST_STAGE_KEYS = [
-  "Requested",
-  "Awaiting Approval",
-  "Scheduled",
-  "Assigned",
-  "In Progress",
-  "Waiting on Parts",
-  "Completed",
+/** Customer Active Service progress stages (aligned with technician field checklist). */
+export const CUSTOMER_REQUEST_STAGES = [
+  { key: "submitted", label: "Submitted" },
+  { key: "scheduled", label: "Scheduled" },
+  { key: "arrived", label: "Arrived" },
+  { key: "in_progress", label: "In Progress" },
+  { key: "completed", label: "Completed" },
 ] as const;
 
-export type CustomerRequestStageKey = (typeof CUSTOMER_REQUEST_STAGE_KEYS)[number];
+export type CustomerRequestStageKey = (typeof CUSTOMER_REQUEST_STAGES)[number]["key"];
 
-/** Customer-facing labels for progress bar and inbox drafts (matches open-request UI). */
-const CUSTOMER_REQUEST_STAGE_LABELS: Record<CustomerRequestStageKey, string> = {
-  Requested: "Submitted",
-  "Awaiting Approval": "Under Review",
-  Scheduled: "Scheduled",
-  Assigned: "Technician Assigned",
-  "In Progress": "In Progress",
-  "Waiting on Parts": "Waiting on Parts",
-  Completed: "Completed",
-};
+/** @deprecated Use CUSTOMER_REQUEST_STAGES */
+export const CUSTOMER_REQUEST_STAGE_KEYS = CUSTOMER_REQUEST_STAGES.map((s) => s.key);
 
-/** Maps internal WO status to the label customers see in Active Service. */
-export function customerRequestStageLabel(status: string): string {
-  if (status === "Canceled") return "Canceled";
-  if (status === "Closed") return "Completed";
-  if (status === "Ready for Review") return "In Progress";
-  return CUSTOMER_REQUEST_STAGE_LABELS[status as CustomerRequestStageKey] ?? status;
+type CustomerStageWorkOrder = Pick<
+  WorkOrder,
+  | "status"
+  | "arrival_at"
+  | "started_at"
+  | "dispatch_status"
+  | "scheduled_date"
+  | "created_at"
+  | "completion_date"
+  | "approved_at"
+>;
+
+/** Resolve the customer-facing stage from work order fields (matches technician field flow). */
+export function resolveCustomerRequestStage(
+  wo: CustomerStageWorkOrder,
+): CustomerRequestStageKey {
+  const s = wo.status;
+  if (s === "Completed" || s === "Closed") return "completed";
+
+  const inProgress =
+    s === "In Progress" ||
+    s === "Waiting on Parts" ||
+    s === "Ready for Review" ||
+    Boolean(wo.started_at) ||
+    wo.dispatch_status === "Working";
+
+  if (inProgress) return "in_progress";
+
+  if (Boolean(wo.arrival_at) || wo.dispatch_status === "Arrived") return "arrived";
+
+  if (
+    s === "Scheduled" ||
+    s === "Assigned" ||
+    s === "Awaiting Approval" ||
+    Boolean(wo.scheduled_date)
+  ) {
+    return "scheduled";
+  }
+
+  return "submitted";
+}
+
+function customerRequestStageIndexFromStatus(status: string): number {
+  if (status === "Completed" || status === "Closed") {
+    return CUSTOMER_REQUEST_STAGES.findIndex((s) => s.key === "completed");
+  }
+  if (status === "Canceled") return -1;
+  if (["In Progress", "Waiting on Parts", "Ready for Review"].includes(status)) {
+    return CUSTOMER_REQUEST_STAGES.findIndex((s) => s.key === "in_progress");
+  }
+  if (["Scheduled", "Assigned", "Awaiting Approval"].includes(status)) {
+    return CUSTOMER_REQUEST_STAGES.findIndex((s) => s.key === "scheduled");
+  }
+  if (status === "Requested") {
+    return CUSTOMER_REQUEST_STAGES.findIndex((s) => s.key === "submitted");
+  }
+  return 0;
+}
+
+/** Maps internal WO status / fields to the label customers see in Active Service. */
+export function customerRequestStageLabel(
+  woOrStatus: CustomerStageWorkOrder | string,
+): string {
+  if (typeof woOrStatus === "string") {
+    const status = woOrStatus;
+    if (status === "Canceled") return "Canceled";
+    const idx = customerRequestStageIndexFromStatus(status);
+    return idx >= 0 ? CUSTOMER_REQUEST_STAGES[idx]!.label : status;
+  }
+  if (woOrStatus.status === "Canceled") return "Canceled";
+  const key = resolveCustomerRequestStage(woOrStatus);
+  return CUSTOMER_REQUEST_STAGES.find((s) => s.key === key)?.label ?? woOrStatus.status;
 }
 
 export type WorkOrderStatusActivity = {
@@ -133,21 +189,18 @@ export type WorkOrderStatusActivity = {
   created_at: string;
 };
 
-type StageDateWorkOrder = Pick<
-  WorkOrder,
-  "created_at" | "scheduled_date" | "started_at" | "completion_date" | "approved_at" | "status"
->;
+type StageDateWorkOrder = CustomerStageWorkOrder;
 
 /** Index of the work order's current stage in the customer progress bar. */
-export function customerRequestStageIndex(status: string): number {
-  if (status === "Closed") return CUSTOMER_REQUEST_STAGE_KEYS.length - 1;
-  if (status === "Canceled") return -1;
-  // Staff-only stage — customer stays on In Progress until Completed.
-  if (status === "Ready for Review") {
-    return CUSTOMER_REQUEST_STAGE_KEYS.indexOf("In Progress");
+export function customerRequestStageIndex(
+  woOrStatus: CustomerStageWorkOrder | string,
+): number {
+  if (typeof woOrStatus === "string") {
+    return customerRequestStageIndexFromStatus(woOrStatus);
   }
-  const idx = CUSTOMER_REQUEST_STAGE_KEYS.indexOf(status as CustomerRequestStageKey);
-  return idx >= 0 ? idx : 0;
+  if (woOrStatus.status === "Canceled") return -1;
+  const key = resolveCustomerRequestStage(woOrStatus);
+  return CUSTOMER_REQUEST_STAGES.findIndex((s) => s.key === key);
 }
 
 function isoTimestamp(value: string): string {
@@ -172,7 +225,7 @@ export function buildWorkOrderStageDates(
   wo: StageDateWorkOrder,
   activityLogs: WorkOrderStatusActivity[] = [],
 ): Partial<Record<CustomerRequestStageKey, string>> {
-  const currentIdx = customerRequestStageIndex(wo.status);
+  const currentIdx = customerRequestStageIndex(wo);
   if (currentIdx < 0) return {};
 
   const statusLogs = [...activityLogs]
@@ -183,16 +236,16 @@ export function buildWorkOrderStageDates(
     );
 
   const candidates: Record<CustomerRequestStageKey, string | null> = {
-    Requested: wo.created_at,
-    "Awaiting Approval": earliestActivityDate(statusLogs, "Awaiting Approval"),
-    Scheduled: wo.scheduled_date
-      ? isoTimestamp(wo.scheduled_date)
-      : earliestActivityDate(statusLogs, "Scheduled"),
-    Assigned: earliestActivityDate(statusLogs, "Assigned"),
-    "In Progress":
+    submitted: wo.created_at,
+    scheduled:
+      (wo.scheduled_date ? isoTimestamp(wo.scheduled_date) : null) ??
+      earliestActivityDate(statusLogs, "Scheduled") ??
+      earliestActivityDate(statusLogs, "Assigned") ??
+      earliestActivityDate(statusLogs, "Awaiting Approval"),
+    arrived: wo.arrival_at,
+    in_progress:
       wo.started_at ?? earliestActivityDate(statusLogs, "In Progress"),
-    "Waiting on Parts": earliestActivityDate(statusLogs, "Waiting on Parts"),
-    Completed:
+    completed:
       (wo.completion_date ? isoTimestamp(wo.completion_date) : null) ??
       wo.approved_at ??
       earliestActivityDate(statusLogs, "Completed") ??
@@ -200,9 +253,9 @@ export function buildWorkOrderStageDates(
   };
 
   const result: Partial<Record<CustomerRequestStageKey, string>> = {};
-  CUSTOMER_REQUEST_STAGE_KEYS.forEach((key, idx) => {
-    if (idx <= currentIdx && candidates[key]) {
-      result[key] = candidates[key]!;
+  CUSTOMER_REQUEST_STAGES.forEach((stage, idx) => {
+    if (idx <= currentIdx && candidates[stage.key]) {
+      result[stage.key] = candidates[stage.key]!;
     }
   });
   return result;
