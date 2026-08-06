@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
-import { NAV_ITEMS, type NavItem } from "@/lib/roles";
+import { type NavItem } from "@/lib/roles";
+import { filterNavForProfile } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
@@ -40,18 +41,17 @@ function NavLink({
 
 function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
   const label = navLabel(item, role);
-  if (label === item.label) return item;
-  return { ...item, label };
+  const children = item.children?.map((child) => labeledNavItem(child, role));
+  if (label === item.label && !children) return item;
+  return { ...item, label, ...(children ? { children } : {}) };
 }
 
 function NavDetailsGroup({
   item,
   pathname,
-  profile,
 }: {
   item: NavItem;
   pathname: string;
-  profile: Profile;
 }) {
   const childActive = item.children!.some((child) =>
     child.href === "/customer"
@@ -66,13 +66,11 @@ function NavDetailsGroup({
         {item.label}
       </Link>
       <ul>
-        {item.children!
-          .filter((child) => child.roles.includes(profile.role))
-          .map((child) => (
-            <li key={`${child.href}-${child.label}`}>
-              <NavLink item={child} pathname={pathname} />
-            </li>
-          ))}
+        {item.children!.map((child) => (
+          <li key={`${child.href}-${child.label}`}>
+            <NavLink item={child} pathname={pathname} />
+          </li>
+        ))}
       </ul>
     </li>
   );
@@ -87,9 +85,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role)).map((item) =>
-    labeledNavItem(item, profile.role),
-  );
+  const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
 
   async function logout() {
     const supabase = createClient();
@@ -153,7 +149,6 @@ export function AppShell({
                   key={item.href}
                   item={item}
                   pathname={pathname}
-                  profile={profile}
                 />
               );
             }

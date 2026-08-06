@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { isStaffRole } from "@/lib/employeePermissions";
 import { ROLE_LABELS, type Profile, type UserRole } from "@/lib/types";
 
 export default function UsersPage() {
@@ -37,7 +39,15 @@ export default function UsersPage() {
 
   return (
     <div>
-      <PageHeader title="Users" description="Assign roles and manage access" />
+      <PageHeader
+        title="Users"
+        description="Assign roles and manage access"
+        actions={
+          <Link href="/settings/employees" className="btn btn-outline btn-sm">
+            Employee rates & permissions
+          </Link>
+        }
+      />
 
       <div className="card bg-base-100 shadow">
         <div className="card-body p-0">
@@ -65,10 +75,15 @@ export default function UsersPage() {
                         </select>
                       </td>
                       <td><StatusBadge label={u.is_active ? "Active" : "Inactive"} tone={statusTone(u.is_active ? "Active" : "Inactive")} /></td>
-                      <td>
+                      <td className="flex flex-wrap gap-1">
                         <button type="button" className="btn btn-ghost btn-xs" disabled={saving === u.id} onClick={() => toggleActive(u.id, u.is_active)}>
                           {u.is_active ? "Deactivate" : "Activate"}
                         </button>
+                        {isStaffRole(u.role) ? (
+                          <Link href={`/settings/employees/${u.id}`} className="btn btn-ghost btn-xs">
+                            Rates & perms
+                          </Link>
+                        ) : null}
                       </td>
                     </tr>
                   ))}

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { BookOpen, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -42,8 +44,21 @@ export default function SettingsPage() {
   if (!settings) return <div className="p-8 text-center opacity-60">Loading…</div>;
 
   return (
-    <div>
-      <PageHeader title="Settings" description="Company-wide configuration" />
+    <div className="space-y-6">
+      <PageHeader
+        title="Settings"
+        description="Company-wide configuration (administrator)"
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link href="/settings/employees" className="btn btn-outline btn-sm gap-1">
+              <Users className="h-4 w-4" /> Employees
+            </Link>
+            <Link href="/settings/gl-accounts" className="btn btn-outline btn-sm gap-1">
+              <BookOpen className="h-4 w-4" /> GL Accounts
+            </Link>
+          </div>
+        }
+      />
 
       {message ? <div role="alert" className="alert mb-4 text-sm"><span>{message}</span></div> : null}
 
@@ -64,6 +79,30 @@ export default function SettingsPage() {
           <button type="submit" className="btn btn-primary btn-sm w-fit" disabled={saving}>{saving ? "Saving…" : "Save Settings"}</button>
         </div>
       </form>
+
+      <div className="card max-w-xl border border-base-300 bg-base-100 shadow-sm">
+        <div className="card-body gap-2">
+          <h2 className="card-title text-base">Employees</h2>
+          <p className="text-sm opacity-70">
+            Store staff contact data, hourly cost/billing rates, and module permissions (role package + overrides).
+          </p>
+          <Link href="/settings/employees" className="btn btn-primary btn-sm w-fit gap-1">
+            <Users className="h-4 w-4" /> Open Employees
+          </Link>
+        </div>
+      </div>
+
+      <div className="card max-w-xl border border-base-300 bg-base-100 shadow-sm">
+        <div className="card-body gap-2">
+          <h2 className="card-title text-base">Accounting</h2>
+          <p className="text-sm opacity-70">
+            Maintain the chart of accounts and default GL mappings for journal export and reporting.
+          </p>
+          <Link href="/settings/gl-accounts" className="btn btn-primary btn-sm w-fit gap-1">
+            <BookOpen className="h-4 w-4" /> Open GL Accounts
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
