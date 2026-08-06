@@ -93,7 +93,6 @@ export default function ContractsPage() {
     column: "name" | "customer" | "type" | "price" | "status" | "end";
     direction: "asc" | "desc";
   }>({ column: "name", direction: "asc" });
-  const [approvePrices, setApprovePrices] = useState<Record<string, string>>({});
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [planIndustry, setPlanIndustry] = useState<"all" | "unlabeled" | string>("all");
   const [planTier, setPlanTier] = useState<"all" | ServiceLevelId>("all");
@@ -391,22 +390,16 @@ export default function ContractsPage() {
   }
 
   async function approveContract(contract: ContractRow) {
-    const raw = approvePrices[contract.id] ?? String(contract.contract_price || "");
-    const price = Number(raw);
-    if (!Number.isFinite(price) || price <= 0) {
-      setError("Enter a contract price greater than $0 before approving.");
-      return;
-    }
     setError(null);
     setActionBusyId(contract.id);
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const price = Number(contract.contract_price) || 0;
     const { error: updateError } = await supabase
       .from("service_contracts")
       .update({
         status: "Active",
-        contract_price: price,
         updated_at: new Date().toISOString(),
       })
       .eq("id", contract.id);
@@ -416,9 +409,7 @@ export default function ContractsPage() {
       return;
     }
     setContracts((prev) =>
-      prev.map((c) =>
-        c.id === contract.id ? { ...c, status: "Active", contract_price: price } : c,
-      ),
+      prev.map((c) => (c.id === contract.id ? { ...c, status: "Active" } : c)),
     );
     await logActivity(supabase, {
       userId: user?.id ?? null,
@@ -823,7 +814,7 @@ export default function ContractsPage() {
               <div>
                 <h2 className="card-title text-base">Pending customer requests</h2>
                 <p className="text-sm opacity-70">
-                  Approve with a price to activate, or reject. Names starting with [Request] are portal submissions.
+                  Approve to activate, or reject. Names starting with [Request] are portal submissions.
                 </p>
               </div>
               <Link
@@ -853,21 +844,6 @@ export default function ContractsPage() {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-end gap-2">
-                      <label className="form-control">
-                        <span className="label-text text-xs">Price to approve</span>
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          className="input input-bordered input-sm w-32"
-                          placeholder="0.00"
-                          value={approvePrices[c.id] ?? ""}
-                          onChange={(e) =>
-                            setApprovePrices((prev) => ({ ...prev, [c.id]: e.target.value }))
-                          }
-                          aria-label={`Approval price for ${c.name}`}
-                        />
-                      </label>
                       <button
                         type="button"
                         className="btn btn-primary btn-sm"
