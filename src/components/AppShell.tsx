@@ -3,22 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import Image from "next/image";
-import {
-  Bell,
-  HelpCircle,
-  LogOut,
-  Mail,
-  Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plus,
-  Search,
-  Settings,
-} from "lucide-react";
+import { LogOut, Mail, Menu, Search } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
+import { topbarConfigForRole, usesStaffInbox, type TopbarConfig } from "@/lib/topbar-config";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
@@ -27,8 +16,17 @@ import { countUnreadInboxThreads, CUSTOMER_INBOX_UNREAD_EVENT } from "@/lib/cust
 import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
 
 const CUSTOMER_HOME = "/customer";
+const CUSTOMER_INBOX = "/customer/inbox";
+const MANAGER_INBOX = "/inbox";
 const UNREAD_POLL_MS = 30_000;
-const MANAGER_SIDEBAR_COLLAPSED_KEY = "esm-manager-sidebar-collapsed";
+const SIDEBAR_COLLAPSED_KEY = "esm-sidebar-collapsed";
+
+function sidebarInboxBadge(href: string, unreadInbox: number): number {
+  if ((href === MANAGER_INBOX || href === CUSTOMER_INBOX) && unreadInbox > 0) {
+    return unreadInbox;
+  }
+  return 0;
+}
 
 function isPathActive(pathname: string, href: string) {
   if (href === "/vendors") {
@@ -279,7 +277,7 @@ function NavSection({
         }
         const active = isPathActive(pathname, child.href);
         const badgeCount =
-          child.href === "/inbox" && unreadInbox > 0 ? unreadInbox : badgeForHref(child.href);
+          sidebarInboxBadge(child.href, unreadInbox) || badgeForHref(child.href);
         return (
           <div key={`${child.href}-${child.label}`} className="eq-nav-row">
             <GatedNavLink
@@ -379,11 +377,90 @@ function CustomerInboxHeaderControl({
   );
 }
 
-function createHrefForRole(role: Profile["role"]): string {
-  if (role === "customer") return "/customer/request-service";
-  if (role === "technician") return "/technician";
-  if (role === "billing") return "/billing";
-  return "/work-orders";
+function toggleSidebarMenu(onToggleDesktop: () => void) {
+  if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
+    onToggleDesktop();
+    return;
+  }
+  const toggle = document.getElementById("app-drawer") as HTMLInputElement | null;
+  if (toggle) toggle.checked = !toggle.checked;
+}
+
+function AppTopBar({
+  config,
+  inboxControl,
+  profile,
+  onToggleSidebar,
+  onLogout,
+}: {
+  config: TopbarConfig;
+  inboxControl: React.ReactNode;
+  profile: Profile;
+  onToggleSidebar: () => void;
+  onLogout: () => void;
+}) {
+  const initials = (profile.full_name || profile.email || "?")
+    .split(/[\s@]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+
+  const showInbox = config.showInbox && Boolean(inboxControl);
+
+  return (
+    <header className="eq-topbar">
+      <div className="flex min-w-0 items-center gap-3">
+        <button
+          type="button"
+          className="eq-top-icon shrink-0"
+          onClick={() => toggleSidebarMenu(onToggleSidebar)}
+          aria-label="Toggle sidebar"
+          title="Toggle sidebar"
+        >
+          <Menu className="h-5 w-5" strokeWidth={1.75} />
+        </button>
+
+        {config.showSearch ? (
+          <div className="eq-search min-w-0 w-full max-w-[480px]">
+            <Search className="eq-search-icon" strokeWidth={1.75} />
+            <input
+              type="search"
+              className="eq-search-input"
+              placeholder="Search customers, invoices, work orders?"
+              aria-label="Search"
+              readOnly
+              onFocus={(e) => e.currentTarget.blur()}
+              title="Search (coming soon)"
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="min-w-0 flex-1" aria-hidden />
+
+      <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+        {showInbox ? inboxControl : null}
+
+        <div className="eq-user-menu">
+          <span className="eq-avatar" aria-hidden>
+            {initials || "?"}
+          </span>
+          <div className="min-w-0 text-left leading-tight">
+            <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
+              {profile.full_name || profile.email}
+            </p>
+            <p className="truncate text-[11px] text-[#5c6b7a]">{ROLE_LABELS[profile.role]}</p>
+          </div>
+        </div>
+
+        <button type="button" className="eq-signout" onClick={onLogout} title="Sign out">
+          <LogOut className="h-4 w-4" strokeWidth={1.75} />
+          <span className="hidden lg:inline">Sign out</span>
+        </button>
+      </div>
+    </header>
+  );
 }
 
 function SidebarNavBody({
@@ -453,7 +530,7 @@ function SidebarNavBody({
           const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
           const active = best?.href === item.href;
           const badgeCount =
-            item.href === "/inbox" && unreadInbox > 0 ? unreadInbox : badgeForHref(item.href);
+            sidebarInboxBadge(item.href, unreadInbox) || badgeForHref(item.href);
           return (
             <div key={item.href} className="eq-nav-row">
               <GatedNavLink
@@ -490,59 +567,65 @@ export function AppShell({
   const [mounted, setMounted] = useState(false);
   const [unreadInbox, setUnreadInbox] = useState(0);
   const [pendingByHref, setPendingByHref] = useState<Record<string, number>>({});
-  const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
-  const isCustomer = profile.role === "customer";
-  const isTechnician = profile.role === "technician";
-  const showTopSearchAndNew = !isCustomer && !isTechnician;
-  const showManagerInbox = profile.role === "service_manager" || profile.role === "billing";
-  const canCollapseSidebar =
-    profile.role === "service_manager" || profile.role === "administrator";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  const topbarConfig = topbarConfigForRole(profile.role);
+  const isCustomer = profile.role === "customer";
+  const showStaffInbox = usesStaffInbox(profile.role);
+  const showCustomerInbox = isCustomer && Boolean(profile.customer_id);
+  const pollStaffInbox = showStaffInbox;
+  const pollCustomerInbox = showCustomerInbox;
+
+  const navItems = filterNavForProfile(profile).map((item) => labeledNavItem(item, profile.role));
+
   const refreshUnread = useCallback(async () => {
-    if (!showManagerInbox) {
-      setUnreadInbox(0);
-      return;
-    }
     try {
       const supabase = createClient();
-      const count = await fetchManagerUnreadInboxCount(supabase);
-      setUnreadInbox(count);
+      if (pollStaffInbox) {
+        const count = await fetchManagerUnreadInboxCount(supabase);
+        setUnreadInbox(count);
+        return;
+      }
+      if (pollCustomerInbox && profile.customer_id) {
+        const count = await countUnreadInboxThreads(supabase, profile.customer_id);
+        setUnreadInbox(count);
+        return;
+      }
+      setUnreadInbox(0);
     } catch {
       /* keep last known count */
     }
-  }, [showManagerInbox]);
+  }, [pollCustomerInbox, pollStaffInbox, profile.customer_id]);
 
   useEffect(() => {
     setMounted(true);
-    if (profile.role !== "service_manager" && profile.role !== "administrator") return;
     try {
-      setSidebarCollapsed(localStorage.getItem(MANAGER_SIDEBAR_COLLAPSED_KEY) === "1");
+      setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
     } catch {
       /* ignore */
     }
-  }, [profile.role]);
+  }, []);
 
   useEffect(() => {
-    if (!canCollapseSidebar) return;
     try {
-      localStorage.setItem(MANAGER_SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
     } catch {
       /* ignore */
     }
-  }, [canCollapseSidebar, sidebarCollapsed]);
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
-    if (!showManagerInbox) return;
+    if (!pollStaffInbox && !pollCustomerInbox) return;
     void refreshUnread();
     const onUnreadChanged = () => void refreshUnread();
-    window.addEventListener(MANAGER_INBOX_UNREAD_EVENT, onUnreadChanged);
+    const unreadEvent = pollStaffInbox ? MANAGER_INBOX_UNREAD_EVENT : CUSTOMER_INBOX_UNREAD_EVENT;
+    window.addEventListener(unreadEvent, onUnreadChanged);
     const id = window.setInterval(() => void refreshUnread(), UNREAD_POLL_MS);
     return () => {
-      window.removeEventListener(MANAGER_INBOX_UNREAD_EVENT, onUnreadChanged);
+      window.removeEventListener(unreadEvent, onUnreadChanged);
       window.clearInterval(id);
     };
-  }, [showManagerInbox, refreshUnread, pathname]);
+  }, [pollCustomerInbox, pollStaffInbox, refreshUnread, pathname]);
 
   useEffect(() => {
     const canVendors = ["administrator", "service_manager", "billing"].includes(profile.role);
@@ -578,6 +661,7 @@ export function AppShell({
   const gateActive = mounted && isGateActive;
 
   function badgeForHref(href: string) {
+    if (sidebarInboxBadge(href, unreadInbox) > 0) return unreadInbox;
     return pendingByHref[href] ?? 0;
   }
 
@@ -592,28 +676,18 @@ export function AppShell({
     router.refresh();
   }
 
-  const customerInboxControl =
-    isCustomer && profile.customer_id ? (
+  const inboxControl =
+    showCustomerInbox && topbarConfig.showInbox ? (
       <CustomerInboxHeaderControl
-        customerId={profile.customer_id}
+        customerId={profile.customer_id!}
         isGateActive={gateActive}
         blockNavigation={blockNavigation}
       />
+    ) : showStaffInbox && topbarConfig.showInbox ? (
+      <InboxHeaderControl href="/inbox" unreadCount={unreadInbox} />
     ) : null;
 
-  const managerInboxControl = showManagerInbox ? (
-    <InboxHeaderControl href="/inbox" unreadCount={unreadInbox} />
-  ) : null;
-
-  const inboxControl = customerInboxControl ?? managerInboxControl;
-  const initials = (profile.full_name || profile.email || "?")
-    .split(/[\s@]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? "")
-    .join("");
-  const createHref = createHrefForRole(profile.role);
-  const desktopSidebarHidden = canCollapseSidebar && sidebarCollapsed;
+  const desktopSidebarHidden = sidebarCollapsed;
 
   const sidebarBodyProps = {
     pathname,
@@ -626,288 +700,45 @@ export function AppShell({
   };
 
   return (
-    <div
-      className={`eq-shell min-h-screen ${
-        canCollapseSidebar ? "lg:flex" : "drawer lg:drawer-open"
-      }`}
-    >
-      {canCollapseSidebar ? (
-        <>
-          {!desktopSidebarHidden ? (
-            <aside className="eq-sidebar relative z-10 hidden w-[15.75rem] shrink-0 flex-col lg:flex">
-              <div className="flex justify-end px-2 pt-2">
-                <button
-                  type="button"
-                  className="eq-top-icon"
-                  onClick={toggleSidebarCollapsed}
-                  aria-label="Collapse sidebar"
-                  title="Collapse sidebar"
-                >
-                  <PanelLeftClose className="h-4 w-4" strokeWidth={1.75} />
-                </button>
-              </div>
-              <SidebarNavBody {...sidebarBodyProps} />
-            </aside>
+    <div className="eq-shell min-h-screen lg:flex">
+      {!desktopSidebarHidden ? (
+        <aside className="eq-sidebar relative z-10 hidden w-[15.75rem] shrink-0 flex-col lg:flex">
+          <SidebarNavBody {...sidebarBodyProps} />
+        </aside>
+      ) : null}
+
+      <div className="drawer min-h-screen min-w-0 flex-1">
+        <input id="app-drawer" type="checkbox" className="drawer-toggle" />
+        <div className="drawer-content flex min-h-screen flex-col">
+          <AppTopBar
+            config={topbarConfig}
+            inboxControl={inboxControl}
+            profile={profile}
+            onToggleSidebar={toggleSidebarCollapsed}
+            onLogout={() => void logout()}
+          />
+
+          {gateActive ? (
+            <div
+              role="status"
+              className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+            >
+              Submit your service rating on Home to continue using the portal.
+            </div>
           ) : null}
 
-          <div className="drawer min-h-screen min-w-0 flex-1">
-            <input id="app-drawer" type="checkbox" className="drawer-toggle" />
-            <div className="drawer-content flex min-h-screen flex-col">
-              <header className="eq-topbar">
-                <div className="flex flex-none items-center gap-2">
-                  <label
-                    htmlFor="app-drawer"
-                    className="eq-top-icon lg:hidden"
-                    aria-label="Open menu"
-                  >
-                    <Menu className="h-5 w-5" strokeWidth={1.75} />
-                  </label>
-                  {desktopSidebarHidden ? (
-                    <button
-                      type="button"
-                      className="eq-top-icon hidden lg:inline-flex"
-                      onClick={toggleSidebarCollapsed}
-                      aria-label="Expand sidebar"
-                      title="Show menu"
-                    >
-                      <PanelLeftOpen className="h-4 w-4" strokeWidth={1.75} />
-                    </button>
-                  ) : null}
-                  <div className="relative h-8 w-[132px] sm:hidden">
-                    <Image
-                      src="/equipmentiq-logo.png"
-                      alt="EquipmentIQ"
-                      fill
-                      className="object-contain object-left"
-                      sizes="132px"
-                      priority
-                    />
-                  </div>
-                </div>
+          <main className="eq-main flex-1">
+            <div className="eq-page">{children}</div>
+          </main>
+        </div>
 
-                {showTopSearchAndNew ? (
-                  <div className="eq-search min-w-0 flex-1">
-                    <Search className="eq-search-icon" strokeWidth={1.75} />
-                    <input
-                      type="search"
-                      className="eq-search-input"
-                      placeholder="Search customers, invoices, work orders?"
-                      aria-label="Search"
-                      readOnly
-                      onFocus={(e) => e.currentTarget.blur()}
-                      title="Search (coming soon)"
-                    />
-                  </div>
-                ) : (
-                  <div className="min-w-0 flex-1" aria-hidden />
-                )}
-
-                <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-                  {showTopSearchAndNew && !gateActive ? (
-                    <Link href={createHref} className="eq-create-btn">
-                      <Plus className="h-4 w-4" strokeWidth={2.25} />
-                      <span className="hidden sm:inline">New</span>
-                    </Link>
-                  ) : null}
-
-                  {showTopSearchAndNew ? <div className="eq-top-divider hidden sm:block" /> : null}
-
-                  {inboxControl}
-                  {!isCustomer ? (
-                    <>
-                      <button
-                        type="button"
-                        className="eq-top-icon"
-                        aria-label="Notifications"
-                        title="Notifications"
-                      >
-                        <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                      </button>
-                      <button
-                        type="button"
-                        className="eq-top-icon hidden sm:inline-flex"
-                        aria-label="Help"
-                        title="Help"
-                      >
-                        <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                      </button>
-                      <Link
-                        href="/settings"
-                        className="eq-top-icon hidden sm:inline-flex"
-                        aria-label="Settings"
-                        title="Settings"
-                      >
-                        <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                      </Link>
-                    </>
-                  ) : null}
-
-                  <div className="eq-user-menu">
-                    <span className="eq-avatar" aria-hidden>
-                      {initials || "?"}
-                    </span>
-                    <div className="hidden min-w-0 text-left leading-tight md:block">
-                      <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
-                        {profile.full_name || profile.email}
-                      </p>
-                      <p className="truncate text-[11px] text-[#5c6b7a]">
-                        {ROLE_LABELS[profile.role]}
-                      </p>
-                    </div>
-                  </div>
-
-                  <button type="button" className="eq-signout" onClick={logout} title="Sign out">
-                    <LogOut className="h-4 w-4" strokeWidth={1.75} />
-                    <span className="hidden lg:inline">Sign out</span>
-                  </button>
-                </div>
-              </header>
-
-              {gateActive ? (
-                <div
-                  role="status"
-                  className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
-                >
-                  Submit your service rating on Home to continue using the portal.
-                </div>
-              ) : null}
-
-              <main className="eq-main flex-1">
-                <div className="eq-page">{children}</div>
-              </main>
-            </div>
-
-            <aside className="drawer-side z-40 lg:hidden">
-              <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
-              <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
-                <SidebarNavBody {...sidebarBodyProps} />
-              </nav>
-            </aside>
-          </div>
-        </>
-      ) : (
-        <>
-          <input id="app-drawer" type="checkbox" className="drawer-toggle" />
-          <div className="drawer-content flex min-h-screen flex-col">
-            <header className="eq-topbar">
-              <div className="flex flex-none items-center gap-2 lg:hidden">
-                <label htmlFor="app-drawer" className="eq-top-icon" aria-label="Open menu">
-                  <Menu className="h-5 w-5" strokeWidth={1.75} />
-                </label>
-                <div className="relative h-8 w-[132px] sm:hidden">
-                  <Image
-                    src="/equipmentiq-logo.png"
-                    alt="EquipmentIQ"
-                    fill
-                    className="object-contain object-left"
-                    sizes="132px"
-                    priority
-                  />
-                </div>
-              </div>
-
-              {showTopSearchAndNew ? (
-                <div className="eq-search min-w-0 flex-1">
-                  <Search className="eq-search-icon" strokeWidth={1.75} />
-                  <input
-                    type="search"
-                    className="eq-search-input"
-                    placeholder="Search customers, invoices, work orders?"
-                    aria-label="Search"
-                    readOnly
-                    onFocus={(e) => e.currentTarget.blur()}
-                    title="Search (coming soon)"
-                  />
-                </div>
-              ) : (
-                <div className="min-w-0 flex-1" aria-hidden />
-              )}
-
-              <div className="flex flex-none items-center gap-1 sm:gap-1.5">
-                {showTopSearchAndNew && !gateActive ? (
-                  <Link href={createHref} className="eq-create-btn">
-                    <Plus className="h-4 w-4" strokeWidth={2.25} />
-                    <span className="hidden sm:inline">New</span>
-                  </Link>
-                ) : null}
-
-                {showTopSearchAndNew ? <div className="eq-top-divider hidden sm:block" /> : null}
-
-                {inboxControl}
-                {!isCustomer ? (
-                  <>
-                    <button
-                      type="button"
-                      className="eq-top-icon"
-                      aria-label="Notifications"
-                      title="Notifications"
-                    >
-                      <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                    </button>
-                    <button
-                      type="button"
-                      className="eq-top-icon hidden sm:inline-flex"
-                      aria-label="Help"
-                      title="Help"
-                    >
-                      <HelpCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                    </button>
-                    <Link
-                      href="/settings"
-                      className="eq-top-icon hidden sm:inline-flex"
-                      aria-label="Settings"
-                      title="Settings"
-                    >
-                      <Settings className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                    </Link>
-                  </>
-                ) : null}
-
-                <div className="eq-user-menu">
-                  <span className="eq-avatar" aria-hidden>
-                    {initials || "?"}
-                  </span>
-                  <div className="hidden min-w-0 text-left leading-tight md:block">
-                    <p className="truncate text-[13px] font-semibold text-[#1e2a36]">
-                      {profile.full_name || profile.email}
-                    </p>
-                    <p className="truncate text-[11px] text-[#5c6b7a]">{ROLE_LABELS[profile.role]}</p>
-                  </div>
-                </div>
-
-                <button type="button" className="eq-signout" onClick={logout} title="Sign out">
-                  <LogOut className="h-4 w-4" strokeWidth={1.75} />
-                  <span className="hidden lg:inline">Sign out</span>
-                </button>
-              </div>
-            </header>
-
-            {gateActive ? (
-              <div
-                role="status"
-                className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
-              >
-                Submit your service rating on Home to continue using the portal.
-              </div>
-            ) : null}
-
-            <main className="eq-main flex-1">
-              <div className="eq-page">{children}</div>
-            </main>
-          </div>
-
-          <aside className="drawer-side z-40">
-            <label
-              htmlFor="app-drawer"
-              className="drawer-overlay lg:pointer-events-none"
-              aria-label="Close menu"
-            />
-            <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
-              <SidebarNavBody {...sidebarBodyProps} />
-            </nav>
-          </aside>
-        </>
-      )}
+        <aside className="drawer-side z-40 lg:hidden">
+          <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
+          <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+            <SidebarNavBody {...sidebarBodyProps} />
+          </nav>
+        </aside>
+      </div>
     </div>
   );
 }
