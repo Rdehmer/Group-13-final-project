@@ -22,6 +22,8 @@ export default async function DashboardPage() {
   const supabase = await createClient();
   const profile = await getProfile();
   const isManager = profile?.role === "service_manager";
+  const canManageContracts =
+    profile?.role === "service_manager" || profile?.role === "administrator";
 
   const [
     { count: customerCount },
@@ -103,6 +105,7 @@ export default async function DashboardPage() {
   });
 
   const activeContracts = (contracts ?? []).filter((c) => c.status === "Active").length;
+  const pendingApprovals = (contracts ?? []).filter((c) => c.status === "Pending Approval").length;
   const expiringSoon = (contracts ?? []).filter((c) => {
     if (!c.end_date) return false;
     const end = new Date(c.end_date);
@@ -137,8 +140,8 @@ export default async function DashboardPage() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {isManager ? (
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {canManageContracts ? (
           <>
             <ClickableStatCard
               label="Active Customers"
@@ -161,6 +164,14 @@ export default async function DashboardPage() {
               ariaLabel="View service contracts"
             />
             <ClickableStatCard
+              label="Pending Approvals"
+              value={pendingApprovals}
+              hint={pendingApprovals > 0 ? "Customer requests awaiting review" : "No requests waiting"}
+              href="/contracts?status=Pending%20Approval"
+              danger={pendingApprovals > 0}
+              ariaLabel="View contracts pending approval"
+            />
+            <ClickableStatCard
               label="Open AR"
               value={formatMoney(arBalance)}
               href="/reports"
@@ -180,6 +191,12 @@ export default async function DashboardPage() {
               label="Active Contracts"
               value={activeContracts}
               hint={`${expiringSoon.length} expiring soon`}
+            />
+            <StatCard
+              label="Pending Approvals"
+              value={pendingApprovals}
+              hint={pendingApprovals > 0 ? "Customer requests awaiting review" : "No requests waiting"}
+              danger={pendingApprovals > 0}
             />
             <StatCard label="Open AR" value={formatMoney(arBalance)} danger={arBalance > 0} />
           </>

@@ -56,6 +56,14 @@ export type Equipment = {
   last_service_date: string | null;
   next_scheduled_service_date: string | null;
   notes: string | null;
+  /** Soft estimate — not a GAAP fixed-asset ledger field. */
+  replacement_cost?: number | null;
+  /** Soft residual estimate for accounting discussions. */
+  estimated_residual?: number | null;
+  /** Why retired / OOS — supports write-off conversations. */
+  retirement_note?: string | null;
+  /** Storage path in equipment-nameplates bucket. */
+  nameplate_path?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -115,6 +123,10 @@ export type WorkOrder = {
   arrival_at: string | null;
   started_at: string | null;
   paused_at: string | null;
+  /** Field dispatch board progress (En Route, Arrived, Working, …). */
+  dispatch_status?: string | null;
+  dispatch_note?: string | null;
+  dispatch_updated_at?: string | null;
   completion_date: string | null;
   approved_by: string | null;
   approved_at: string | null;
@@ -393,6 +405,22 @@ export type CompanySettings = {
   overtime_multiplier: number;
   created_at: string;
   updated_at: string;
+};
+
+/** PTO / blocked schedule days for a technician. */
+export type TimeOffRequest = {
+  id: string;
+  technician_id: string;
+  start_date: string;
+  end_date: string;
+  reason: string | null;
+  status: "Pending" | "Approved" | "Denied" | "Canceled";
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  created_at: string;
+  updated_at: string;
+  technician?: { id: string; full_name: string | null; email: string } | null;
 };
 
 export const ROLE_LABELS: Record<UserRole, string> = {

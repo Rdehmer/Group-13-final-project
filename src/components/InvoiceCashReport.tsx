@@ -724,15 +724,15 @@ export function InvoiceCashReport() {
         <p className="font-semibold">Revenue recognition policy</p>
         <ul className="mt-2 list-inside list-disc opacity-80">
           <li>
-            Revenue is recognized when a work order is <strong>Completed</strong> or{" "}
-            <strong>Closed</strong>
+            ASC 606: revenue is earned when a work order is <strong>Completed</strong> or{" "}
+            <strong>Closed</strong> (performance obligation satisfied)
           </li>
-          <li>If invoiced, recognized amount = invoice total (excluding Draft/Canceled invoices)</li>
+          <li>If invoiced, earned amount = invoice total (excluding Draft/Canceled/Credit Memo)</li>
           <li>
-            If completed but unbilled, recognized amount = estimated total (or labor/parts estimate)
+            If completed but unbilled, earned amount = estimated total (contract asset until billed)
           </li>
-          <li>Cash collected = recorded customer payments</li>
-          <li>Open AR = remaining balances on non-canceled invoices</li>
+          <li>Prepaid / annual contracts earn ratably — see Deferred Revenue Schedule & Period Close</li>
+          <li>Cash collected = recorded customer payments; open AR = remaining invoice balances</li>
         </ul>
       </div>
 

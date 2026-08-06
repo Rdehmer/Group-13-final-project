@@ -50,7 +50,7 @@ export function statusForNewWorkOrder(opts: {
 
 /**
  * Extra schedule fields to apply when the workflow status changes on Work Orders,
- * so Technician Schedule stays consistent.
+ * so Technician Schedule stays consistent (service_manager status edits).
  */
 export function scheduleFieldsForStatusChange(
   nextStatus: string,
@@ -62,7 +62,13 @@ export function scheduleFieldsForStatusChange(
 ): Record<string, unknown> {
   const extra: Record<string, unknown> = {};
 
-  if (nextStatus === "Scheduled") {
+  const needsCalendarSlot =
+    nextStatus === "Scheduled" ||
+    nextStatus === "In Progress" ||
+    nextStatus === "Waiting on Parts" ||
+    nextStatus === "Ready for Review";
+
+  if (needsCalendarSlot) {
     if (!current.scheduled_date) {
       extra.scheduled_date = todayIso;
     }

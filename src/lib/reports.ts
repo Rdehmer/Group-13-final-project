@@ -6,7 +6,7 @@
  * except where the chart of accounts cannot store an item (disclosed).
  */
 
-import { format, parseISO, startOfYear, endOfMonth, startOfMonth, subMonths, isValid } from "date-fns";
+import { format, parseISO, startOfYear, endOfMonth, startOfMonth, subMonths, isValid, eachMonthOfInterval, getDate, getDaysInMonth, addMonths } from "date-fns";
 import { formatMoney, formatPct, grossProfit, profitMargin, laborCost } from "@/lib/calculations";
 import type {
   Invoice,
@@ -17,6 +17,7 @@ import type {
   WorkOrder,
   WorkOrderPart,
 } from "@/lib/types";
+import { earnedRevenueFromCompletions } from "@/lib/accounting/earned-revenue";
 
 // ---------------------------------------------------------------------------
 // Accounting policies (ASC concepts applied to available data)
@@ -26,20 +27,24 @@ export const ACCOUNTING_POLICIES = {
   framework: "U.S. GAAP orientation for a service company using this application’s subledgers",
   basis: "Accrual basis for the statement of operations and balance sheet; cash basis detail on the cash flow statement",
   revenue:
-    "Service revenue is recognized on the invoice date when the invoice is issued to the customer (Sent, Partially Paid, Paid, Overdue, etc.). Draft, Needs Review, Reviewed, On Hold, Canceled, and Void are not recognized. Sales tax is a liability, not revenue.",
+    "ASC 606: service revenue is earned when performance obligations are satisfied — (1) work orders Completed/Closed (invoice total if billed, else job estimate), and (2) prepaid / annual maintenance contracts recognized straight-line over the contract term. Issuing an invoice creates accounts receivable; billing alone does not earn revenue for incomplete work. Draft, Needs Review, Reviewed, On Hold, Canceled, Void, and Credit Memo documents are excluded from earned revenue.",
+  deferredRevenue:
+    "Unearned (deferred) revenue arises on prepaid / annual fixed-fee maintenance contracts. Contract price is recognized straight-line over the contract term (monthly). Month-end close posts DR Deferred Revenue / CR Contract Revenue. Remaining unearned balance is a liability (current = next 12 months).",
   receivables:
-    "Accounts receivable is the remaining_balance of recognized invoices still open as of the report date. Aging is based on days past due_date.",
+    "Accounts receivable is the remaining_balance of issued (non-draft/canceled) invoices still open as of the report date. Credit memos reduce AR. Aging is based on days past due_date.",
   allowance:
-    "Allowance for credit losses uses a simplified aging method on open balances: 2% of 1–30 days past due, 10% of 31–60, and 50% of 61+ (CECL proxy; management estimate disclosed in Policies).",
+    "Allowance for credit losses uses a simplified aging method on open balances: 2% of 1–30 days past due, 10% of 31–60, and 50% of 61+ (CECL proxy). Month-end close can post DR Bad Debt Expense / CR Allowance.",
   cogs:
-    "Cost of services for recognized invoices is matched to linked work orders: technician labor at stored cost rates (regular + overtime) and parts at stored unit_cost × quantity (matching principle).",
+    "Cost of services for earned jobs is matched to linked work orders: technician labor at stored cost rates and parts at unit_cost × quantity. Inventory relief journals (DR COGS / CR Inventory) can be posted at close for parts used.",
   inventory: "Inventory is measured at FIFO unit_cost × quantity_on_hand for active parts (approximate cost method in app).",
-  cash: "Cash presented is the cumulative total of recorded customer payments on or before the as-of date (collections subledger). No separate bank reconciliation account exists in the schema.",
+  cash: "Cash is recorded when undeposited funds are cleared to bank (deposit journals). Payment batches first hit Undeposited Funds; deposit clearing moves them to Cash.",
   taxLiability:
-    "Sales tax payable equals sales tax on open (unpaid) recognized invoice balances, allocated by tax ÷ invoice_total when total > 0; remaining unallocated tax on fully paid invoices is treated as collected and still payable until remitted (app has no remittance ledger, so all tax on paid invoices remains in payable).",
-  wip: "Contract assets / unbilled receivables: completed, unbilled work orders valued at estimated billable labor + parts on those jobs (contract asset).",
+    "Sales tax payable increases when taxable invoices are batched/posted. Remittance journals (DR Tax Payable / CR Cash) reduce the liability when filed with the taxing authority.",
+  wip: "Contract assets / unbilled receivables: completed, unbilled work orders valued at invoice total if later billed else estimated billable value. Rollforward: begin + earned unbilled − billed = end.",
+  periodClose:
+    "Accounting periods (YYYY-MM) can be Soft Closed (warning) or Closed (blocks new journals). Close checklist covers open batches, deferred recognition, unbilled jobs, AR/allowance, tax remittance, and bank deposits.",
   limitations:
-    "No full general ledger, fixed assets, AP, payroll tax, or bank feeds. Reports use the invoices, payments, labor, parts, and inventory subledgers. Equity is assets − liabilities (plug that forces the balance sheet to balance).",
+    "GL journals and periods persist in browser local storage (same model as batches) until a cloud ledger is installed. No full fixed-asset register or bank feed import. Equity on the subledger balance sheet remains assets − liabilities unless journals are posted.",
 } as const;
 
 /**
@@ -55,6 +60,8 @@ const NON_RECOGNIZED = [
   "canceled",
   "cancelled",
   "void",
+  "credit memo",
+  "credit",
 ];
 
 /** Explicit customer-facing / collectible statuses (case-insensitive includes). */
@@ -105,6 +112,9 @@ export type ReportId =
   | "tech_labor"
   | "inventory"
   | "invoice_list"
+  | "deferred_revenue"
+  | "trial_balance"
+  | "contract_asset"
   | "policies";
 
 export type ReportGroup = {
@@ -200,6 +210,21 @@ export const REPORT_CATALOG: ReportGroup[] = [
         id: "sales_tax",
         name: "Sales Tax Liability",
         description: "Tax billed, open, and remittance estimate for the period.",
+      },
+      {
+        id: "deferred_revenue",
+        name: "Deferred Revenue Schedule",
+        description: "Unearned prepaid contract balances with monthly recognition rollforward.",
+      },
+      {
+        id: "contract_asset",
+        name: "Contract Asset Rollforward",
+        description: "Unbilled completions: begin + earned − billed = ending contract asset.",
+      },
+      {
+        id: "trial_balance",
+        name: "Trial Balance (GL)",
+        description: "Posted journal debits/credits by account through as-of date.",
       },
     ],
   },
@@ -395,27 +420,45 @@ export function profitAndLoss(
   invoices: InvoiceWithCustomer[],
   range: DateRange,
   costs: CostContext,
+  contracts: (ServiceContract & { customers?: { name: string } })[] = [],
 ) {
+  // ASC 606: earn on completed performance + prepaid straight-line recognition
+  const earnedJobs = earnedRevenueFromCompletions(costs.jobs, invoices, range);
+  const completionRevenue = earnedJobs.reduce((s, r) => s + r.amount, 0);
+
+  const deferredSched = deferredRevenueSchedule(contracts, range.end);
+  let deferredRecognized = 0;
+  for (const row of deferredSched.rows) {
+    for (const m of row.schedule) {
+      if (m.month >= range.start.slice(0, 7) && m.month <= range.end.slice(0, 7)) {
+        deferredRecognized += m.recognized;
+      }
+    }
+  }
+  deferredRecognized = Math.round(deferredRecognized * 100) / 100;
+
+  // Billing subledger still used for tax / component disclosure on invoices dated in range
   const recognized = invoices.filter(
     (i) => isRecognizedRevenue(i) && inDateRange(i.invoice_date, range),
   );
 
   const laborIncome = recognized.reduce((s, i) => s + Number(i.labor_charges), 0);
   const partsIncome = recognized.reduce((s, i) => s + Number(i.parts_charges), 0);
-  const recurringIncome = recognized.reduce((s, i) => s + Number(i.recurring_service_charge), 0);
+  const recurringIncome =
+    recognized.reduce((s, i) => s + Number(i.recurring_service_charge), 0) + deferredRecognized;
   const otherIncome = recognized.reduce((s, i) => s + Number(i.additional_charges), 0);
   const discounts = recognized.reduce((s, i) => s + Number(i.discounts), 0);
   const warranty = recognized.reduce((s, i) => s + Number(i.warranty_deductions), 0);
   const salesTax = recognized.reduce((s, i) => s + Number(i.tax), 0);
   const invoiceTotals = recognized.reduce((s, i) => s + Number(i.invoice_total), 0);
 
-  // Service revenue (excludes tax) — GAAP sales
-  const serviceRevenue = laborIncome + partsIncome + recurringIncome + otherIncome - discounts - warranty;
+  // Primary GAAP service revenue = performance + deferred recognition (avoid double-count prepaid invoices:
+  // completion path excludes contract-only prepaid; deferred adds ratable earn)
+  const billedCompletion = earnedJobs.filter((r) => r.billed).reduce((s, r) => s + r.amount, 0);
+  const unbilledCompletion = earnedJobs.filter((r) => !r.billed).reduce((s, r) => s + r.amount, 0);
+  const serviceRevenue = Math.round((completionRevenue + deferredRecognized) * 100) / 100;
 
-  // Match costs to recognized invoices via work_order_id
-  const woIds = new Set(
-    recognized.map((i) => i.work_order_id).filter((id): id is string => Boolean(id)),
-  );
+  const woIds = new Set(earnedJobs.map((r) => r.workOrderId));
 
   let cogsLabor = 0;
   let cogsParts = 0;
@@ -430,17 +473,14 @@ export function profitAndLoss(
     cogsParts += partCostAmount(row);
   }
 
-  // Unlinked invoices (no WO): cannot match actual COGS — disclose residual revenue without matched costs
-  const unmatchedRevenue = recognized
-    .filter((i) => !i.work_order_id)
-    .reduce((s, i) => s + serviceRevenueAmount(i), 0);
-
+  const unmatchedRevenue = deferredRecognized;
   const cogs = cogsLabor + cogsParts;
   const gross = grossProfit(serviceRevenue, cogs);
   const margin = profitMargin(serviceRevenue, gross);
 
   return {
     invoiceCount: recognized.length,
+    earnedJobCount: earnedJobs.length,
     laborIncome,
     partsIncome,
     recurringIncome,
@@ -449,6 +489,10 @@ export function profitAndLoss(
     warranty,
     salesTax,
     invoiceTotals,
+    completionRevenue,
+    billedCompletion,
+    unbilledCompletion,
+    deferredRecognized,
     serviceRevenue,
     cogsLabor,
     cogsParts,
@@ -614,6 +658,7 @@ export function balanceSheetGaap(
   jobs: (WorkOrder & { customers?: { name: string } })[],
   costs: CostContext,
   asOfStr: string,
+  contracts: (ServiceContract & { customers?: { name: string } })[] = [],
 ) {
   const asOf = parseDate(asOfStr) ?? new Date();
 
@@ -660,7 +705,12 @@ export function balanceSheetGaap(
   }
   const salesTaxPayable = taxOnOpen + taxCollectedHeld;
 
-  const totalLiabilities = salesTaxPayable;
+  const deferred = deferredRevenueSchedule(contracts ?? [], asOfStr);
+  const deferredRevenue = deferred.totalDeferred;
+  const deferredCurrent = deferred.totalCurrent;
+  const deferredNoncurrent = deferred.totalNoncurrent;
+
+  const totalLiabilities = salesTaxPayable + deferredRevenue;
   const equity = totalAssets - totalLiabilities;
 
   return {
@@ -676,11 +726,210 @@ export function balanceSheetGaap(
     salesTaxPayable,
     taxOnOpen,
     taxCollectedHeld,
+    deferredRevenue,
+    deferredCurrent,
+    deferredNoncurrent,
     totalLiabilities,
     equity,
     openCount: open.length,
     wipCount: wipRows.length,
     balances: Math.abs(totalAssets - (totalLiabilities + equity)) < 0.01,
+  };
+}
+
+/** Prepaid / annual fixed-fee contracts create unearned revenue under ASC 606. */
+export function isDeferredRevenueContract(
+  c: Pick<ServiceContract, "billing_method" | "status" | "contract_price">,
+): boolean {
+  const status = (c.status || "").trim().toLowerCase();
+  if (["canceled", "cancelled", "draft", "rejected", "void"].some((x) => status.includes(x))) {
+    return false;
+  }
+  if (Number(c.contract_price) <= 0.005) return false;
+  const method = (c.billing_method || "").trim().toLowerCase();
+  return /annual|fixed fee|prepaid|up[\s-]?front|lump/.test(method);
+}
+
+function contractCoverageMonths(startDate: string, endDate: string): Date[] {
+  try {
+    const start = startOfMonth(parseISO(startDate));
+    const end = startOfMonth(parseISO(endDate));
+    if (!isValid(start) || !isValid(end) || end < start) return [];
+    return eachMonthOfInterval({ start, end });
+  } catch {
+    return [];
+  }
+}
+
+/** Fraction of a calendar month recognized as of `asOf` (0–1). */
+function monthRecognizedFraction(monthStart: Date, asOf: Date): number {
+  const monthEnd = endOfMonth(monthStart);
+  if (asOf < monthStart) return 0;
+  if (asOf >= monthEnd) return 1;
+  const day = getDate(asOf);
+  const days = getDaysInMonth(monthStart);
+  return Math.min(1, Math.max(0, day / days));
+}
+
+export type DeferredMonthRow = {
+  month: string;
+  beginningBalance: number;
+  recognized: number;
+  endingBalance: number;
+};
+
+export type DeferredContractRow = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  name: string;
+  billingMethod: string;
+  status: string;
+  startDate: string;
+  endDate: string;
+  contractPrice: number;
+  monthlyRecognition: number;
+  monthsTotal: number;
+  monthsElapsed: number;
+  monthsRemaining: number;
+  recognizedToDate: number;
+  deferredBalance: number;
+  currentPortion: number;
+  noncurrentPortion: number;
+  schedule: DeferredMonthRow[];
+};
+
+export function deferredRevenueSchedule(
+  contracts: (ServiceContract & { customers?: { name: string } })[],
+  asOfStr: string,
+) {
+  const asOf = parseDate(asOfStr) ?? new Date();
+  const rows: DeferredContractRow[] = [];
+
+  for (const c of contracts) {
+    if (!isDeferredRevenueContract(c)) continue;
+    const months = contractCoverageMonths(c.start_date, c.end_date);
+    if (months.length === 0) continue;
+
+    const price = Number(c.contract_price);
+    const monthly = Math.round((price / months.length) * 100) / 100;
+    // Last month absorbs rounding so totals tie to contract price
+    const lastMonthAmt = Math.round((price - monthly * (months.length - 1)) * 100) / 100;
+
+    let recognizedToDate = 0;
+    let monthsElapsed = 0;
+    const schedule: DeferredMonthRow[] = [];
+    let runningDeferred = price;
+
+    months.forEach((m, idx) => {
+      const amount = idx === months.length - 1 ? lastMonthAmt : monthly;
+      const frac = monthRecognizedFraction(m, asOf);
+      recognizedToDate += amount * frac;
+      if (frac > 0) monthsElapsed += frac;
+
+      // Full-term rollforward (scheduled recognition), independent of as-of
+      const beginning = runningDeferred;
+      const ending = Math.round((beginning - amount) * 100) / 100;
+      runningDeferred = ending;
+      schedule.push({
+        month: format(m, "yyyy-MM"),
+        beginningBalance: beginning,
+        recognized: amount,
+        endingBalance: ending,
+      });
+    });
+
+    recognizedToDate = Math.round(recognizedToDate * 100) / 100;
+    const deferredBalance = Math.max(0, Math.round((price - recognizedToDate) * 100) / 100);
+
+    // Current = recognition scheduled in the next 12 months after asOf (still remaining)
+    const horizon = addMonths(startOfMonth(asOf), 12);
+    let currentPortion = 0;
+    for (let i = 0; i < months.length; i++) {
+      const m = months[i];
+      const amount = i === months.length - 1 ? lastMonthAmt : monthly;
+      if (m <= asOf) {
+        // Remaining unrecognized slice of current/past month already in deferred; past months are done
+        const fracLeft = 1 - monthRecognizedFraction(m, asOf);
+        if (fracLeft > 0.001 && endOfMonth(m) <= horizon) {
+          currentPortion += amount * fracLeft;
+        }
+        continue;
+      }
+      if (m < horizon) currentPortion += amount;
+    }
+    currentPortion = Math.round(Math.min(deferredBalance, currentPortion) * 100) / 100;
+    const noncurrentPortion = Math.round((deferredBalance - currentPortion) * 100) / 100;
+
+    rows.push({
+      id: c.id,
+      customerId: c.customer_id,
+      customerName: c.customers?.name ?? "—",
+      name: c.name,
+      billingMethod: c.billing_method,
+      status: c.status,
+      startDate: c.start_date,
+      endDate: c.end_date,
+      contractPrice: price,
+      monthlyRecognition: monthly,
+      monthsTotal: months.length,
+      monthsElapsed: Math.round(monthsElapsed * 100) / 100,
+      monthsRemaining: Math.round((months.length - monthsElapsed) * 100) / 100,
+      recognizedToDate,
+      deferredBalance,
+      currentPortion,
+      noncurrentPortion,
+      schedule,
+    });
+  }
+
+  rows.sort((a, b) => b.deferredBalance - a.deferredBalance);
+
+  const totalDeferred = rows.reduce((s, r) => s + r.deferredBalance, 0);
+  const totalCurrent = rows.reduce((s, r) => s + r.currentPortion, 0);
+  const totalNoncurrent = rows.reduce((s, r) => s + r.noncurrentPortion, 0);
+  const totalContractPrice = rows.reduce((s, r) => s + r.contractPrice, 0);
+  const totalRecognized = rows.reduce((s, r) => s + r.recognizedToDate, 0);
+
+  // Consolidated monthly rollforward: Beginning + Billings − Recognition = Ending
+  const monthKeys = Array.from(
+    new Set(rows.flatMap((r) => r.schedule.map((m) => m.month))),
+  ).sort();
+  const recognitionByMonth = new Map<string, number>();
+  for (const r of rows) {
+    for (const m of r.schedule) {
+      recognitionByMonth.set(m.month, (recognitionByMonth.get(m.month) ?? 0) + m.recognized);
+    }
+  }
+  const billingsByMonth = new Map<string, number>();
+  for (const r of rows) {
+    try {
+      const startYm = format(startOfMonth(parseISO(r.startDate)), "yyyy-MM");
+      billingsByMonth.set(startYm, (billingsByMonth.get(startYm) ?? 0) + r.contractPrice);
+    } catch {
+      /* skip */
+    }
+  }
+  let runningDeferred = 0;
+  const consolidated: (DeferredMonthRow & { billings: number })[] = monthKeys.map((ym) => {
+    const billings = Math.round((billingsByMonth.get(ym) ?? 0) * 100) / 100;
+    const recognized = Math.round((recognitionByMonth.get(ym) ?? 0) * 100) / 100;
+    const beginningBalance = runningDeferred;
+    const endingBalance = Math.round((beginningBalance + billings - recognized) * 100) / 100;
+    runningDeferred = endingBalance;
+    return { month: ym, beginningBalance, billings, recognized, endingBalance };
+  });
+
+  return {
+    asOf: asOfStr,
+    rows,
+    consolidated,
+    totalDeferred: Math.round(totalDeferred * 100) / 100,
+    totalCurrent: Math.round(totalCurrent * 100) / 100,
+    totalNoncurrent: Math.round(totalNoncurrent * 100) / 100,
+    totalContractPrice: Math.round(totalContractPrice * 100) / 100,
+    totalRecognized: Math.round(totalRecognized * 100) / 100,
+    contractCount: rows.length,
   };
 }
 
@@ -783,10 +1032,15 @@ export function priorEqualRange(range: DateRange): DateRange {
   };
 }
 
-export function comparePnl(invoices: InvoiceWithCustomer[], range: DateRange, costs: CostContext) {
+export function comparePnl(
+  invoices: InvoiceWithCustomer[],
+  range: DateRange,
+  costs: CostContext,
+  contracts: (ServiceContract & { customers?: { name: string } })[] = [],
+) {
   const prior = priorEqualRange(range);
-  const current = profitAndLoss(invoices, range, costs);
-  const previous = profitAndLoss(invoices, prior, costs);
+  const current = profitAndLoss(invoices, range, costs, contracts);
+  const previous = profitAndLoss(invoices, prior, costs, contracts);
   const delta = (a: number, b: number) => a - b;
   const pct = (a: number, b: number) => (b === 0 ? (a === 0 ? 0 : null) : (a - b) / Math.abs(b));
 
@@ -1279,10 +1533,11 @@ export function executiveSnapshot(
   costs: CostContext,
   range: DateRange,
   asOfStr: string,
+  contracts: (ServiceContract & { customers?: { name: string } })[] = [],
 ) {
-  const pnl = profitAndLoss(invoices, range, costs);
-  const prior = profitAndLoss(invoices, priorEqualRange(range), costs);
-  const sheet = balanceSheetGaap(invoices, payments, parts, jobs, costs, asOfStr);
+  const pnl = profitAndLoss(invoices, range, costs, contracts);
+  const prior = profitAndLoss(invoices, priorEqualRange(range), costs, contracts);
+  const sheet = balanceSheetGaap(invoices, payments, parts, jobs, costs, asOfStr, contracts);
   const collections = collectionsAnalysis(invoices, payments, range, asOfStr);
   const unbilled = unbilledJobs(jobs, costs);
   const jobProf = jobProfitability(invoices, jobs, costs, range);

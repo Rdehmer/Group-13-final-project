@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, LogOut, Wrench } from "lucide-react";
-import { ThemeSelector } from "@/components/ThemeSelector";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { NAV_ITEMS, type NavItem } from "@/lib/roles";
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
+import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
 
 const CUSTOMER_HOME = "/customer";
 
@@ -23,6 +23,18 @@ function gatedNavClassName(isBlocked: boolean, active: boolean, className?: stri
     className ?? "",
   ];
   return parts.filter(Boolean).join(" ");
+}
+
+/** Role-aware nav labels (same href, clearer names in the field). */
+function navLabel(item: NavItem, role: Profile["role"]): string {
+  if (item.href === "/technician" && role === "technician") return "My Day";
+  return item.label;
+}
+
+function labeledNavItem(item: NavItem, role: Profile["role"]): NavItem {
+  const label = navLabel(item, role);
+  if (label === item.label) return item;
+  return { ...item, label };
 }
 
 function GatedNavLink({
@@ -129,7 +141,9 @@ export function AppShell({
   const router = useRouter();
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
-  const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role));
+  const navItems = NAV_ITEMS.filter((item) => item.roles.includes(profile.role)).map((item) =>
+    labeledNavItem(item, profile.role),
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -165,7 +179,6 @@ export function AppShell({
               <p className="font-medium">{profile.full_name || profile.email}</p>
               <p className="opacity-60">{ROLE_LABELS[profile.role]}</p>
             </div>
-            <ThemeSelector compact />
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={logout}>
               <LogOut className="h-4 w-4" /> Logout
             </button>
@@ -177,12 +190,9 @@ export function AppShell({
             <span className="font-medium">{profile.full_name || profile.email}</span>
             <span className="opacity-60"> · {ROLE_LABELS[profile.role]}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <ThemeSelector compact />
-            <button type="button" className="btn btn-ghost btn-sm" onClick={logout} aria-label="Logout">
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={logout} aria-label="Logout">
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
 
         {gateActive ? (
@@ -198,8 +208,9 @@ export function AppShell({
         <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
         <nav className="menu min-h-full w-72 bg-base-100 p-4 text-base-content">
           <div className="mb-6 flex items-center gap-2 px-2">
-            <Wrench className="h-6 w-6 text-primary" />
-            <span className="font-bold">ESM</span>
+            <Wrench className="h-6 w-6 shrink-0 text-primary" />
+            <span className="shrink-0 font-bold">ESM</span>
+            <DemoPersonaSwitcher currentEmail={profile.email} />
           </div>
           {navItems.map((item) => {
             if (item.children?.length) {

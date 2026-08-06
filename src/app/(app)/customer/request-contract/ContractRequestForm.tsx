@@ -31,6 +31,7 @@ import { ContractRequestPreview } from "./ContractRequestPreview";
 type Props = {
   supabase: SupabaseClient;
   customerId: string;
+  customerName: string;
   equipment: Equipment[];
   activeContracts: CustomerContract[];
   selectedTier: ContractTierId;
@@ -44,6 +45,7 @@ const REVIEW_STEP = STEPS.length - 1;
 export function ContractRequestForm({
   supabase,
   customerId,
+  customerName,
   equipment,
   activeContracts,
   selectedTier,
@@ -72,8 +74,8 @@ export function ContractRequestForm({
   }, [customerId, form, selectedTier, step]);
 
   const preview = useMemo(
-    () => buildContractPreview(form, selectedTier, equipment),
-    [form, selectedTier, equipment],
+    () => buildContractPreview(form, selectedTier, equipment, customerName),
+    [form, selectedTier, equipment, customerName],
   );
 
   const equipmentNames = useMemo(
@@ -160,6 +162,7 @@ export function ContractRequestForm({
     const { data: { user } } = await supabase.auth.getUser();
     const payload = buildContractSubmission({
       customerId,
+      customerName,
       userId: user?.id ?? null,
       form,
       tierId: selectedTier,

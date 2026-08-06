@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Source_Sans_3 } from "next/font/google";
+import { ThemeLock } from "@/components/ThemeLock";
 import "./globals.css";
 
 const sourceSans = Source_Sans_3({
@@ -20,7 +21,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       data-theme="corporate"
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col bg-base-200">{children}</body>
+      <body className="min-h-full flex flex-col bg-base-200">
+        <ThemeLock />
+        {children}
+      </body>
     </html>
   );
 }

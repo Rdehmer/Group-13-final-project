@@ -7,18 +7,28 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
-import { formatMoney } from "@/lib/calculations";
-import type { Part, Profile } from "@/lib/types";
+import { formatMoney, formatPct } from "@/lib/calculations";
+import type { Part, Profile, WorkOrderPart } from "@/lib/types";
+
+type UsageRow = WorkOrderPart & {
+  work_orders?: {
+    id: string;
+    work_order_number: string;
+    status: string;
+    scheduled_date: string | null;
+  } | null;
+};
 
 /**
  * This business faces outdated parts master-data risk.
- * Our app reduces the risk by letting managers open a part and update stock and pricing details.
+ * Our app reduces the risk by letting managers open a part, update stock/pricing, and see recent usage.
  */
 export default function PartDetailPage() {
   const { id } = useParams<{ id: string }>();
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [part, setPart] = useState<Part | null>(null);
+  const [usage, setUsage] = useState<UsageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -41,12 +51,19 @@ export default function PartDetailPage() {
 
   async function load() {
     setLoading(true);
-    const [{ data }, { data: { user } }] = await Promise.all([
+    const [{ data }, { data: { user } }, { data: usageData }] = await Promise.all([
       supabase.from("parts").select("*").eq("id", id).single(),
       supabase.auth.getUser(),
+      supabase
+        .from("work_order_parts")
+        .select("*, work_orders(id, work_order_number, status, scheduled_date)")
+        .eq("part_id", id)
+        .order("date_used", { ascending: false })
+        .limit(20),
     ]);
     const p = data as Part | null;
     setPart(p);
+    setUsage((usageData as UsageRow[]) ?? []);
     if (user) {
       const { data: profileData } = await supabase
         .from("profiles")
@@ -139,6 +156,9 @@ export default function PartDetailPage() {
   }
 
   const low = part.quantity_on_hand <= part.reorder_level;
+  const margin = Number(part.standard_customer_price) - Number(part.unit_cost);
+  const marginPct = Number(part.unit_cost) > 0 ? margin / Number(part.unit_cost) : null;
+  const negativeMargin = margin < 0;
 
   return (
     <div>
@@ -158,15 +178,22 @@ export default function PartDetailPage() {
           {message ? <div className="alert alert-success text-sm">{message}</div> : null}
 
           <div className="flex flex-wrap gap-2">
-            <StatusBadge
-              label={low ? "Low Stock" : "OK"}
-              tone={low ? "warning" : "success"}
-            />
+            <StatusBadge label={low ? "Low Stock" : "OK"} tone={low ? "warning" : "success"} />
             <StatusBadge
               label={part.is_active ? "Active" : "Inactive"}
               tone={statusTone(part.is_active ? "Active" : "Inactive")}
             />
+            {isManager && negativeMargin ? (
+              <StatusBadge label="Neg margin" tone="error" />
+            ) : null}
           </div>
+
+          {isManager ? (
+            <p className="text-sm opacity-70">
+              Margin {formatMoney(margin)}
+              {marginPct != null ? ` (${formatPct(marginPct)})` : ""}
+            </p>
+          ) : null}
 
           <FormRow label="Part #" required>
             {isManager ? (
@@ -329,6 +356,48 @@ export default function PartDetailPage() {
           )}
         </div>
       </form>
+
+      {isManager ? (
+        <section className="card mt-4 max-w-2xl bg-base-100 shadow">
+          <div className="card-body">
+            <h2 className="card-title text-base">Recent work order usage</h2>
+            {usage.length === 0 ? (
+              <p className="text-sm opacity-60">No recorded usage on work orders yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {usage.map((row) => {
+                  const wo = row.work_orders;
+                  return (
+                    <li
+                      key={row.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-box border border-base-300 px-3 py-2 text-sm"
+                    >
+                      <div>
+                        {wo?.id ? (
+                          <Link
+                            href={`/work-orders/${wo.id}`}
+                            className="link link-primary font-medium"
+                          >
+                            {wo.work_order_number}
+                          </Link>
+                        ) : (
+                          <span className="font-medium">Work order</span>
+                        )}
+                        <p className="text-xs opacity-60">
+                          Qty {row.quantity_used}
+                          {row.date_used ? ` · ${row.date_used}` : ""}
+                          {wo?.status ? ` · ${wo.status}` : ""}
+                        </p>
+                      </div>
+                      <span>{formatMoney(row.billable_amount)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,10 @@ const TONE: Record<string, string> = {
   info: "badge-info",
   neutral: "badge-ghost",
   critical: "badge-error",
+  /** In Progress — amber yellow, distinct from Daisy warning */
+  progress: "border-amber-400/80 bg-amber-300 text-amber-950",
+  /** Waiting on Parts — white / light */
+  white: "border border-base-300 bg-white text-base-content",
 };
 
 export function StatusBadge({
@@ -18,22 +22,30 @@ export function StatusBadge({
   tone?: keyof typeof TONE;
   className?: string;
 }) {
-  return <span className={`badge badge-sm ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}>{label}</span>;
+  return (
+    <span
+      className={`badge badge-sm h-auto max-w-full whitespace-normal break-words py-1 text-center leading-tight ${TONE[tone] ?? TONE.neutral} ${className}`.trim()}
+    >
+      {label}
+    </span>
+  );
 }
 
 export function statusTone(status: string): keyof typeof TONE {
   const s = status.toLowerCase();
   if (["critical", "past due", "disputed", "out of service", "canceled"].some((x) => s.includes(x)))
     return "error";
+  if (s.includes("waiting on parts") || s === "waiting for parts") return "white";
+  if (s.includes("in progress")) return "progress";
   if (
-    ["emergency", "high", "waiting", "pending", "on hold", "low stock", "overdue", "needs review"].some((x) =>
+    ["emergency", "high", "pending", "on hold", "low stock", "overdue", "needs review"].some((x) =>
       s.includes(x),
     )
   )
     return "warning";
   if (
-    ["completed", "paid", "active", "approved", "operational", "renewed", "reviewed", "exported", "posted"].some((x) =>
-      s.includes(x),
+    ["completed", "paid", "active", "approved", "operational", "renewed", "reviewed", "exported", "posted"].some(
+      (x) => s.includes(x),
     )
   )
     return "success";
