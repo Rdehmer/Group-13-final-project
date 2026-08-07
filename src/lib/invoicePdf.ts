@@ -1,29 +1,43 @@
 import { formatMoney } from "@/lib/calculations";
-import { formatServiceDate, type InvoicePdfCustomer, type ServiceHistoryInvoice, type ServiceHistoryWorkOrder } from "@/lib/invoices";
+import {
+  formatServiceDate,
+  type InvoicePdfCustomer,
+  type ServiceHistoryInvoice,
+  type ServiceHistoryWorkOrder,
+} from "@/lib/invoices";
 
 function customerAddress(customer: InvoicePdfCustomer): string {
   const parts = [customer.city, customer.state].filter(Boolean);
   return parts.length ? parts.join(", ") : "";
 }
 
-/** Client-only: loads jspdf on demand so Next does not SSR the node build. */
-export async function downloadInvoicePdf(
+type JsPdfDoc = {
+  setFontSize: (n: number) => void;
+  setFont: (family: string, style: string) => void;
+  text: (text: string, x: number, y: number) => void;
+  save: (filename: string) => void;
+  output: (type: "blob") => Blob;
+  lastAutoTable?: { finalY: number };
+};
+
+/** Client-only: builds an invoice PDF blob (jspdf loaded on demand). */
+export async function buildInvoicePdfBlob(
   invoice: ServiceHistoryInvoice,
   workOrder: ServiceHistoryWorkOrder,
   customer: InvoicePdfCustomer,
-): Promise<void> {
+): Promise<Blob> {
   const [{ jsPDF }, autoTableModule] = await Promise.all([
     import("jspdf"),
     import("jspdf-autotable"),
   ]);
   const autoTable = autoTableModule.default;
-  const doc = new jsPDF();
+  const doc = new jsPDF() as unknown as JsPdfDoc;
   const margin = 14;
   let y = 20;
 
   doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
-  doc.text("Ridley Equipment Services", margin, y);
+  doc.text("EquipmentIQ", margin, y);
 
   y += 8;
   doc.setFontSize(10);
@@ -92,7 +106,7 @@ export async function downloadInvoicePdf(
     lineItems.push(["Service charges", formatMoney(invoice.invoice_total)]);
   }
 
-  autoTable(doc, {
+  autoTable(doc as never, {
     startY: y + 8,
     head: [["Description", "Amount"]],
     body: lineItems,
@@ -101,7 +115,7 @@ export async function downloadInvoicePdf(
     margin: { left: margin, right: margin },
   });
 
-  const finalY = (doc as InstanceType<typeof jsPDF> & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 40;
+  const finalY = doc.lastAutoTable?.finalY ?? y + 40;
 
   doc.setFont("helvetica", "bold");
   doc.text(`Total: ${formatMoney(invoice.invoice_total)}`, margin, finalY + 10);
@@ -109,5 +123,32 @@ export async function downloadInvoicePdf(
   doc.text(`Amount paid: ${formatMoney(invoice.amount_paid)}`, margin, finalY + 16);
   doc.text(`Balance due: ${formatMoney(invoice.remaining_balance)}`, margin, finalY + 22);
 
-  doc.save(`${invoice.invoice_number}.pdf`);
+  return doc.output("blob");
+}
+
+export async function downloadInvoicePdf(
+  invoice: ServiceHistoryInvoice,
+  workOrder: ServiceHistoryWorkOrder,
+  customer: InvoicePdfCustomer,
+): Promise<void> {
+  const blob = await buildInvoicePdfBlob(invoice, workOrder, customer);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${invoice.invoice_number}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function invoicePdfToBase64(
+  invoice: ServiceHistoryInvoice,
+  workOrder: ServiceHistoryWorkOrder,
+  customer: InvoicePdfCustomer,
+): Promise<string> {
+  const blob = await buildInvoicePdfBlob(invoice, workOrder, customer);
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary);
 }

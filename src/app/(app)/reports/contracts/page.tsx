@@ -15,9 +15,21 @@ import {
 } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
-import type { Invoice, Profile, ServiceContract, WorkOrder } from "@/lib/types";
+import {
+  contractEconomicsInRange,
+  periodLabel,
+  periodRangeFromPreset,
+  TECH_HOURLY_COST,
+} from "@/lib/contract-monthly-economics";
+import type {
+  Invoice,
+  Profile,
+  ServiceContract,
+  WorkOrder,
+} from "@/lib/types";
 
 type HighlightColumn = "revenue" | "cost" | "margin";
 type DatePreset = "all" | "month" | "quarter" | "ytd" | "custom";
@@ -29,6 +41,8 @@ type ContractRow = {
   customerName: string;
   revenue: number;
   cost: number;
+  laborCost: number;
+  partsCost: number;
   profit: number;
   margin: number | null;
   status: string;
@@ -41,8 +55,6 @@ type ContractRow = {
 
 type FilterKeys = "name" | "customer" | "status" | "visits";
 
-const LOW_MARGIN_THRESHOLD = 0.2;
-const CANCELED_WO = new Set(["Canceled"]);
 const COMPLETED_WO = new Set(["Completed", "Closed"]);
 const OPEN_WO = (status: string) => !["Completed", "Closed", "Canceled"].includes(status);
 
@@ -197,11 +209,10 @@ export default function ReportsPage() {
       : null,
   );
 
-  const [datePreset, setDatePreset] = useState<DatePreset>("all");
+  const [datePreset, setDatePreset] = useState<DatePreset>("month");
   const [customStart, setCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
   const [customEnd, setCustomEnd] = useState(format(today, "yyyy-MM-dd"));
 
-  const [visitCost, setVisitCost] = useState(350);
   const [laborCostAssumption, setLaborCostAssumption] = useState(45);
   const [avgHoursPerWo, setAvgHoursPerWo] = useState(2.5);
   const [marginThresholdPct, setMarginThresholdPct] = useState(20);
@@ -228,15 +239,25 @@ export default function ReportsPage() {
     direction: "asc" | "desc";
   }>({ column: "name", direction: "asc" });
 
-  const isManager = profile?.role === "service_manager";
+  const isManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
   const lowMarginThreshold = marginThresholdPct / 100;
 
   useEffect(() => {
     (async () => {
-      const [{ data: inv }, { data: sc }, { data: wo }, { data: { user } }] = await Promise.all([
+      const [
+        { data: inv },
+        { data: sc },
+        { data: wo },
+        {
+          data: { user },
+        },
+      ] = await Promise.all([
         supabase.from("invoices").select("*"),
         supabase.from("service_contracts").select("*, customers(id, name)"),
-        supabase.from("work_orders").select("*"),
+        supabase
+          .from("work_orders")
+          .select("id, contract_id, status, completion_date, scheduled_date, created_at"),
         supabase.auth.getUser(),
       ]);
       setInvoices((inv as Invoice[]) ?? []);
@@ -261,14 +282,10 @@ export default function ReportsPage() {
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [highlight, contracts]);
 
-  const visitsByContract = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const wo of workOrders) {
-      if (!wo.contract_id || CANCELED_WO.has(wo.status)) continue;
-      map.set(wo.contract_id, (map.get(wo.contract_id) ?? 0) + 1);
-    }
-    return map;
-  }, [workOrders]);
+  const periodRange = useMemo(
+    () => periodRangeFromPreset(datePreset, today, customStart, customEnd),
+    [datePreset, today, customStart, customEnd],
+  );
 
   const datedContracts = useMemo(
     () =>
@@ -279,24 +296,27 @@ export default function ReportsPage() {
   );
 
   function toRow(c: (typeof contracts)[number]): ContractRow {
-    const rev = Number(c.contract_price);
-    const included = Number(c.included_service_visits) || 0;
-    const used = visitsByContract.get(c.id) ?? 0;
-    const cost = included * visitCost;
-    const gp = grossProfit(rev, cost);
+    const econ = contractEconomicsInRange(c, workOrders, periodRange);
     return {
       id: c.id,
       name: c.name,
       customerId: c.customers?.id ?? c.customer_id ?? null,
       customerName: c.customers?.name ?? "—",
-      revenue: rev,
-      cost,
-      profit: gp,
-      margin: profitMargin(rev, gp),
+      revenue: econ.monthlyRevenue,
+      cost: econ.directCost,
+      laborCost: econ.laborCost,
+      partsCost: econ.partsCost,
+      profit: econ.profit,
+      margin: econ.margin,
       status: c.status,
-      includedVisits: included,
-      usedVisits: used,
-      utilization: included > 0 ? used / included : used > 0 ? null : 0,
+      includedVisits: econ.includedVisits,
+      usedVisits: econ.usedVisits,
+      utilization:
+        econ.includedVisits > 0
+          ? econ.usedVisits / econ.includedVisits
+          : econ.usedVisits > 0
+            ? null
+            : 0,
       startDate: c.start_date,
       endDate: c.end_date,
     };
@@ -304,13 +324,12 @@ export default function ReportsPage() {
 
   const activeRowsBase = useMemo(
     () => datedContracts.filter((c) => c.status === "Active").map(toRow),
-    // visitCost and visitsByContract affect toRow
-    [datedContracts, visitCost, visitsByContract],
+    [datedContracts, workOrders, periodRange],
   );
 
   const inactiveRowsBase = useMemo(
     () => datedContracts.filter((c) => c.status !== "Active").map(toRow),
-    [datedContracts, visitCost, visitsByContract],
+    [datedContracts, workOrders, periodRange],
   );
 
   function applyTableFilters(
@@ -412,6 +431,11 @@ export default function ReportsPage() {
 
   function selectHighlight(column: HighlightColumn) {
     setHighlight((prev) => (prev === column ? null : column));
+    window.setTimeout(() => {
+      document
+        .getElementById("contract-profitability")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }
 
   function cellClass(column: HighlightColumn) {
@@ -478,9 +502,11 @@ export default function ReportsPage() {
         "Status",
         "Start",
         "End",
-        "Revenue",
-        "Est. Cost",
-        "Est. Profit",
+        "Monthly Fee",
+        "Direct Cost",
+        "Labor Cost",
+        "Parts Cost",
+        "Gross Profit",
         "Margin %",
         "Included Visits",
         "Used Visits",
@@ -494,6 +520,8 @@ export default function ReportsPage() {
         r.endDate,
         r.revenue,
         r.cost,
+        r.laborCost,
+        r.partsCost,
         r.profit,
         r.margin !== null ? (r.margin * 100).toFixed(1) : "",
         r.includedVisits,
@@ -567,7 +595,7 @@ export default function ReportsPage() {
       sort.column === col ? (sort.direction === "asc" ? " ↑" : " ↓") : "";
 
     return (
-      <div className="overflow-x-auto">
+      <DualHorizontalScroll>
         <table className="table">
           <thead>
             <tr>
@@ -577,16 +605,16 @@ export default function ReportsPage() {
                 className={`cursor-pointer ${highlight === "revenue" ? "bg-warning/30" : ""}`}
                 onClick={() => onNumericSort(which, "revenue")}
               >
-                Revenue{sortHint("revenue")}
+                  Monthly fee{sortHint("revenue")}
               </th>
               <th
                 className={`cursor-pointer ${highlight === "cost" ? "bg-warning/30" : ""}`}
                 onClick={() => onNumericSort(which, "cost")}
               >
-                Est. Cost{sortHint("cost")}
+                Direct Cost{sortHint("cost")}
               </th>
               <th className="cursor-pointer" onClick={() => onNumericSort(which, "profit")}>
-                Est. Profit{sortHint("profit")}
+                Gross Profit{sortHint("profit")}
               </th>
               <th
                 className={`cursor-pointer ${highlight === "margin" ? "bg-warning/30" : ""}`}
@@ -678,7 +706,12 @@ export default function ReportsPage() {
                   )}
                 </td>
                 <td className={cellClass("revenue")}>{formatMoney(r.revenue)}</td>
-                <td className={cellClass("cost")}>{formatMoney(r.cost)}</td>
+                <td className={cellClass("cost")}>
+                  <div>{formatMoney(r.cost)}</div>
+                  <div className="text-xs font-normal opacity-60">
+                    L {formatMoney(r.laborCost)} · P {formatMoney(r.partsCost)}
+                  </div>
+                </td>
                 <td className={highlight ? "bg-base-100 text-base-content/50" : ""}>
                   {formatMoney(r.profit)}
                 </td>
@@ -712,7 +745,7 @@ export default function ReportsPage() {
             </tfoot>
           ) : null}
         </table>
-      </div>
+      </DualHorizontalScroll>
     );
   }
 
@@ -720,7 +753,7 @@ export default function ReportsPage() {
     <div>
       <PageHeader
         title="Contract profitability"
-        description="Contract profitability analysis"
+        description="Monthly fee vs planned direct cost (labor @ $42/hr + parts ÷ 12)"
         actions={
           <div className="flex flex-wrap gap-2">
             <Link href="/reports" className="btn btn-ghost btn-sm">
@@ -740,6 +773,22 @@ export default function ReportsPage() {
         }
       />
 
+      {profile && !isManager ? (
+        <div className="mt-6">
+          <EmptyState
+            title="Manager / admin only"
+            description="Monthly contract revenue and direct costs are available to service managers and administrators."
+            action={
+              <Link href="/dashboard" className="btn btn-sm">
+                Back to dashboard
+              </Link>
+            }
+          />
+        </div>
+      ) : null}
+
+      {!profile || !isManager ? null : (
+        <>
       {fromContracts ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-box border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <span>Opened from Contracts summary.</span>
@@ -752,7 +801,10 @@ export default function ReportsPage() {
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-box bg-base-100 p-4 text-sm shadow">
         <div>
           <p className="mb-1 font-semibold">Date range</p>
-          <p className="mb-2 text-xs opacity-60">Contracts that overlap the selected period</p>
+          <p className="mb-2 text-xs opacity-60">
+            Contracts overlapping the period · monthly fee vs planned monthly direct cost (
+            {periodLabel(periodRange, today)})
+          </p>
           <div className="flex flex-wrap gap-2">
             {(
               [
@@ -815,44 +867,38 @@ export default function ReportsPage() {
       </div>
 
       <div className="mb-4 rounded-box bg-base-100 p-4 text-sm shadow">
-        <p className="font-semibold">Assumptions (editable what-if)</p>
+        <p className="font-semibold">How monthly profit is measured</p>
         <p className="mt-1 text-xs opacity-60">
-          Changes update estimated cost and margin live. Not saved to the database.
+          Revenue is the contract Monthly fee. Direct cost spreads included labor hours and parts
+          allowance across the year at ${TECH_HOURLY_COST}/hr for techs.
         </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="form-control">
-            <span className="label-text text-xs">Visit cost ($)</span>
-            <input
-              type="number"
-              min={0}
-              step={10}
-              className="input input-bordered input-sm"
-              value={visitCost}
-              onChange={(e) => setVisitCost(Number(e.target.value) || 0)}
-            />
-          </label>
-          <label className="form-control">
-            <span className="label-text text-xs">Labor cost ($/hr)</span>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              className="input input-bordered input-sm"
-              value={laborCostAssumption}
-              onChange={(e) => setLaborCostAssumption(Number(e.target.value) || 0)}
-            />
-          </label>
-          <label className="form-control">
-            <span className="label-text text-xs">Avg hours / completed WO</span>
-            <input
-              type="number"
-              min={0}
-              step={0.1}
-              className="input input-bordered input-sm"
-              value={avgHoursPerWo}
-              onChange={(e) => setAvgHoursPerWo(Number(e.target.value) || 0)}
-            />
-          </label>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {!isManager ? (
+            <>
+              <label className="form-control">
+                <span className="label-text text-xs">Labor cost ($/hr) — invoice what-if</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="input input-bordered input-sm"
+                  value={laborCostAssumption}
+                  onChange={(e) => setLaborCostAssumption(Number(e.target.value) || 0)}
+                />
+              </label>
+              <label className="form-control">
+                <span className="label-text text-xs">Avg hours / completed WO — invoice what-if</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  className="input input-bordered input-sm"
+                  value={avgHoursPerWo}
+                  onChange={(e) => setAvgHoursPerWo(Number(e.target.value) || 0)}
+                />
+              </label>
+            </>
+          ) : null}
           <label className="form-control">
             <span className="label-text text-xs">Low-margin flag below (%)</span>
             <input
@@ -867,17 +913,19 @@ export default function ReportsPage() {
           </label>
         </div>
         <ul className="mt-3 list-inside list-disc opacity-80">
-          <li>Est. contract cost = included visits × visit cost</li>
-          <li>Parts direct cost estimated at 60% of billed parts (invoice summary only)</li>
-          <li>Used visits = non-canceled work orders linked to the contract</li>
+          <li>Revenue = Monthly fee on the contract</li>
           <li>
-            Active summary cards use the filtered Active table (same date range / column filters)
+            Direct cost / month = (included labor hours × ${TECH_HOURLY_COST} + parts allowance) ÷ 12
           </li>
+          <li>
+            Visits are for utilization only (labor hours already cover visit work — not double-counted)
+          </li>
+          <li>Click summary cards to highlight Monthly fee, Direct Cost, or Margin in the table</li>
         </ul>
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm font-medium opacity-70">
-        <span>Contract summary</span>
+        <span>Contract summary · {periodLabel(periodRange, today)}</span>
         {lowMarginCount > 0 ? (
           <span className="badge badge-warning badge-sm font-normal">
             {lowMarginCount} active contract(s) below {marginThresholdPct}% margin
@@ -887,18 +935,19 @@ export default function ReportsPage() {
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <SegmentButton
           column="revenue"
-          label="Active Contract Revenue"
+          label="Monthly Fee Revenue"
           value={formatMoney(activeContractRevenue)}
+          hint="Sum of contract monthly fees"
         />
         <SegmentButton
           column="cost"
-          label="Est. Direct Cost"
+          label="Monthly Direct Cost"
           value={formatMoney(activeContractDirectCost)}
-          hint={`$${visitCost}/visit × included visits`}
+          hint={`Labor @ $${TECH_HOURLY_COST}/hr + parts ÷ 12`}
         />
         <SegmentButton
           column="margin"
-          label="Est. Gross Margin"
+          label="Gross Margin"
           value={formatPct(activeContractMargin)}
           hint={`Profit ${formatMoney(activeContractProfit)}`}
         />
@@ -908,28 +957,60 @@ export default function ReportsPage() {
         <>
           <div className="mb-2 text-sm font-medium opacity-70">Invoice & cash summary</div>
           <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="stat rounded-box bg-base-100 shadow">
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Recognized Revenue</div>
               <div className="stat-value text-2xl">{formatMoney(recognizedRevenue)}</div>
-            </div>
-            <div className="stat rounded-box bg-base-100 shadow">
+            </button>
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Cash Collected</div>
               <div className="stat-value text-2xl">{formatMoney(collected)}</div>
-            </div>
-            <div className="stat rounded-box bg-base-100 shadow">
+            </button>
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Open AR</div>
               <div className="stat-value text-2xl">{formatMoney(openAr)}</div>
-            </div>
-            <div className="stat rounded-box bg-base-100 shadow">
+            </button>
+            <button
+              type="button"
+              className="stat w-full cursor-pointer rounded-box bg-base-100 text-left shadow transition hover:bg-base-200/70"
+              onClick={() =>
+                document
+                  .getElementById("contract-profitability")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
               <div className="stat-title">Invoice Est. Gross Margin</div>
               <div className="stat-value text-2xl">{formatPct(invoiceMargin)}</div>
               <div className="stat-desc">Profit {formatMoney(invoiceProfit)}</div>
-            </div>
+            </button>
           </div>
         </>
       ) : null}
 
-      <div id="contract-profitability" className="card bg-base-100 shadow">
+      <div id="contract-profitability" className="card scroll-mt-4 bg-base-100 shadow">
         <div className="card-body">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="card-title text-base">
@@ -1036,6 +1117,8 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

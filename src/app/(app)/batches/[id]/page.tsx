@@ -22,6 +22,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -328,18 +329,32 @@ export default function BatchDetailPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Invoices" value={batch.invoice_count} hint={formatMoney(batch.invoice_total)} />
-        <StatCard label="Payments" value={batch.payment_count} hint={formatMoney(batch.payment_total)} />
-        <StatCard label="Batch total" value={formatMoney(grand)} />
+        <StatCard
+          label="Invoices"
+          value={batch.invoice_count}
+          hint={formatMoney(batch.invoice_total)}
+          scrollTarget="batch-invoices"
+        />
+        <StatCard
+          label="Payments"
+          value={batch.payment_count}
+          hint={formatMoney(batch.payment_total)}
+          scrollTarget="batch-payments"
+        />
+        <StatCard label="Batch total" value={formatMoney(grand)} scrollTarget="batch-invoices" />
         <StatCard
           label="Editability"
           value={isOpen ? "Unlocked" : "Locked"}
           hint={isOpen ? "Can add/remove lines" : "Post status prevents edits"}
+          scrollTarget="batch-actions"
         />
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap gap-2 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
+      <div
+        id="batch-actions"
+        className="flex scroll-mt-4 flex-wrap gap-2 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm"
+      >
         {isOpen ? (
           <>
             <button
@@ -532,14 +547,17 @@ export default function BatchDetailPage() {
       ) : null}
 
       {/* Invoice lines */}
-      <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+      <section
+        id="batch-invoices"
+        className="scroll-mt-4 rounded-2xl border border-base-300 bg-base-100 shadow-sm"
+      >
         <div className="border-b border-base-200 px-4 py-3">
           <h2 className="font-bold">Invoices in batch</h2>
         </div>
         {invoices.length === 0 ? (
           <p className="p-6 text-sm opacity-50">No invoices in this batch.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -596,19 +614,22 @@ export default function BatchDetailPage() {
                 </tr>
               </tfoot>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
 
       {/* Payment lines */}
-      <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+      <section
+        id="batch-payments"
+        className="scroll-mt-4 rounded-2xl border border-base-300 bg-base-100 shadow-sm"
+      >
         <div className="border-b border-base-200 px-4 py-3">
           <h2 className="font-bold">Payments in batch</h2>
         </div>
         {payments.length === 0 ? (
           <p className="p-6 text-sm opacity-50">No payments in this batch.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <DualHorizontalScroll>
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -669,7 +690,7 @@ export default function BatchDetailPage() {
                 </tr>
               </tfoot>
             </table>
-          </div>
+          </DualHorizontalScroll>
         )}
       </section>
     </div>

@@ -41,3 +41,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# E2E screenshot artifacts
+scripts/.e2e-artifacts/
+scripts/.e2e-artifacts-full-c2c/

@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { formatMoney } from "@/lib/calculations";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import {
   EmergencyPurchaseReview,
@@ -173,14 +174,36 @@ export default function EmergencyPurchasesPage() {
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="stats stats-horizontal shadow">
-          <div className="stat px-4 py-3">
+          <button
+            type="button"
+            className="stat cursor-pointer px-4 py-3 text-left transition hover:bg-base-200/70"
+            onClick={() => {
+              setStatusFilter("submitted");
+              window.setTimeout(() => {
+                document
+                  .getElementById("emergency-purchases-list")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 50);
+            }}
+          >
             <div className="stat-title text-xs">Awaiting reimbursement</div>
             <div className="stat-value text-2xl">{submittedCount}</div>
-          </div>
-          <div className="stat px-4 py-3">
+          </button>
+          <button
+            type="button"
+            className="stat cursor-pointer px-4 py-3 text-left transition hover:bg-base-200/70"
+            onClick={() => {
+              setStatusFilter("all");
+              window.setTimeout(() => {
+                document
+                  .getElementById("emergency-purchases-list")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 50);
+            }}
+          >
             <div className="stat-title text-xs">Outstanding total</div>
             <div className="stat-value text-2xl">{formatMoney(totalOutstanding)}</div>
-          </div>
+          </button>
         </div>
         <select
           className="select select-bordered select-sm"
@@ -197,6 +220,7 @@ export default function EmergencyPurchasesPage() {
         </button>
       </div>
 
+      <div id="emergency-purchases-list" className="scroll-mt-4">
       {loading ? (
         <div className="space-y-3">
           <div className="skeleton h-24 w-full rounded-2xl" />
@@ -208,7 +232,7 @@ export default function EmergencyPurchasesPage() {
           description="When a technician uses Parts → I bought a part, the store purchase, job, amount, and receipt appear here."
         />
       ) : (
-        <div className="overflow-x-auto rounded-box border border-base-300 bg-base-100 shadow">
+        <DualHorizontalScroll className="rounded-box border border-base-300 bg-base-100 shadow">
           <table className="table">
             <thead>
               <tr>
@@ -282,8 +306,9 @@ export default function EmergencyPurchasesPage() {
               })}
             </tbody>
           </table>
-        </div>
+        </DualHorizontalScroll>
       )}
+      </div>
 
       {reviewPurchase ? (
         <EmergencyPurchaseReview

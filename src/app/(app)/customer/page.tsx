@@ -78,7 +78,7 @@ function HomePrimaryAction({
         </span>
       </div>
       <div>
-        <p className="font-display text-xl font-semibold leading-tight">{title}</p>
+        <p className="font-display text-xl font-semibold leading-tight !text-white">{title}</p>
         <p className="mt-1 text-sm text-primary-content/80">{description}</p>
       </div>
     </GatedDashboardLink>
@@ -149,7 +149,8 @@ function CustomerDashboardPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectEquipmentId = searchParams.get("equipment_id");
-  const { isGateActive, pendingCount, activeWorkOrder, blockNavigation } = useCustomerRatingGate();
+  const { isGateActive, pendingCount, activeWorkOrder, blockNavigation, dismissRatingPrompt } =
+    useCustomerRatingGate();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [equipmentCount, setEquipmentCount] = useState(0);
   const [contractCount, setContractCount] = useState(0);
@@ -222,7 +223,7 @@ function CustomerDashboardPageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -241,14 +242,23 @@ function CustomerDashboardPageInner() {
       {isGateActive && activeWorkOrder && shouldPromptForRating(activeWorkOrder) ? (
         <div role="status" className="alert alert-warning mb-6 shadow-sm">
           <Star className="h-5 w-5 shrink-0" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium">Rate your recent service</p>
-            <p className="opacity-80">
-              <span className="font-medium">{activeWorkOrder.work_order_number}</span>
-              {activeWorkOrder.equipment?.name ? ` · ${activeWorkOrder.equipment.name}` : ""} was completed.
-              Please submit your feedback to continue using the portal.
-              {pendingCount > 1 ? ` ${pendingCount} visits awaiting feedback.` : ""}
-            </p>
+          <div className="flex flex-1 flex-wrap items-center justify-between gap-3 text-sm">
+            <div>
+              <p className="font-medium">Rate your recent service</p>
+              <p className="opacity-80">
+                <span className="font-medium">{activeWorkOrder.work_order_number}</span>
+                {activeWorkOrder.equipment?.name ? ` · ${activeWorkOrder.equipment.name}` : ""} was completed.
+                Please submit your feedback to continue using the portal.
+                {pendingCount > 1 ? ` ${pendingCount} visits awaiting feedback.` : ""}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost shrink-0"
+              onClick={dismissRatingPrompt}
+            >
+              Continue to dashboard
+            </button>
           </div>
         </div>
       ) : null}
@@ -261,7 +271,7 @@ function CustomerDashboardPageInner() {
           <HomePrimaryAction
             href="/customer/request-contract"
             title="Request a contract"
-            description="Choose coverage for your equipment and send a request to Ridley."
+            description="Choose coverage for your equipment and send a request to EquipmentIQ."
             icon={<FilePlus2 className="h-5 w-5" aria-hidden />}
             isGateActive={isGateActive}
             blockNavigation={blockNavigation}

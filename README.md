@@ -1,6 +1,6 @@
 # Equipment Service Manager
 
-Local web app for **Ridley Equipment Services** to manage customers, commercial equipment, service contracts, work orders, technicians, parts, billing, simulated payments, and profitability.
+Local web app for **EquipmentIQ** to manage customers, commercial equipment, service contracts, work orders, technicians, parts, billing, simulated payments, and profitability.
 
 Built with Next.js, React, Tailwind CSS, daisyUI, Supabase, and Recharts.
 
@@ -38,13 +38,13 @@ Password for all demo users: **`DemoPass123!`**
 
 | Email | Role | Where you land |
 |-------|------|----------------|
-| admin@ridley-demo.test | Administrator | Management dashboard |
-| manager@ridley-demo.test | Service Manager | Management dashboard |
-| tech1@ridley-demo.test | Technician | Technician schedule |
-| billing@ridley-demo.test | Billing Employee | Billing |
-| customer1@ridley-demo.test | Customer | Customer portal (Northwind Cold Storage) |
+| admin@equipmentiq-demo.test | Administrator | Management dashboard |
+| manager@equipmentiq-demo.test | Service Manager | Management dashboard |
+| tech1@equipmentiq-demo.test | Technician | Technician schedule |
+| billing@equipmentiq-demo.test | Billing Employee | Billing |
+| customer1@equipmentiq-demo.test | Customer | Customer portal (Northwind Cold Storage) |
 
-Extra technicians: tech2–tech5@ridley-demo.test
+Extra technicians: tech2–tech5@equipmentiq-demo.test
 
 ## What to click to test (quick tour)
 
@@ -65,7 +65,15 @@ Extra technicians: tech2–tech5@ridley-demo.test
 
 ## Seed data included
 
-At least: 10 customers, 20 equipment, 10 contracts, 30 work orders, 5 technicians, 20 parts, 15 invoices, 10 payments, plus edge cases (unprofitable contract, emergency/critical, overdue PM, waiting on parts, warranty, partial/past-due/disputed invoices, expired/renewed contracts, pending additional work, completed-unbilled, low stock).
+**Minimal C2C scaffold** (migration `20260808230000_minimal_c2c_seed_reset`):
+
+- **Kept:** demo logins/profiles, parts catalog, vendor1, company settings
+- **Customers:** Northwind Cold Storage (`customer1`, Active contract) and Summit Cold Express (`customer2`, no contract / hot prospect)
+- **Equipment:** 2 units each (Northwind: Blast Freezer A, Compressor Rack 1)
+- **Contracts:** one Active Northwind PM Gold (started 2026-01-01 so service requests are allowed)
+- **Cleared:** work orders, invoices, payments, labor, time entries, inbox threads, showcase CRM customers
+
+Walk the happy path empty: customer request → manager assign → tech complete → billing invoice/pay.
 
 ## Important limits (first version)
 

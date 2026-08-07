@@ -19,7 +19,17 @@ export function canCreateVendor(role: UserRole): boolean {
   return isVendorManager(role);
 }
 
+/** Profile edits, active/inactive — manager/admin only (billing is AP only). */
+export function canEditVendorMaster(role: UserRole): boolean {
+  return isVendorManager(role);
+}
+
 export function canDeleteVendor(role: UserRole): boolean {
+  return isVendorManager(role);
+}
+
+/** Record AP payments / mark bills paid — manager/admin only (billing enters bills). */
+export function canRecordVendorPayment(role: UserRole): boolean {
   return isVendorManager(role);
 }
 

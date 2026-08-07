@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import {
   ACCOUNTING_POLICIES,
@@ -46,12 +47,16 @@ import {
   salesByMonth,
   salesByService,
   salesTaxReport,
-  technicianLaborReport,
+  technicianTimesheetSummaryByPayPeriod,
+  defaultCurrentPayPeriod,
+  shiftPayPeriod,
+  payPeriodContaining,
   unbilledJobs,
   type DateRange,
   type InvoiceWithCustomer,
   type ReportId,
   type TechProfile,
+  type TimesheetSummaryReport,
 } from "@/lib/reports";
 import { contractAssetRollforward } from "@/lib/accounting/earned-revenue";
 import { trialBalance } from "@/lib/accounting/ledger-local";
@@ -60,16 +65,18 @@ import type {
   Payment,
   ServiceContract,
   TechnicianLabor,
+  TimeEntry,
   WorkOrder,
   WorkOrderPart,
 } from "@/lib/types";
+import { loadTimeEntries, timesheetHref } from "@/lib/timesheets";
 
 type JobRow = WorkOrder & { customers?: { name: string } };
 type ContractRow = ServiceContract & { customers?: { name: string } };
 type PaymentRow = Payment & { customers?: { name: string } };
 
 /**
- * GAAP-oriented financial reporting center for Ridley Equipment Services.
+ * GAAP-oriented financial reporting center for EquipmentIQ.
  * Full suite: financials, collections, job profitability, labor, inventory, tax.
  */
 export default function ReportsPage() {
@@ -85,13 +92,18 @@ export default function ReportsPage() {
   const [contracts, setContracts] = useState<ContractRow[]>([]);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [labor, setLabor] = useState<TechnicianLabor[]>([]);
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [partsUsed, setPartsUsed] = useState<WorkOrderPart[]>([]);
   const [parts, setParts] = useState<Part[]>([]);
   const [profiles, setProfiles] = useState<TechProfile[]>([]);
+  const [techFilter, setTechFilter] = useState<string>("");
+  /** When viewing timesheet summary, prefer weekly pay periods. */
+  const [payPeriodRange, setPayPeriodRange] = useState<DateRange>(() => defaultCurrentPayPeriod());
 
   async function load() {
     setLoading(true);
     setError(null);
+    const payRange = payPeriodRange;
     const [
       { data: inv, error: e1 },
       { data: pay, error: e2 },
@@ -112,8 +124,15 @@ export default function ReportsPage() {
       supabase.from("technician_labor").select("*"),
       supabase.from("work_order_parts").select("*"),
       supabase.from("parts").select("*"),
-      supabase.from("profiles").select("id, full_name, email, role"),
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, role, hourly_cost_rate, hourly_billing_rate"),
     ]);
+
+    const te = await loadTimeEntries(supabase, {
+      from: payRange.start,
+      to: payRange.end,
+    }).catch(() => [] as TimeEntry[]);
 
     const err = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8;
     if (err) setError(err.message);
@@ -123,6 +142,7 @@ export default function ReportsPage() {
     setContracts((sc as ContractRow[]) ?? []);
     setJobs((wo as JobRow[]) ?? []);
     setLabor((lab as TechnicianLabor[]) ?? []);
+    setTimeEntries(te);
     setPartsUsed((wop as WorkOrderPart[]) ?? []);
     setParts((pts as Part[]) ?? []);
     setProfiles((prof as TechProfile[]) ?? []);
@@ -131,7 +151,8 @@ export default function ReportsPage() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when pay period window changes for timesheets
+  }, [payPeriodRange.start, payPeriodRange.end]);
 
   const costs = useMemo(() => ({ labor, partsUsed, jobs }), [labor, partsUsed, jobs]);
 
@@ -185,8 +206,11 @@ export default function ReportsPage() {
     [invoices, jobs, costs, range],
   );
   const techLabor = useMemo(
-    () => technicianLaborReport(labor, profiles, range),
-    [labor, profiles, range],
+    () =>
+      technicianTimesheetSummaryByPayPeriod(timeEntries, labor, profiles, payPeriodRange, {
+        technicianId: techFilter || null,
+      }),
+    [timeEntries, labor, profiles, payPeriodRange, techFilter],
   );
   const inventory = useMemo(
     () => inventoryValuation(parts, partsUsed, range),
@@ -220,6 +244,7 @@ export default function ReportsPage() {
     "deferred_revenue",
     "trial_balance",
     "contract_asset",
+    "tech_labor",
   ].includes(reportId);
 
   function printReport() {
@@ -227,7 +252,10 @@ export default function ReportsPage() {
   }
 
   function exportCurrent() {
-    const name = `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${range.start}_${range.end}`;
+    const name =
+      reportId === "tech_labor"
+        ? `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${payPeriodRange.start}_${payPeriodRange.end}`
+        : `${REPORT_NAME[reportId].replace(/\s+/g, "_")}_${range.start}_${range.end}`;
     switch (reportId) {
       case "executive":
         exportCsv(name, ["KPI", "Value"], [
@@ -443,21 +471,72 @@ export default function ReportsPage() {
           ]),
         );
         break;
-      case "tech_labor":
-        exportCsv(
-          name,
-          ["Technician", "Reg hrs", "OT hrs", "Total hrs", "Labor cost", "Billable $", "Recovery"],
-          techLabor.rows.map((r) => [
-            r.name,
-            r.regularHours,
-            r.overtimeHours,
-            r.totalHours,
-            r.laborCost,
-            r.billableAmount,
-            r.recovery != null ? r.recovery.toFixed(2) + "x" : "N/A",
-          ]),
-        );
+      case "tech_labor": {
+        const headers = [
+          "Technician",
+          "Date",
+          "Start",
+          "First Arrival",
+          "End",
+          "Idle",
+          "Driving",
+          "Job Hrs",
+          "Meal",
+          "Training",
+          "Other",
+          "Hours Worked",
+          "Regular",
+          "Overtime",
+          "Double OT",
+          "PTO",
+          "Total Pay",
+        ];
+        const flat: (string | number)[][] = [];
+        for (const tech of techLabor.technicians) {
+          for (const d of tech.days) {
+            flat.push([
+              tech.name,
+              d.date,
+              d.start ?? "",
+              d.firstArrival ?? "",
+              d.end ?? "",
+              d.idle,
+              d.driving,
+              d.jobHours,
+              d.meal,
+              d.training,
+              d.other,
+              d.hoursWorked,
+              d.regular,
+              d.overtime,
+              d.doubleOt,
+              d.pto,
+              "",
+            ]);
+          }
+          flat.push([
+            tech.name,
+            "PAY PERIOD TOTAL",
+            "",
+            "",
+            "",
+            tech.totals.idle,
+            tech.totals.driving,
+            tech.totals.jobHours,
+            tech.totals.meal,
+            tech.totals.training,
+            tech.totals.other,
+            tech.totals.hoursWorked,
+            tech.totals.regular,
+            tech.totals.overtime,
+            tech.totals.doubleOt,
+            tech.totals.pto,
+            tech.totals.totalPay,
+          ]);
+        }
+        exportCsv(name, headers, flat);
         break;
+      }
       case "inventory":
         exportCsv(
           name,
@@ -544,7 +623,7 @@ export default function ReportsPage() {
     <div className="reports-page">
       <PageHeader
         title="Reports"
-        description="GAAP financials plus collections, job profitability, labor productivity, inventory, and tax — live from Ridley data"
+        description="GAAP financials plus collections, job profitability, timesheet pay periods, inventory, and tax — live from EquipmentIQ data"
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
@@ -627,13 +706,19 @@ export default function ReportsPage() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-base-content/45">
-                  Ridley Equipment Services · U.S. GAAP orientation
+                  EquipmentIQ · U.S. GAAP orientation
                 </p>
                 <h2 className="text-xl font-bold tracking-tight sm:text-2xl">{REPORT_NAME[reportId]}</h2>
                 <p className="mt-1 text-sm opacity-60">
                   {needsAsOf ? (
                     <>
                       As of <strong>{asOf}</strong>
+                    </>
+                  ) : null}
+                  {reportId === "tech_labor" ? (
+                    <>
+                      Pay period <strong>{payPeriodRange.start}</strong> → <strong>{payPeriodRange.end}</strong>
+                      {" · "}Sunday–Saturday (ServiceTitan-style)
                     </>
                   ) : null}
                   {needsRange ? (
@@ -650,6 +735,9 @@ export default function ReportsPage() {
                   {reportId === "cash_flow" ? " · Cash · payment date" : null}
                   {reportId === "balance_sheet" ? " · Accrual position" : null}
                   {reportId === "deferred_revenue" ? " · Prepaid contract unearned balances" : null}
+                  {reportId === "tech_labor"
+                    ? " · Daily timesheets · start/end · driving · job hrs · reg/OT · total pay"
+                    : null}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 print:hidden">
@@ -665,6 +753,70 @@ export default function ReportsPage() {
             </div>
 
             <div className="mt-4 flex flex-wrap items-end gap-3 border-t border-base-200 pt-4 print:hidden">
+              {reportId === "tech_labor" ? (
+                <>
+                  <label className="form-control">
+                    <span className="label-text text-xs">Pay period from</span>
+                    <input
+                      type="date"
+                      className="input input-bordered input-sm"
+                      value={payPeriodRange.start}
+                      onChange={(e) => setPayPeriodRange(payPeriodContaining(e.target.value))}
+                    />
+                  </label>
+                  <label className="form-control">
+                    <span className="label-text text-xs">Pay period to</span>
+                    <input
+                      type="date"
+                      className="input input-bordered input-sm"
+                      value={payPeriodRange.end}
+                      readOnly
+                      title="Pay periods are fixed 7-day weeks (Sun–Sat)"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-1 pb-0.5">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setPayPeriodRange((r) => shiftPayPeriod(r, -1))}
+                    >
+                      ← Prior period
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setPayPeriodRange(defaultCurrentPayPeriod())}
+                    >
+                      This period
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setPayPeriodRange((r) => shiftPayPeriod(r, 1))}
+                    >
+                      Next period →
+                    </button>
+                  </div>
+                  <label className="form-control min-w-[12rem]">
+                    <span className="label-text text-xs">Technician</span>
+                    <select
+                      className="select select-bordered select-sm"
+                      value={techFilter}
+                      onChange={(e) => setTechFilter(e.target.value)}
+                    >
+                      <option value="">All technicians</option>
+                      {profiles
+                        .filter((p) => p.role === "technician" || labor.some((l) => l.technician_id === p.id) || timeEntries.some((t) => t.technician_id === p.id))
+                        .sort((a, b) => (a.full_name || a.email || "").localeCompare(b.full_name || b.email || ""))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.full_name || p.email}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
               {needsRange ? (
                 <>
                   <label className="form-control">
@@ -773,7 +925,7 @@ function ReportTable({
   footer?: React.ReactNode;
 }) {
   return (
-    <div className="overflow-x-auto">
+    <DualHorizontalScroll>
       <table className="table table-sm w-full">
         <thead>
           <tr className="border-b-2 border-base-content/20">
@@ -787,7 +939,7 @@ function ReportTable({
         <tbody>{children}</tbody>
         {footer ? <tfoot>{footer}</tfoot> : null}
       </table>
-    </div>
+    </DualHorizontalScroll>
   );
 }
 
@@ -819,6 +971,15 @@ function VarianceCell({ n }: { n: number }) {
   );
 }
 
+function ReportStat(props: {
+  label: string;
+  value: string | number;
+  hint?: string;
+  danger?: boolean;
+}) {
+  return <StatCard {...props} scrollTarget="report-detail" />;
+}
+
 function ExecutiveReport({
   data,
   onOpen,
@@ -829,7 +990,7 @@ function ExecutiveReport({
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Service revenue"
           value={formatReportMoney(data.pnl.serviceRevenue)}
           hint={
@@ -838,12 +999,12 @@ function ExecutiveReport({
               : "vs prior period N/A"
           }
         />
-        <StatCard
+        <ReportStat
           label="Gross profit"
           value={formatReportMoney(data.pnl.gross)}
           hint={`Margin ${formatReportPct(data.pnl.margin)}`}
         />
-        <StatCard
+        <ReportStat
           label="Cash collected"
           value={formatReportMoney(data.periodCash)}
           hint={
@@ -852,7 +1013,7 @@ function ExecutiveReport({
               : "Payment period cash"
           }
         />
-        <StatCard
+        <ReportStat
           label="Days sales outstanding"
           value={data.dso != null ? `${data.dso.toFixed(0)} days` : "N/A"}
           hint={`AR net ${formatReportMoney(data.arNet)}`}
@@ -861,15 +1022,15 @@ function ExecutiveReport({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Unbilled (contract assets)"
           value={formatReportMoney(data.unbilledValue)}
           hint={`${data.unbilledCount} completed jobs`}
           danger={data.unbilledCount > 0}
         />
-        <StatCard label="Inventory at cost" value={formatReportMoney(data.inventory)} />
-        <StatCard label="Sales tax payable" value={formatReportMoney(data.taxPayable)} />
-        <StatCard
+        <ReportStat label="Inventory at cost" value={formatReportMoney(data.inventory)} />
+        <ReportStat label="Sales tax payable" value={formatReportMoney(data.taxPayable)} />
+        <ReportStat
           label="Job losses in range"
           value={data.jobLossCount}
           hint={`${data.jobCount} billed jobs analyzed`}
@@ -910,17 +1071,17 @@ function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard
+        <ReportStat
           label="Current revenue"
           value={formatReportMoney(data.current.serviceRevenue)}
           hint={`${data.range.start} → ${data.range.end}`}
         />
-        <StatCard
+        <ReportStat
           label="Prior revenue"
           value={formatReportMoney(data.previous.serviceRevenue)}
           hint={`${data.prior.start} → ${data.prior.end}`}
         />
-        <StatCard
+        <ReportStat
           label="Revenue change"
           value={
             data.revenueGrowth != null
@@ -930,7 +1091,7 @@ function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
           hint={`Margin ${formatReportPct(data.marginCurrent)} vs ${formatReportPct(data.marginPrior)}`}
         />
       </div>
-      <ReportTable headers={["Line", "Current", "Prior period", "Variance", "% change"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Line", "Current", "Prior period", "Variance", "% change"]}>
         {data.lines.map((l) => (
           <tr key={l.label} className={l.label === "Gross profit" ? "font-semibold border-t-2" : ""}>
             <td className={l.label.startsWith("  ") ? "pl-6 opacity-80" : ""}>{l.label.trim()}</td>
@@ -942,7 +1103,7 @@ function PnlCompareReport({ data }: { data: ReturnType<typeof comparePnl> }) {
             </td>
           </tr>
         ))}
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Prior period is the same number of days immediately before the current range start. Costs match actual
         labor and parts on work orders linked to recognized invoices in each window.
@@ -958,18 +1119,18 @@ function CustomerBalancesReport({ rows }: { rows: ReturnType<typeof customerBala
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Customers" value={rows.length} />
-        <StatCard
+        <ReportStat label="Customers" value={rows.length} />
+        <ReportStat
           label="Open AR"
           value={formatReportMoney(rows.reduce((s, r) => s + r.openBalance, 0))}
         />
-        <StatCard
+        <ReportStat
           label="Overdue"
           value={formatReportMoney(rows.reduce((s, r) => s + r.overdueBalance, 0))}
           danger={rows.some((r) => r.overdueBalance > 0)}
         />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Customer", "Period billed", "Period collected", "Open balance", "Overdue", "# Open"]}
       >
         {rows.map((r) => (
@@ -998,7 +1159,7 @@ function CustomerBalancesReport({ rows }: { rows: ReturnType<typeof customerBala
           <MoneyCell n={rows.reduce((s, r) => s + r.overdueBalance, 0)} bold />
           <td className="text-right tabular-nums">{rows.reduce((s, r) => s + r.openInvoices, 0)}</td>
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Open balance is remaining receivable as of the as-of date (recognized invoices only). Period billed /
         collected use the selected date range.
@@ -1011,18 +1172,18 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="DSO"
           value={data.dso != null ? `${data.dso.toFixed(1)} days` : "N/A"}
           danger={data.dso != null && data.dso > 45}
         />
-        <StatCard
+        <ReportStat
           label="Collection ratio"
           value={data.collectionRate != null ? `${(data.collectionRate * 100).toFixed(0)}%` : "N/A"}
           hint="Cash ÷ billed (period)"
         />
-        <StatCard label="Open AR (gross)" value={formatReportMoney(data.arGross)} />
-        <StatCard
+        <ReportStat label="Open AR (gross)" value={formatReportMoney(data.arGross)} />
+        <ReportStat
           label="Avg days past due"
           value={data.avgDaysPastDue.toFixed(0)}
           hint={`${data.openCount} open invoices`}
@@ -1031,7 +1192,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
 
       <section>
         <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Top open AR by customer</h3>
-        <ReportTable headers={["Customer", "Open balance", "Invoices", "Max days late"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Customer", "Open balance", "Invoices", "Max days late"]}>
           {data.topCustomers.map((c) => (
             <tr key={c.customerId ?? c.name}>
               <td>
@@ -1050,7 +1211,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
               </td>
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
@@ -1058,7 +1219,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
         {data.overdue.length === 0 ? (
           <EmptyState title="Nothing past due" description="No open invoices past their due date." />
         ) : (
-          <ReportTable headers={["Invoice", "Customer", "Due", "Days late", "Balance", "Aging"]}>
+          <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Invoice", "Customer", "Due", "Days late", "Balance", "Aging"]}>
             {data.overdue.map((inv) => (
               <tr key={inv.id} className={inv.bucket === "d90" ? "bg-error/5" : ""}>
                 <td>
@@ -1078,7 +1239,7 @@ function CollectionsReport({ data }: { data: ReturnType<typeof collectionsAnalys
                 </td>
               </tr>
             ))}
-          </ReportTable>
+          </ReportTable></div>
         )}
       </section>
       <PolicyNote>
@@ -1100,10 +1261,10 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Jobs" value={data.totals.jobCount} />
-        <StatCard label="Revenue" value={formatReportMoney(data.totals.revenue)} />
-        <StatCard label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
-        <StatCard
+        <ReportStat label="Jobs" value={data.totals.jobCount} />
+        <ReportStat label="Revenue" value={formatReportMoney(data.totals.revenue)} />
+        <ReportStat label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
+        <ReportStat
           label="Gross profit"
           value={formatReportMoney(data.totals.profit)}
           hint={formatReportPct(data.totals.margin)}
@@ -1118,7 +1279,7 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
           </span>
         </div>
       ) : null}
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Job", "Customer", "Type", "Revenue", "Labor", "Parts", "Profit", "Margin", "Hrs"]}
       >
         {data.rows.map((r) => (
@@ -1154,7 +1315,7 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
           <td className="text-right tabular-nums">{formatReportPct(data.totals.margin)}</td>
           <td className="text-right tabular-nums">{data.totals.laborHours.toFixed(1)}</td>
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Revenue is recognized service revenue (ex-tax) on linked invoices. COGS is actual technician cost rates
         and parts unit costs on that work order.
@@ -1163,55 +1324,178 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   );
 }
 
-function TechLaborReport({ data }: { data: ReturnType<typeof technicianLaborReport> }) {
-  if (data.rows.length === 0) {
-    return <EmptyState title="No labor in range" description="Technicians need time entries on work dates in range." />;
+function TechLaborReport({ data }: { data: TimesheetSummaryReport }) {
+  if (data.technicians.length === 0) {
+    return (
+      <EmptyState
+        title="No timesheet activity in this pay period"
+        description="Technicians need clock-in / labor entries with work dates inside the selected Sunday–Saturday pay period. Open Timesheets to add entries, then refresh."
+      />
+    );
   }
+
+  const hrs = (n: number) => (n > 0 ? n.toFixed(2) : "—");
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total hours" value={data.totals.totalHours.toFixed(1)} />
-        <StatCard label="Labor cost" value={formatReportMoney(data.totals.laborCost)} />
-        <StatCard label="Billable amount" value={formatReportMoney(data.totals.billableAmount)} />
-        <StatCard
-          label="Cost recovery"
-          value={data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "N/A"}
-          hint="Billable $ ÷ cost $"
+        <ReportStat label="Technicians" value={data.techCount} />
+        <ReportStat label="Hours worked" value={data.grandTotals.hoursWorked.toFixed(2)} />
+        <ReportStat
+          label="Regular / OT"
+          value={`${data.grandTotals.regular.toFixed(1)} / ${data.grandTotals.overtime.toFixed(1)}`}
         />
+        <ReportStat label="Total pay" value={formatReportMoney(data.grandTotals.totalPay)} hint="At cost rates · OT ×1.5" />
       </div>
-      <ReportTable
-        headers={["Technician", "Reg", "OT", "Total hrs", "Cost", "Billable", "Recovery", "Avg bill rate"]}
-      >
-        {data.rows.map((r) => (
-          <tr key={r.technicianId}>
-            <td className="font-medium">{r.name}</td>
-            <td className="text-right tabular-nums">{r.regularHours.toFixed(1)}</td>
-            <td className="text-right tabular-nums">{r.overtimeHours.toFixed(1)}</td>
-            <td className="text-right tabular-nums font-medium">{r.totalHours.toFixed(1)}</td>
-            <MoneyCell n={r.laborCost} />
-            <MoneyCell n={r.billableAmount} />
-            <td className="text-right tabular-nums">
-              {r.recovery != null ? `${r.recovery.toFixed(2)}×` : "—"}
-            </td>
-            <td className="text-right tabular-nums">{formatReportMoney(r.avgBillRate)}</td>
-          </tr>
-        ))}
-        <tr className="border-t-2 font-bold">
-          <td>Total</td>
-          <td className="text-right tabular-nums">{data.totals.regularHours.toFixed(1)}</td>
-          <td className="text-right tabular-nums">{data.totals.overtimeHours.toFixed(1)}</td>
-          <td className="text-right tabular-nums">{data.totals.totalHours.toFixed(1)}</td>
-          <MoneyCell n={data.totals.laborCost} bold />
-          <MoneyCell n={data.totals.billableAmount} bold />
-          <td className="text-right tabular-nums">
-            {data.totals.recovery != null ? `${data.totals.recovery.toFixed(2)}×` : "—"}
-          </td>
-          <td />
-        </tr>
-      </ReportTable>
+
+      <p className="text-xs opacity-60">
+        Source:{" "}
+        {data.source === "time_entries"
+          ? "Time entries"
+          : data.source === "technician_labor"
+            ? "Technician labor (job hours)"
+            : "Time entries + technician labor"}
+        . Meal breaks are excluded from Hours Worked (ServiceTitan). Idle under ~1 hour in the clock span is
+        treated as paid. Total Pay uses each technician&apos;s hourly cost rate when configured.
+      </p>
+
+      {data.technicians.map((tech) => (
+        <section
+          key={tech.technicianId}
+          className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 print:break-inside-avoid"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-200 bg-base-200/40 px-4 py-3">
+            <div>
+              <h3 className="text-base font-semibold">{tech.name}</h3>
+              <p className="text-xs opacity-55">
+                Pay period {data.payPeriodLabel}
+                {tech.hourlyRate > 0 ? ` · $${tech.hourlyRate.toFixed(2)}/hr cost` : " · hourly rate not set"}
+              </p>
+            </div>
+            <Link
+              href={timesheetHref({ tech: tech.technicianId, week: data.payPeriod.start })}
+              className="btn btn-ghost btn-xs print:hidden"
+            >
+              Open timesheet
+            </Link>
+          </div>
+
+          <div id={tech === data.technicians[0] ? "report-detail" : undefined} className="scroll-mt-4">
+            <DualHorizontalScroll>
+              <table className="table table-xs">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wide opacity-70">
+                    <th>Date</th>
+                    <th>Start</th>
+                    <th>First Arrival</th>
+                    <th>End</th>
+                    <th className="text-right">Idle</th>
+                    <th className="text-right">Driving</th>
+                    <th className="text-right">Job Hrs</th>
+                    <th className="text-right">Meal</th>
+                    <th className="text-right">Training</th>
+                    <th className="text-right">Other</th>
+                    <th className="text-right">Hrs Worked</th>
+                    <th className="text-right">Regular</th>
+                    <th className="text-right">OT</th>
+                    <th className="text-right">Double OT</th>
+                    <th className="text-right">PTO</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tech.days.map((d) => (
+                    <tr key={d.date}>
+                      <td className="whitespace-nowrap font-medium">{d.date}</td>
+                      <td className="whitespace-nowrap tabular-nums">{d.start ?? "—"}</td>
+                      <td className="whitespace-nowrap tabular-nums">{d.firstArrival ?? "—"}</td>
+                      <td className="whitespace-nowrap tabular-nums">{d.end ?? "—"}</td>
+                      <td className="text-right tabular-nums">{hrs(d.idle)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.driving)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.jobHours)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.meal)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.training)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.other)}</td>
+                      <td className="text-right tabular-nums font-medium">{hrs(d.hoursWorked)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.regular)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.overtime)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.doubleOt)}</td>
+                      <td className="text-right tabular-nums">{hrs(d.pto)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 bg-base-200/50 font-semibold">
+                    <td colSpan={4}>Total hours</td>
+                    <td className="text-right tabular-nums">{tech.totals.idle.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.driving.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.jobHours.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.meal.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.training.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.other.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.hoursWorked.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.regular.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.overtime.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.doubleOt.toFixed(2)}</td>
+                    <td className="text-right tabular-nums">{tech.totals.pto.toFixed(2)}</td>
+                  </tr>
+                  <tr className="bg-primary/5 font-bold">
+                    <td colSpan={10}>Total pay (pay period)</td>
+                    <td colSpan={5} className="text-right text-primary">
+                      {formatReportMoney(tech.totals.totalPay)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </DualHorizontalScroll>
+          </div>
+
+          <div className="grid gap-4 border-t border-base-200 p-4 sm:grid-cols-2 print:grid-cols-2">
+            <div className="rounded-lg border border-dashed border-base-300 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
+                Employee disclosure & signature
+              </p>
+              <p className="mt-2 text-[11px] leading-snug opacity-70">
+                I certify these timesheet hours for the pay period are complete and accurate.
+              </p>
+              <div className="mt-6 border-b border-base-content/30" />
+              <p className="mt-1 text-[10px] opacity-50">Signature · Date</p>
+            </div>
+            <div className="rounded-lg border border-dashed border-base-300 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide opacity-50">
+                Manager approval
+              </p>
+              <p className="mt-2 text-[11px] leading-snug opacity-70">
+                Reviewed for payroll. Hours match approved activity for this pay period.
+              </p>
+              <div className="mt-6 border-b border-base-content/30" />
+              <p className="mt-1 text-[10px] opacity-50">Manager signature · Date</p>
+            </div>
+          </div>
+        </section>
+      ))}
+
+      {data.technicians.length > 1 ? (
+        <div className="rounded-2xl border border-base-300 p-4">
+          <h3 className="mb-2 text-sm font-semibold">Grand totals — all technicians</h3>
+          <div className="grid gap-2 text-sm sm:grid-cols-3">
+            <p>
+              Hours worked: <strong className="tabular-nums">{data.grandTotals.hoursWorked.toFixed(2)}</strong>
+            </p>
+            <p>
+              Regular / OT:{" "}
+              <strong className="tabular-nums">
+                {data.grandTotals.regular.toFixed(2)} / {data.grandTotals.overtime.toFixed(2)}
+              </strong>
+            </p>
+            <p>
+              Total pay: <strong className="tabular-nums">{formatReportMoney(data.grandTotals.totalPay)}</strong>
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <PolicyNote>
-        Billable amount uses customer billing rates on labor lines (potential income). Recovery below 1.0× means
-        list rates do not cover labor cost for that tech in the period.
+        Modeled on ServiceTitan&apos;s Technician Timesheet Summary By Pay Period: weekly pay periods, daily
+        start/end, activity buckets (Idle, Driving, Job Hrs, Meal, Training, Other), Regular/OT, and Total Pay when
+        hourly rates are set. Temporary clock-out is reserved for future clock-out reasons.
       </PolicyNote>
     </div>
   );
@@ -1224,16 +1508,16 @@ function InventoryReport({ data }: { data: ReturnType<typeof inventoryValuation>
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Active SKUs" value={data.totals.sku} />
-        <StatCard label="Value at cost" value={formatReportMoney(data.totals.valueAtCost)} />
-        <StatCard label="Value at list" value={formatReportMoney(data.totals.valueAtSell)} />
-        <StatCard
+        <ReportStat label="Active SKUs" value={data.totals.sku} />
+        <ReportStat label="Value at cost" value={formatReportMoney(data.totals.valueAtCost)} />
+        <ReportStat label="Value at list" value={formatReportMoney(data.totals.valueAtSell)} />
+        <ReportStat
           label="Below reorder"
           value={data.totals.reorderCount}
           danger={data.totals.reorderCount > 0}
         />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={[
           "Part #",
           "Name",
@@ -1275,7 +1559,7 @@ function InventoryReport({ data }: { data: ReturnType<typeof inventoryValuation>
           <MoneyCell n={data.totals.valueAtSell} bold />
           <td colSpan={2} />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Valuation is quantity on hand × unit cost (inventory asset on the balance sheet). Usage column is
         work-order consumption in the selected range.
@@ -1288,24 +1572,24 @@ function SalesTaxReportView({ data }: { data: ReturnType<typeof salesTaxReport> 
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Tax billed (period)"
           value={formatReportMoney(data.taxBilled)}
           hint={`${data.invoiceCount} invoices`}
         />
-        <StatCard
+        <ReportStat
           label="Taxable base"
           value={formatReportMoney(data.taxableBase)}
           hint={`Avg effective ${(data.avgRate * 100).toFixed(2)}%`}
         />
-        <StatCard label="Tax on open AR" value={formatReportMoney(data.taxOnOpen)} />
-        <StatCard
+        <ReportStat label="Tax on open AR" value={formatReportMoney(data.taxOnOpen)} />
+        <ReportStat
           label="Remittance estimate"
           value={formatReportMoney(data.remittanceEstimate)}
           hint="Open tax + held collected"
         />
       </div>
-      <ReportTable headers={["Month", "Invoices", "Taxable (ex-tax rev)", "Sales tax"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Invoices", "Taxable (ex-tax rev)", "Sales tax"]}>
         {data.byMonth.map((m) => (
           <tr key={m.month}>
             <td>{monthLabel(m.month)}</td>
@@ -1320,7 +1604,7 @@ function SalesTaxReportView({ data }: { data: ReturnType<typeof salesTaxReport> 
           <MoneyCell n={data.taxableBase} bold />
           <MoneyCell n={data.taxBilled} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         {ACCOUNTING_POLICIES.taxLiability} Record remittances from Period Close when filed.
       </PolicyNote>
@@ -1338,25 +1622,25 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Service revenue"
           value={formatReportMoney(pnl.serviceRevenue)}
           hint={`${pnl.earnedJobCount ?? 0} completed jobs · ASC 606`}
         />
-        <StatCard
+        <ReportStat
           label="Cost of services"
           value={formatReportMoney(pnl.cogs)}
           hint={`${pnl.matchedJobCount} jobs matched`}
         />
-        <StatCard label="Gross profit" value={formatReportMoney(pnl.gross)} />
-        <StatCard label="Gross margin" value={formatReportPct(pnl.margin)} />
+        <ReportStat label="Gross profit" value={formatReportMoney(pnl.gross)} />
+        <ReportStat label="Gross margin" value={formatReportPct(pnl.margin)} />
       </div>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Earned revenue (ASC 606)
         </h3>
-        <ReportTable headers={["Component", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Component", "Amount"]}>
           <tr>
             <td className="pl-4">Completed work (invoiced)</td>
             <MoneyCell n={pnl.billedCompletion ?? 0} />
@@ -1373,14 +1657,14 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             <td>Total earned service revenue</td>
             <MoneyCell n={pnl.serviceRevenue} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Billing components (invoice date, disclosure)
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           {incomeLines.map(([label, amt]) => (
             <tr key={label}>
               <td className="pl-4">{label}</td>
@@ -1403,14 +1687,14 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             <td>Invoice register total (disclosure)</td>
             <MoneyCell n={pnl.invoiceTotals} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Cost of services (matched actual costs)
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
               Direct labor at cost rates
@@ -1426,7 +1710,7 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
             <td>Total cost of services</td>
             <MoneyCell n={pnl.cogs} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <div className="rounded-box bg-base-200/50 p-4">
@@ -1463,17 +1747,17 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="Total assets" value={formatReportMoney(sheet.totalAssets)} />
-        <StatCard label="Cash (collections)" value={formatReportMoney(sheet.cash)} />
-        <StatCard label="AR, net" value={formatReportMoney(sheet.arNet)} hint={`${sheet.openCount} open`} />
-        <StatCard label="Sales tax payable" value={formatReportMoney(sheet.salesTaxPayable)} />
+        <ReportStat label="Total assets" value={formatReportMoney(sheet.totalAssets)} />
+        <ReportStat label="Cash (collections)" value={formatReportMoney(sheet.cash)} />
+        <ReportStat label="AR, net" value={formatReportMoney(sheet.arNet)} hint={`${sheet.openCount} open`} />
+        <ReportStat label="Sales tax payable" value={formatReportMoney(sheet.salesTaxPayable)} />
       </div>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Assets
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">Cash — customer collections ledger</td>
             <MoneyCell n={sheet.cash} />
@@ -1505,14 +1789,14 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <td>Total assets</td>
             <MoneyCell n={sheet.totalAssets} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Liabilities
         </h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
               Sales tax payable
@@ -1547,12 +1831,12 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <td>Total liabilities</td>
             <MoneyCell n={sheet.totalLiabilities} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">Equity</h3>
-        <ReportTable headers={["Account", "Total"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
               Net assets / equity
@@ -1568,7 +1852,7 @@ function BalanceSheetReport({ sheet }: { sheet: ReturnType<typeof balanceSheetGa
             <td>Liabilities + equity</td>
             <MoneyCell n={sheet.totalLiabilities + sheet.equity} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       {sheet.balances ? (
@@ -1601,7 +1885,7 @@ function ArAgingSummary({
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {(Object.keys(AGING_LABELS) as (keyof typeof AGING_LABELS)[]).map((k) => (
-          <StatCard
+          <ReportStat
             key={k}
             label={AGING_LABELS[k]}
             value={formatReportMoney(aging.totals[k])}
@@ -1609,15 +1893,15 @@ function ArAgingSummary({
             danger={k === "d90" && aging.totals[k] > 0}
           />
         ))}
-        <StatCard label="Gross AR" value={formatReportMoney(aging.gross)} />
-        <StatCard
+        <ReportStat label="Gross AR" value={formatReportMoney(aging.gross)} />
+        <ReportStat
           label="Net AR"
           value={formatReportMoney(aging.net)}
           hint={`Allowance ${formatReportMoney(aging.allowance)}`}
         />
       </div>
 
-      <ReportTable headers={["Aging", "# Invoices", "Balance"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Aging", "# Invoices", "Balance"]}>
         {(Object.keys(AGING_LABELS) as (keyof typeof AGING_LABELS)[]).map((k) => (
           <tr key={k}>
             <td>{AGING_LABELS[k]}</td>
@@ -1640,7 +1924,7 @@ function ArAgingSummary({
           <td colSpan={2}>Accounts receivable, net</td>
           <MoneyCell n={aging.net} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>{ACCOUNTING_POLICIES.receivables} {ACCOUNTING_POLICIES.allowance}</PolicyNote>
     </div>
   );
@@ -1651,7 +1935,7 @@ function ArAgingDetail({ open }: { open: ReturnType<typeof openInvoicesAt> }) {
     return <EmptyState title="No open receivables" description="All customer balances are cleared." />;
   }
   return (
-    <ReportTable headers={["Invoice", "Customer", "Due", "Days", "Aging", "Balance", "Status"]}>
+    <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Invoice", "Customer", "Due", "Days", "Aging", "Balance", "Status"]}>
       {open.map((inv) => (
         <tr key={inv.id} className={inv.bucket === "d90" ? "bg-error/5" : ""}>
           <td>
@@ -1687,7 +1971,7 @@ function ArAgingDetail({ open }: { open: ReturnType<typeof openInvoicesAt> }) {
         <MoneyCell n={open.reduce((s, i) => s + Number(i.remaining_balance), 0)} bold />
         <td />
       </tr>
-    </ReportTable>
+    </ReportTable></div>
   );
 }
 
@@ -1698,7 +1982,7 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
   const top = rows.slice(0, 8);
   return (
     <div className="space-y-6">
-      <ReportTable headers={["Customer", "Invoices", "Service revenue", "Tax", "Paid", "Open balance"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Customer", "Invoices", "Service revenue", "Tax", "Paid", "Open balance"]}>
         {rows.map((r) => (
           <tr key={r.customerId ?? r.name}>
             <td>
@@ -1725,7 +2009,7 @@ function SalesByCustomer({ rows }: { rows: ReturnType<typeof salesByCustomer> })
           <MoneyCell n={rows.reduce((s, r) => s + r.paid, 0)} bold />
           <MoneyCell n={rows.reduce((s, r) => s + r.balance, 0)} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>Recognized service revenue excludes sales tax (not revenue under GAAP).</PolicyNote>
     </div>
   );
@@ -1738,7 +2022,7 @@ function SalesByMonth({ rows }: { rows: ReturnType<typeof salesByMonth> }) {
   const chart = rows.map((r) => ({ ...r, label: monthLabel(r.month) }));
   return (
     <div className="space-y-6">
-      <ReportTable headers={["Month", "Invoices", "Service revenue", "Sales tax"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Invoices", "Service revenue", "Sales tax"]}>
         {rows.map((r) => (
           <tr key={r.month}>
             <td>{monthLabel(r.month)}</td>
@@ -1753,7 +2037,7 @@ function SalesByMonth({ rows }: { rows: ReturnType<typeof salesByMonth> }) {
           <MoneyCell n={rows.reduce((s, r) => s + r.revenue, 0)} bold />
           <MoneyCell n={rows.reduce((s, r) => s + r.tax, 0)} bold />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Accrual revenue by invoice date. For cash collections use the Statement of Cash Flows (payment date).
       </PolicyNote>
@@ -1768,7 +2052,7 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
   const total = rows.reduce((s, r) => s + Math.max(0, r.amount), 0);
   return (
     <div className="space-y-6">
-      <ReportTable headers={["Transaction-price component", "Amount", "% of positive"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Transaction-price component", "Amount", "% of positive"]}>
         {rows.map((r) => (
           <tr key={r.service}>
             <td>{r.service}</td>
@@ -1778,7 +2062,7 @@ function SalesByService({ rows }: { rows: ReturnType<typeof salesByService> }) {
             </td>
           </tr>
         ))}
-      </ReportTable>
+      </ReportTable></div>
     </div>
   );
 }
@@ -1787,17 +2071,17 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard
+        <ReportStat
           label="Cash from customers"
           value={formatReportMoney(cash.cashFromCustomers)}
           hint={`${cash.count} payments`}
         />
-        <StatCard
+        <ReportStat
           label="Credit sales (period)"
           value={formatReportMoney(cash.salesOnAccount)}
           hint="Invoice totals incl. tax"
         />
-        <StatCard
+        <ReportStat
           label="Ending open AR"
           value={formatReportMoney(cash.arEnd)}
           hint={`Begin ${formatReportMoney(cash.arBegin)}`}
@@ -1806,7 +2090,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
 
       <section>
         <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">Cash flows from operating activities</h3>
-        <ReportTable headers={["Activity", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Activity", "Amount"]}>
           {cash.byMethod.map((m) => (
             <tr key={m.method}>
               <td className="pl-4">Collections from customers — {m.method}</td>
@@ -1817,7 +2101,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
             <td>Net cash provided by operating activities</td>
             <MoneyCell n={cash.cashFromCustomers} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
         <p className="mt-2 text-xs opacity-50">
           Direct method (cash receipts). Investing and financing activities are not modeled in this application.
         </p>
@@ -1825,7 +2109,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
 
       <section>
         <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">A/R rollforward (disclosure)</h3>
-        <ReportTable headers={["Line", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Line", "Amount"]}>
           <tr>
             <td className="pl-4">Beginning open AR</td>
             <MoneyCell n={cash.arBegin} />
@@ -1850,13 +2134,13 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
             <td className="pl-4">Difference (timing / status / partial payments)</td>
             <MoneyCell n={cash.reconcilingDiff} />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       {cash.lines.length === 0 ? (
         <EmptyState title="No payments in range" description="Record payments in the Payments module." />
       ) : (
-        <ReportTable headers={["Payment", "Date", "Method", "Customer", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Payment", "Date", "Method", "Customer", "Amount"]}>
           {cash.lines.slice(0, 40).map((p) => (
             <tr key={p.id}>
               <td className="font-mono text-xs">{p.payment_number}</td>
@@ -1866,7 +2150,7 @@ function CashFlowReport({ cash }: { cash: ReturnType<typeof cashFlowStatement> }
               <MoneyCell n={Number(p.payment_amount)} />
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       )}
     </div>
   );
@@ -1882,11 +2166,11 @@ function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfit
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Recognized revenue" value={formatReportMoney(rev)} />
-        <StatCard label="Matched COGS" value={formatReportMoney(cogs)} />
-        <StatCard label="Gross profit" value={formatReportMoney(profit)} />
+        <ReportStat label="Recognized revenue" value={formatReportMoney(rev)} />
+        <ReportStat label="Matched COGS" value={formatReportMoney(cogs)} />
+        <ReportStat label="Gross profit" value={formatReportMoney(profit)} />
       </div>
-      <ReportTable
+      <div id="report-detail" className="scroll-mt-4"><ReportTable
         headers={["Contract", "Customer", "Price (book)", "Recognized", "COGS", "Profit", "Margin", "Status"]}
       >
         {rows.map((r) => (
@@ -1915,7 +2199,7 @@ function ContractProfitReport({ rows }: { rows: ReturnType<typeof contractProfit
             </td>
           </tr>
         ))}
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Revenue is from recognized invoices linked to the contract. COGS is actual labor and parts cost on those
         invoices&apos; work orders. Contract price is disclosed as contractual backlog/book value, not automatically
@@ -1929,10 +2213,10 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="All jobs" value={summary.total} />
-        <StatCard label="Open" value={summary.open} />
-        <StatCard label="Completed" value={summary.completed} />
-        <StatCard
+        <ReportStat label="All jobs" value={summary.total} />
+        <ReportStat label="Open" value={summary.open} />
+        <ReportStat label="Completed" value={summary.completed} />
+        <ReportStat
           label="Completed unbilled"
           value={summary.unbilled}
           danger={summary.unbilled > 0}
@@ -1942,7 +2226,7 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
       <div className="grid gap-6 lg:grid-cols-2">
         <div>
           <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">By status</h3>
-          <ReportTable headers={["Status", "Count"]}>
+          <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Status", "Count"]}>
             {summary.byStatus.map((r) => (
               <tr key={r.status}>
                 <td>
@@ -1951,11 +2235,11 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
                 <td className="text-right tabular-nums font-medium">{r.count}</td>
               </tr>
             ))}
-          </ReportTable>
+          </ReportTable></div>
         </div>
         <div>
           <h3 className="mb-2 text-sm font-bold uppercase tracking-wide">By priority</h3>
-          <ReportTable headers={["Priority", "Count"]}>
+          <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Priority", "Count"]}>
             {summary.byPriority.map((r) => (
               <tr key={r.priority}>
                 <td>
@@ -1964,7 +2248,7 @@ function JobSummaryReport({ summary }: { summary: ReturnType<typeof jobStatusSum
                 <td className="text-right tabular-nums font-medium">{r.count}</td>
               </tr>
             ))}
-          </ReportTable>
+          </ReportTable></div>
         </div>
       </div>
       <Link href="/work-orders" className="btn btn-outline btn-sm gap-1 print:hidden">
@@ -1993,9 +2277,9 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Jobs" value={rows.length} danger />
-        <StatCard label="Est. contract asset" value={formatReportMoney(billable)} />
-        <StatCard label="Direct cost to date" value={formatReportMoney(cost)} />
+        <ReportStat label="Jobs" value={rows.length} danger />
+        <ReportStat label="Est. contract asset" value={formatReportMoney(billable)} />
+        <ReportStat label="Direct cost to date" value={formatReportMoney(cost)} />
       </div>
       <div className="alert alert-warning text-sm">
         <span>
@@ -2003,7 +2287,7 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
           for revenue leakage.
         </span>
       </div>
-      <ReportTable headers={["Job", "Customer", "Type", "Completed", "Est. billable", "Direct cost", ""]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Job", "Customer", "Type", "Completed", "Est. billable", "Direct cost", ""]}>
         {rows.map((j) => (
           <tr key={j.id}>
             <td>
@@ -2037,7 +2321,7 @@ function UnbilledReport({ rows }: { rows: ReturnType<typeof unbilledJobs> }) {
           <MoneyCell n={cost} bold />
           <td />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>{ACCOUNTING_POLICIES.wip}</PolicyNote>
     </div>
   );
@@ -2054,12 +2338,12 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-4">
-        <StatCard label="Invoices" value={rows.length} />
-        <StatCard label="Recognized" value={recognized.length} />
-        <StatCard label="Billed totals" value={formatReportMoney(total)} />
-        <StatCard label="Open balance" value={formatReportMoney(bal)} hint={`Paid ${formatReportMoney(paid)}`} />
+        <ReportStat label="Invoices" value={rows.length} />
+        <ReportStat label="Recognized" value={recognized.length} />
+        <ReportStat label="Billed totals" value={formatReportMoney(total)} />
+        <ReportStat label="Open balance" value={formatReportMoney(bal)} hint={`Paid ${formatReportMoney(paid)}`} />
       </div>
-      <ReportTable headers={["Invoice", "Date", "Customer", "Rec.", "Total", "Paid", "Balance", "Status"]}>
+      <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Invoice", "Date", "Customer", "Rec.", "Total", "Paid", "Balance", "Status"]}>
         {rows.map((i) => (
           <tr key={i.id} className={!isRecognizedRevenue(i) ? "opacity-60" : ""}>
             <td>
@@ -2085,7 +2369,7 @@ function InvoiceListReport({ rows }: { rows: ReturnType<typeof invoicesInRange> 
           <MoneyCell n={bal} bold />
           <td />
         </tr>
-      </ReportTable>
+      </ReportTable></div>
       <PolicyNote>
         Draft / Needs Review / Canceled invoices are not recognized revenue until finalized (see Rec. column).
       </PolicyNote>
@@ -2103,15 +2387,15 @@ function ContractAssetReport({
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Beginning" value={formatReportMoney(data.beginning)} />
-        <StatCard label="+ Earned unbilled" value={formatReportMoney(data.earnedUnbilled)} />
-        <StatCard label="− Billed" value={formatReportMoney(data.billed)} />
-        <StatCard label="Ending contract asset" value={formatReportMoney(data.ending)} hint={`As of ${asOf}`} />
+        <ReportStat label="Beginning" value={formatReportMoney(data.beginning)} />
+        <ReportStat label="+ Earned unbilled" value={formatReportMoney(data.earnedUnbilled)} />
+        <ReportStat label="− Billed" value={formatReportMoney(data.billed)} />
+        <ReportStat label="Ending contract asset" value={formatReportMoney(data.ending)} hint={`As of ${asOf}`} />
       </div>
       {data.rows.length === 0 ? (
         <EmptyState title="No unbilled completions" description="Completed jobs without invoices appear here." />
       ) : (
-        <ReportTable headers={["Work order", "Completed", "Source", "Amount"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Work order", "Completed", "Source", "Amount"]}>
           {data.rows.map((r) => (
             <tr key={r.workOrderId}>
               <td>{r.workOrderNumber}</td>
@@ -2120,7 +2404,7 @@ function ContractAssetReport({
               <MoneyCell n={r.amount} />
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       )}
       <PolicyNote>{ACCOUNTING_POLICIES.wip}</PolicyNote>
     </div>
@@ -2146,7 +2430,7 @@ function TrialBalanceReport({
       {data.rows.length === 0 ? (
         <EmptyState title="No GL activity" description="Trial balance fills as journals are posted." />
       ) : (
-        <ReportTable headers={["Account", "Name", "Debit", "Credit", "Balance"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Name", "Debit", "Credit", "Balance"]}>
           {data.rows.map((r) => (
             <tr key={r.accountCode}>
               <td className="font-mono text-xs">{r.accountCode}</td>
@@ -2162,7 +2446,7 @@ function TrialBalanceReport({
             <MoneyCell n={data.totalCredit} bold />
             <td />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       )}
       <PolicyNote>{ACCOUNTING_POLICIES.periodClose}</PolicyNote>
     </div>
@@ -2184,18 +2468,18 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+        <ReportStat
           label="Deferred revenue"
           value={formatReportMoney(data.totalDeferred)}
           hint={`${data.contractCount} prepaid contract${data.contractCount === 1 ? "" : "s"}`}
         />
-        <StatCard label="Current portion" value={formatReportMoney(data.totalCurrent)} hint="Next 12 months" />
-        <StatCard
+        <ReportStat label="Current portion" value={formatReportMoney(data.totalCurrent)} hint="Next 12 months" />
+        <ReportStat
           label="Noncurrent portion"
           value={formatReportMoney(data.totalNoncurrent)}
           hint="Beyond 12 months"
         />
-        <StatCard
+        <ReportStat
           label="Recognized to date"
           value={formatReportMoney(data.totalRecognized)}
           hint={`Of ${formatReportMoney(data.totalContractPrice)} prepaid`}
@@ -2206,7 +2490,7 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Contract balances as of {data.asOf}
         </h3>
-        <ReportTable
+        <div id="report-detail" className="scroll-mt-4"><ReportTable
           headers={[
             "Contract",
             "Customer",
@@ -2288,14 +2572,14 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
             <MoneyCell n={data.totalCurrent} bold />
             <MoneyCell n={data.totalNoncurrent} bold />
           </tr>
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
           Consolidated monthly rollforward
         </h3>
-        <ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
+        <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
           {data.consolidated.map((m) => (
             <tr key={m.month}>
               <td>{monthLabel(m.month)}</td>
@@ -2305,7 +2589,7 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
               <MoneyCell n={m.endingBalance} />
             </tr>
           ))}
-        </ReportTable>
+        </ReportTable></div>
       </section>
 
       <PolicyNote>{ACCOUNTING_POLICIES.deferredRevenue}</PolicyNote>
@@ -2335,7 +2619,7 @@ function PoliciesReport() {
         <Scale className="h-4 w-4 shrink-0" />
         <span>
           These policies describe how this application measures report lines from operational subledgers. They are
-          educational GAAP orientation for Ridley&apos;s service business — not a substitute for a full audited GL.
+          educational GAAP orientation for EquipmentIQ&apos;s service business — not a substitute for a full audited GL.
         </span>
       </div>
       <dl className="space-y-4">

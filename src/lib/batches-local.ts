@@ -16,9 +16,9 @@ import {
   nextBatchNumberSync,
 } from "@/lib/batches-shared";
 
-const KEY_BATCHES = "ridley_accounting_batches_v1";
-const KEY_INV = "ridley_accounting_batch_invoices_v1";
-const KEY_PAY = "ridley_accounting_batch_payments_v1";
+const KEY_BATCHES = "equipmentiq_accounting_batches_v1";
+const KEY_INV = "equipmentiq_accounting_batch_invoices_v1";
+const KEY_PAY = "equipmentiq_accounting_batch_payments_v1";
 
 export type LocalBatchInvoiceLine = {
   id: string;

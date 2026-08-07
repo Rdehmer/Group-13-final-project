@@ -11,7 +11,7 @@ import type {
 } from "@/lib/types";
 import { isStaffRole, normalizeOverrides } from "@/lib/employeePermissions";
 
-const LOCAL_KEY = "ridley_employee_extras_v1";
+const LOCAL_KEY = "equipmentiq_employee_extras_v1";
 
 type EmployeeExtras = {
   job_title?: string | null;

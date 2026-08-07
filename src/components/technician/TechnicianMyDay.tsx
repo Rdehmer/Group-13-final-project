@@ -13,10 +13,10 @@ import {
   CalendarDays,
   CalendarOff,
   ChevronRight,
+  Clock,
   MapPin,
   Package,
   Phone,
-  Radio,
   RefreshCw,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
@@ -24,8 +24,18 @@ import { StatusBadge, statusTone } from "@/components/ui";
 import { JobSheet } from "@/components/technician/JobSheet";
 import { createClient } from "@/lib/supabase/client";
 import {
+  clockInDay,
+  clockOutDay,
+  formatDayClockSince,
+  getActiveDayClock,
+  syncLocalDayClocksToRemote,
+} from "@/lib/day-clock";
+import {
+  canOpenFieldJob,
   customerName,
+  fieldJobLockReason,
   firstNameFromProfile,
+  formatElapsedLabel,
   greetForTime,
   humanizeFieldError,
   isActivelyWorking,
@@ -43,23 +53,27 @@ import {
   todayIso,
   type FieldJob,
 } from "@/lib/technician-field";
+import { isActiveDispatchJob, normalizeDispatchStatus } from "@/lib/dispatch-flow";
 import {
   formatTimeOffLabel,
   timeOffCoversDay,
   type TimeOffRange,
 } from "@/lib/time-off";
-import type { Part, Profile, TechnicianLabor, WorkOrderPart } from "@/lib/types";
+import { timesheetHref } from "@/lib/timesheets";
+import type { Part, Profile, TechnicianDayClock, TechnicianLabor, WorkOrderPart } from "@/lib/types";
 
 const POLL_MS = 45_000;
 
 function JobCard({
   job,
+  allJobs,
   cta,
   onOpen,
   onApprovedLeave,
   emphasized,
 }: {
   job: FieldJob;
+  allJobs: FieldJob[];
   cta: string;
   onOpen: () => void;
   onApprovedLeave?: boolean;
@@ -67,7 +81,9 @@ function JobCard({
 }) {
   const address = jobAddress(job);
   const phone = jobPhone(job);
-  const active = isActivelyWorking(job);
+  const active = isActiveDispatchJob(job) || isActivelyWorking(job);
+  const unlocked = canOpenFieldJob(job, allJobs);
+  const lockReason = fieldJobLockReason(job, allJobs);
   const hint = relativeScheduleHint(job);
   const step = nextChecklistStep(job);
   const [showCustomerPhone, setShowCustomerPhone] = useState(false);
@@ -75,17 +91,22 @@ function JobCard({
   return (
     <div
       className={`overflow-hidden rounded-2xl border bg-base-100 shadow-sm transition ${
-        onApprovedLeave
-          ? "border-warning/50 opacity-90"
-          : active || emphasized
-            ? "border-primary ring-1 ring-primary/30"
-            : "border-base-300 hover:border-primary/40"
+        !unlocked
+          ? "border-base-300 opacity-60"
+          : onApprovedLeave
+            ? "border-warning/50 opacity-90"
+            : active || emphasized
+              ? "border-primary ring-1 ring-primary/30"
+              : "border-base-300 hover:border-primary/40"
       }`}
     >
       <button
         type="button"
-        onClick={onOpen}
-        className="w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        onClick={() => {
+          if (unlocked) onOpen();
+        }}
+        disabled={!unlocked}
+        className="w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed"
       >
         <div className={`h-1.5 w-full ${priorityBarClass(job.priority)}`} aria-hidden />
         <div className="flex items-start gap-3 p-4 pb-2">
@@ -95,12 +116,17 @@ function JobCard({
                 {job.work_order_number}
               </span>
               <StatusBadge label={job.priority} tone={statusTone(job.priority)} />
-              {active ? <span className="badge badge-primary badge-sm">Active</span> : null}
-              {hint && !active ? (
+              {unlocked && isActiveDispatchJob(job) ? (
+                <span className="badge badge-primary badge-sm">Active</span>
+              ) : null}
+              {!unlocked ? <span className="badge badge-ghost badge-sm">Locked</span> : null}
+              {hint && unlocked ? (
                 <span className="badge badge-ghost badge-sm">{hint}</span>
               ) : null}
-              {job.dispatch_status && !active ? (
-                <span className="badge badge-outline badge-sm">{job.dispatch_status}</span>
+              {job.dispatch_status ? (
+                <span className="badge badge-outline badge-sm">
+                  {normalizeDispatchStatus(job.dispatch_status)}
+                </span>
               ) : null}
               {onApprovedLeave ? (
                 <span className="badge badge-warning badge-sm">Leave day</span>
@@ -112,9 +138,9 @@ function JobCard({
             <p className="line-clamp-2 text-sm leading-snug">
               {job.problem_description || job.requested_service || "No description"}
             </p>
-            <p className="pt-1 text-sm font-semibold text-primary">
-              {cta}
-              {step === "complete" ? " · timesheet running" : ""}
+            <p className={`pt-1 text-sm font-semibold ${unlocked ? "text-primary" : "opacity-60"}`}>
+              {unlocked ? cta : lockReason}
+              {unlocked && step === "complete" ? " · timesheet running" : ""}
             </p>
           </div>
           <ChevronRight className="mt-1 h-5 w-5 shrink-0 opacity-40" aria-hidden />
@@ -238,6 +264,10 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [dayClock, setDayClock] = useState<TechnicianDayClock | null>(null);
+  const [clockBusy, setClockBusy] = useState(false);
+  const [clockMessage, setClockMessage] = useState<string | null>(null);
+  const [elapsedTick, setElapsedTick] = useState(() => new Date());
   const [, startTransition] = useTransition();
   const mountedRef = useRef(true);
 
@@ -305,6 +335,15 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
     setTimeOff((data as TimeOffRange[]) ?? []);
   }, [profile.id, supabase]);
 
+  const loadDayClock = useCallback(async () => {
+    try {
+      await syncLocalDayClocksToRemote(supabase);
+      setDayClock(await getActiveDayClock(supabase, profile.id));
+    } catch {
+      setDayClock(null);
+    }
+  }, [profile.id, supabase]);
+
   const loadCatalog = useCallback(async () => {
     const { data, error: loadError } = await supabase.from("parts").select("*").order("name");
     if (loadError) {
@@ -350,19 +389,19 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadJobs(), loadCatalog(), loadTimeOff()]);
+    await Promise.all([loadJobs(), loadCatalog(), loadTimeOff(), loadDayClock()]);
     if (selectedId) {
       await Promise.all([loadUsedParts(selectedId), loadLabor(selectedId)]);
     }
     setLastSynced(new Date());
     setRefreshing(false);
-  }, [loadJobs, loadCatalog, loadTimeOff, loadUsedParts, loadLabor, selectedId]);
+  }, [loadJobs, loadCatalog, loadTimeOff, loadDayClock, loadUsedParts, loadLabor, selectedId]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      await Promise.all([loadJobs(), loadCatalog(), loadTimeOff()]);
+      await Promise.all([loadJobs(), loadCatalog(), loadTimeOff(), loadDayClock()]);
       if (!cancelled) {
         setLastSynced(new Date());
         setLoading(false);
@@ -371,7 +410,35 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
     return () => {
       cancelled = true;
     };
-  }, [loadJobs, loadCatalog, loadTimeOff]);
+  }, [loadJobs, loadCatalog, loadTimeOff, loadDayClock]);
+
+  useEffect(() => {
+    if (!dayClock?.clock_in_at || dayClock.clock_out_at) return;
+    const id = window.setInterval(() => setElapsedTick(new Date()), 1_000);
+    return () => window.clearInterval(id);
+  }, [dayClock?.clock_in_at, dayClock?.clock_out_at]);
+
+  async function runDayClock(action: "in" | "out") {
+    setClockBusy(true);
+    setClockMessage(null);
+    setError(null);
+    try {
+      if (action === "in") {
+        const row = await clockInDay(supabase, profile.id);
+        setDayClock(row);
+        setElapsedTick(new Date());
+        setClockMessage("Clocked in for the day. Job labor still clocks on each work order.");
+      } else {
+        await clockOutDay(supabase, profile.id);
+        setDayClock(null);
+        setClockMessage("Clocked out for the day.");
+      }
+    } catch (e) {
+      setError(humanizeFieldError(e instanceof Error ? e.message : "Clock action failed."));
+    } finally {
+      setClockBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (selectedId) return;
@@ -426,12 +493,18 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
   // URL job id but not in list (reassigned) — clear quietly after load
   useEffect(() => {
     if (!loading && selectedId && !selected && jobs.length >= 0) {
-      const stillLoadingJobs = false;
-      if (!stillLoadingJobs && !jobs.some((j) => j.id === selectedId)) {
+      if (!jobs.some((j) => j.id === selectedId)) {
         setJobSelection(null);
       }
     }
   }, [loading, selectedId, selected, jobs, setJobSelection]);
+
+  // Locked job via deep link — bounce home
+  useEffect(() => {
+    if (!loading && selected && !canOpenFieldJob(selected, jobs)) {
+      setJobSelection(null);
+    }
+  }, [loading, selected, jobs, setJobSelection]);
 
   if (selected) {
     return (
@@ -440,10 +513,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         profile={profile}
         catalogParts={catalogParts}
         usedParts={usedParts}
-        laborRows={laborRows}
-        otherOpenJobs={jobs.filter((j) => j.id !== selected.id && isOpenJob(j))}
         onBack={() => setJobSelection(null)}
-        onSwitchJob={(id) => setJobSelection(id)}
         onRefresh={refreshAll}
       />
     );
@@ -480,7 +550,69 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div
+        className={`rounded-2xl border px-4 py-3 ${
+          dayClock
+            ? "border-success/50 bg-success/10"
+            : "border-base-300 bg-base-100 shadow-sm"
+        }`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            {dayClock ? (
+              <>
+                <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-success">
+                  <Clock className="h-3.5 w-3.5" />
+                  Clocked in for the day
+                </p>
+                <p className="mt-0.5 text-sm opacity-80">
+                  Since {formatDayClockSince(dayClock.clock_in_at)}
+                  {" · "}
+                  <span className="font-mono font-semibold tabular-nums text-base-content">
+                    {formatElapsedLabel(dayClock.clock_in_at, elapsedTick)}
+                  </span>
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="flex items-center gap-1.5 text-sm font-semibold">
+                  <Clock className="h-4 w-4 opacity-70" />
+                  Start your day
+                </p>
+                <p className="mt-0.5 text-sm opacity-70">
+                  Clock in when you get to work. Job labor still punches on each work order.
+                </p>
+              </>
+            )}
+            {clockMessage ? <p className="mt-1 text-xs text-success">{clockMessage}</p> : null}
+          </div>
+          {dayClock ? (
+            <button
+              type="button"
+              className="btn btn-warning btn-sm min-h-11"
+              disabled={clockBusy}
+              onClick={() => void runDayClock("out")}
+            >
+              {clockBusy ? <span className="loading loading-spinner loading-xs" /> : null}
+              Clock out
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-success btn-sm min-h-11"
+              disabled={clockBusy}
+              onClick={() => void runDayClock("in")}
+            >
+              {clockBusy ? <span className="loading loading-spinner loading-xs" /> : null}
+              Clock in
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Link href="/parts" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <Package className="h-4 w-4" />
           Parts
@@ -489,17 +621,16 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
           <CalendarDays className="h-4 w-4" />
           Hours
         </Link>
-        <Link href="/timesheets" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
+        <Link
+          href={timesheetHref({ tech: profile?.id })}
+          className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs"
+        >
           <CalendarDays className="h-4 w-4" />
           Timesheet
         </Link>
         <Link href="/time-off" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
           <CalendarOff className="h-4 w-4" />
           Time off
-        </Link>
-        <Link href="/dispatch" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
-          <Radio className="h-4 w-4" />
-          Dispatch
         </Link>
       </div>
 
@@ -591,10 +722,11 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta={stepCta(job)}
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}
-                  emphasized={isActivelyWorking(job)}
+                  emphasized={isActivelyWorking(job) || isActiveDispatchJob(job)}
                 />
               ))
             )}
@@ -606,6 +738,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta={stepCta(job)}
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}
@@ -620,6 +753,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta={stepCta(job)}
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}
@@ -634,6 +768,7 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
                 <JobCard
                   key={job.id}
                   job={job}
+                  allJobs={jobs}
                   cta="Close out past job"
                   onOpen={() => setJobSelection(job.id)}
                   onApprovedLeave={isOnLeaveDay(job)}

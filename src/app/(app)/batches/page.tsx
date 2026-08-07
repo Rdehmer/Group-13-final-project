@@ -5,7 +5,15 @@
  * Workflow: gather unbatched → create Open batch → Post (lock) → Export (GL CSV).
  */
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -26,6 +34,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -77,6 +86,16 @@ export default function BatchesPage() {
   const [batchDate, setBatchDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [batchName, setBatchName] = useState("");
   const [notes, setNotes] = useState("");
+  const workspaceRef = useRef<HTMLDivElement>(null);
+
+  /** Switch center panel, then scroll so the selected view is in view. */
+  const goToWorkspace = useCallback((update: () => void) => {
+    update();
+    // Wait for tab content to paint before scrolling.
+    window.setTimeout(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -368,15 +387,65 @@ export default function BatchesPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Unbatched invoices" value={unbatchedInv.length} hint={formatMoney(invTotal)} danger={unbatchedInv.length > 0} />
-        <StatCard label="Unbatched payments" value={unbatchedPay.length} hint={formatMoney(payTotal)} danger={unbatchedPay.length > 0} />
-        <StatCard label="Open batches" value={openBatches.length} hint="Editable" />
-        <StatCard label="Ready to post" value={readyToPost.length} hint="Open with items" />
-        <StatCard label="Posted (awaiting export)" value={postedBatches.length} />
+        <StatCard
+          label="Unbatched invoices"
+          value={unbatchedInv.length}
+          hint={formatMoney(invTotal)}
+          danger={unbatchedInv.length > 0}
+          onClick={() => goToWorkspace(() => setCenterTab("unbatched_invoices"))}
+          active={centerTab === "unbatched_invoices"}
+        />
+        <StatCard
+          label="Unbatched payments"
+          value={unbatchedPay.length}
+          hint={formatMoney(payTotal)}
+          danger={unbatchedPay.length > 0}
+          onClick={() => goToWorkspace(() => setCenterTab("unbatched_payments"))}
+          active={centerTab === "unbatched_payments"}
+        />
+        <StatCard
+          label="Open batches"
+          value={openBatches.length}
+          hint="Editable"
+          onClick={() =>
+            goToWorkspace(() => {
+              setCenterTab("batches");
+              setStatusTab("Open");
+            })
+          }
+          active={centerTab === "batches" && statusTab === "Open"}
+        />
+        <StatCard
+          label="Ready to post"
+          value={readyToPost.length}
+          hint="Open with items"
+          onClick={() =>
+            goToWorkspace(() => {
+              setCenterTab("batches");
+              setStatusTab("Open");
+            })
+          }
+          active={centerTab === "batches" && statusTab === "Open"}
+        />
+        <StatCard
+          label="Posted (awaiting export)"
+          value={postedBatches.length}
+          onClick={() =>
+            goToWorkspace(() => {
+              setCenterTab("batches");
+              setStatusTab("Posted");
+            })
+          }
+          active={centerTab === "batches" && statusTab === "Posted"}
+        />
       </div>
 
       {/* Center tabs (ST Accounting side panel style) */}
-      <div className="tabs tabs-boxed bg-base-200/60 p-1 w-full sm:w-auto">
+      <div
+        ref={workspaceRef}
+        id="batch-center-workspace"
+        className="scroll-mt-4 tabs tabs-boxed bg-base-200/60 p-1 w-full sm:w-auto"
+      >
         <button
           type="button"
           className={`tab ${centerTab === "batches" ? "tab-active" : ""}`}
@@ -504,7 +573,7 @@ export default function BatchesPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -584,7 +653,7 @@ export default function BatchesPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </section>
       ) : null}
@@ -648,7 +717,7 @@ export default function BatchesPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto max-h-[28rem]">
+            <DualHorizontalScroll contentClassName="max-h-[28rem] overflow-y-auto">
               <table className="table table-sm">
                 <thead className="sticky top-0 bg-base-100">
                   <tr>
@@ -690,7 +759,7 @@ export default function BatchesPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </section>
       ) : null}
@@ -756,7 +825,7 @@ export default function BatchesPage() {
                 <EmptyState title="No unbatched payments" description="New payments appear here until deposited." />
               </div>
             ) : (
-              <div className="overflow-x-auto max-h-[24rem]">
+              <DualHorizontalScroll contentClassName="max-h-[24rem] overflow-y-auto">
                 <table className="table table-sm">
                   <thead className="sticky top-0 bg-base-100">
                     <tr>
@@ -798,7 +867,7 @@ export default function BatchesPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </section>
         </div>

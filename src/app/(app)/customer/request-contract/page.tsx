@@ -118,7 +118,7 @@ export default function RequestContractPage() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -145,9 +145,15 @@ export default function RequestContractPage() {
             danger={pendingCount > 0}
           />
         </Link>
-        <StatCard label="Equipment on file" value={equipment.length} hint="Units to cover" />
+        <StatCard
+          label="Equipment on file"
+          value={equipment.length}
+          hint="Units to cover"
+          scrollTarget="contract-request-form"
+        />
       </div>
 
+      <div id="contract-request-form" className="scroll-mt-4">
       <ContractTierCards
         selectedPackId={selectedPackId}
         selectedTier={selectedTier}
@@ -163,6 +169,7 @@ export default function RequestContractPage() {
         onContinue={() => setTierCollapsed(true)}
         onChangePlan={() => setTierCollapsed(false)}
       />
+      </div>
 
       {tiersCollapsed ? (
         <div className="card bg-base-100 shadow">
@@ -176,7 +183,7 @@ export default function RequestContractPage() {
               selectedTier={selectedTier}
               selectedPackId={selectedPackId}
               onSuccess={({ id }) => {
-                router.push(`/customer/contracts?filter=pending&highlight=${id}`);
+                router.push(`/customer/contracts?highlight=${id}`);
               }}
               onEquipmentAdded={(item) => {
                 setEquipment((prev) =>

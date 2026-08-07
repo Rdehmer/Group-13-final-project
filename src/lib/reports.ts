@@ -1,12 +1,28 @@
 /**
- * GAAP-oriented financial report engines for Ridley Equipment Service Manager.
+ * GAAP-oriented financial report engines for EquipmentIQ.
  *
  * Policies documented in ACCOUNTING_POLICIES (surfaced in the UI).
  * Numbers are derived from posted transactional data — not arbitrary plugs —
  * except where the chart of accounts cannot store an item (disclosed).
  */
 
-import { format, parseISO, startOfYear, endOfMonth, startOfMonth, subMonths, isValid, eachMonthOfInterval, getDate, getDaysInMonth, addMonths } from "date-fns";
+import {
+  format,
+  parseISO,
+  startOfYear,
+  endOfMonth,
+  startOfMonth,
+  subMonths,
+  isValid,
+  eachMonthOfInterval,
+  getDate,
+  getDaysInMonth,
+  addMonths,
+  startOfWeek,
+  endOfWeek,
+  eachDayOfInterval,
+  addDays,
+} from "date-fns";
 import { formatMoney, formatPct, grossProfit, profitMargin, laborCost } from "@/lib/calculations";
 import type {
   Invoice,
@@ -14,10 +30,12 @@ import type {
   Payment,
   ServiceContract,
   TechnicianLabor,
+  TimeEntry,
   WorkOrder,
   WorkOrderPart,
 } from "@/lib/types";
 import { earnedRevenueFromCompletions } from "@/lib/accounting/earned-revenue";
+import { includesInPayrollTotals } from "@/lib/time-entry-controls";
 
 // ---------------------------------------------------------------------------
 // Accounting policies (ASC concepts applied to available data)
@@ -243,8 +261,9 @@ export const REPORT_CATALOG: ReportGroup[] = [
       },
       {
         id: "tech_labor",
-        name: "Technician Labor Productivity",
-        description: "Hours, cost, billable rate recovery by technician.",
+        name: "Technician Timesheet Summary By Pay Period",
+        description:
+          "ServiceTitan-style daily timesheets: start/end, driving, job hrs, meal, regular, OT, and total pay by pay period.",
       },
       {
         id: "inventory",
@@ -1337,7 +1356,20 @@ export type TechProfile = {
   full_name: string | null;
   email?: string | null;
   role?: string;
+  hourly_cost_rate?: number | null;
+  hourly_billing_rate?: number | null;
 };
+
+export {
+  PAY_PERIOD_WEEK_STARTS_ON,
+  payPeriodContaining,
+  shiftPayPeriod,
+  defaultCurrentPayPeriod,
+  technicianTimesheetSummaryByPayPeriod,
+  type TimesheetDayRow,
+  type TimesheetTechSection,
+  type TimesheetSummaryReport,
+} from "@/lib/timesheet-pay-period-report";
 
 export function technicianLaborReport(
   labor: TechnicianLabor[],

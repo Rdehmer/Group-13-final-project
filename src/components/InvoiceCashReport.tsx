@@ -14,7 +14,8 @@ import {
   startOfYear,
 } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
-import { StatCard, EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
+import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
 import type { Invoice, Payment, WorkOrder } from "@/lib/types";
 
@@ -25,7 +26,7 @@ type InvoiceRow = Invoice & {
 
 type PaymentRow = Payment & {
   customers?: { id: string; name: string } | null;
-  invoices?: { invoice_number: string } | null;
+  invoices?: { id: string; invoice_number: string } | null;
 };
 
 type WorkOrderRow = WorkOrder & { customers?: { id: string; name: string } | null };
@@ -40,6 +41,7 @@ type RecognitionRow = {
   completionDate: string;
   billingStatus: string;
   recognizedAmount: number;
+  invoiceId: string | null;
   invoiceNumber: string | null;
   source: "Invoice" | "Estimate on completion";
 };
@@ -261,7 +263,7 @@ export function InvoiceCashReport() {
           .order("invoice_date", { ascending: false }),
         supabase
           .from("payments")
-          .select("*, customers(id, name), invoices(invoice_number)")
+          .select("*, customers(id, name), invoices(id, invoice_number)")
           .order("payment_date", { ascending: false }),
         supabase
           .from("work_orders")
@@ -310,6 +312,7 @@ export function InvoiceCashReport() {
         completionDate: wo.completion_date ?? "—",
         billingStatus: wo.billing_status,
         recognizedAmount,
+        invoiceId: invoice?.id ?? null,
         invoiceNumber: invoice?.invoice_number ?? null,
         source: invoice ? ("Invoice" as const) : ("Estimate on completion" as const),
       };
@@ -780,26 +783,33 @@ export function InvoiceCashReport() {
             {unbilledCompleted.length} completed WO(s) without invoice — open work orders
           </div>
         </Link>
-        <StatCard
+        <JumpStatCard
           label="Completed work orders"
           value={completedWoCount}
           hint="In selected date range"
+          targetId="section-recognition"
         />
       </div>
 
       <div className="mb-2 text-sm font-medium opacity-70">Open AR aging</div>
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Current" value={formatMoney(agingTotals.current)} hint="Not yet due" />
-        <StatCard label="1–30 days" value={formatMoney(agingTotals.d30)} />
-        <StatCard label="31–60 days" value={formatMoney(agingTotals.d60)} />
-        <StatCard
+        <JumpStatCard
+          label="Current"
+          value={formatMoney(agingTotals.current)}
+          hint="Not yet due"
+          targetId="section-ar"
+        />
+        <JumpStatCard label="1–30 days" value={formatMoney(agingTotals.d30)} targetId="section-ar" />
+        <JumpStatCard label="31–60 days" value={formatMoney(agingTotals.d60)} targetId="section-ar" />
+        <JumpStatCard
           label="61+ days"
           value={formatMoney(agingTotals.d90)}
           danger={agingTotals.d90 > 0}
+          targetId="section-ar"
         />
       </div>
 
-      <div id="section-recognition" className="mt-6 card bg-base-100 shadow">
+      <div id="section-recognition" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -819,7 +829,7 @@ export function InvoiceCashReport() {
               description="Complete work orders to recognize revenue, or widen the date range."
             />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -918,11 +928,8 @@ export function InvoiceCashReport() {
                       </td>
                       <td>{r.source}</td>
                       <td>
-                        {r.invoiceNumber ? (
-                          <Link
-                            href={`/billing?invoice=${encodeURIComponent(r.invoiceNumber)}`}
-                            className="link link-primary"
-                          >
+                        {r.invoiceId && r.invoiceNumber ? (
+                          <Link href={`/billing/${r.invoiceId}`} className="link link-primary">
                             {r.invoiceNumber}
                           </Link>
                         ) : (
@@ -940,12 +947,12 @@ export function InvoiceCashReport() {
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>
 
-      <div id="section-invoices" className="mt-6 card bg-base-100 shadow">
+      <div id="section-invoices" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <h2 className="card-title text-base">Invoices (recognized work)</h2>
           <p className="text-sm opacity-70">
@@ -954,7 +961,7 @@ export function InvoiceCashReport() {
           {recognizedInvoicesFiltered.length === 0 ? (
             <EmptyState title="No recognized invoices" description="Invoices will appear here." />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1028,7 +1035,7 @@ export function InvoiceCashReport() {
                     <tr key={inv.id}>
                       <td>
                         <Link
-                          href={`/billing?invoice=${encodeURIComponent(inv.invoice_number)}`}
+                          href={`/billing/${inv.id}`}
                           className="link link-primary font-medium"
                         >
                           {inv.invoice_number}
@@ -1066,19 +1073,19 @@ export function InvoiceCashReport() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>
 
-      <div id="section-payments" className="mt-6 card bg-base-100 shadow">
+      <div id="section-payments" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <h2 className="card-title text-base">Cash collected (payments)</h2>
           <p className="text-sm opacity-70">Payments that make up Cash Collected.</p>
           {paymentsFiltered.length === 0 ? (
             <EmptyState title="No payments" description="Recorded payments will appear here." />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1159,12 +1166,12 @@ export function InvoiceCashReport() {
                       <td>{p.payment_date}</td>
                       <td>{p.payment_method}</td>
                       <td>
-                        {p.invoices?.invoice_number ? (
+                        {p.invoice_id ? (
                           <Link
-                            href={`/billing?invoice=${encodeURIComponent(p.invoices.invoice_number)}`}
+                            href={`/billing/${p.invoice_id}`}
                             className="link link-primary"
                           >
-                            {p.invoices.invoice_number}
+                            {p.invoices?.invoice_number ?? "Invoice"}
                           </Link>
                         ) : (
                           "—"
@@ -1181,12 +1188,12 @@ export function InvoiceCashReport() {
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>
 
-      <div id="section-ar" className="mt-6 card bg-base-100 shadow">
+      <div id="section-ar" className="mt-6 scroll-mt-4 card bg-base-100 shadow">
         <div className="card-body">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -1203,7 +1210,7 @@ export function InvoiceCashReport() {
           {openArRows.length === 0 ? (
             <EmptyState title="No open AR" description="Unpaid invoices will appear here." />
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1277,7 +1284,7 @@ export function InvoiceCashReport() {
                     <tr key={inv.id} className={inv.aging === "d90" ? "bg-error/10" : ""}>
                       <td>
                         <Link
-                          href={`/billing?invoice=${encodeURIComponent(inv.invoice_number)}`}
+                          href={`/billing/${inv.id}`}
                           className="link link-primary font-medium"
                         >
                           {inv.invoice_number}
@@ -1324,7 +1331,7 @@ export function InvoiceCashReport() {
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

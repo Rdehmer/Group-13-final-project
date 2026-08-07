@@ -2,11 +2,12 @@
 
 /**
  * This business faces customer communication gap risk when updates live only in phone or email.
- * Our app reduces the risk by giving customers a dedicated inbox tied to their Ridley account.
+ * Our app reduces the risk by giving customers a dedicated inbox tied to their EquipmentIQ account.
  */
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquarePlus } from "lucide-react";
+import Link from "next/link";
+import { MessageSquarePlus, RefreshCw } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
@@ -99,49 +100,52 @@ function CustomerInboxPageInner() {
     return (data as InboxMessage[]) ?? [];
   }, [supabase]);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setError(null);
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        setLoading(false);
-        return;
-      }
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
 
-      const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
-      setProfile(p as Profile);
-      if (!p?.customer_id) {
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const [threadRows, { data: wo }] = await Promise.all([
-          loadThreads(p.customer_id),
-          supabase
-            .from("work_orders")
-            .select(WORK_ORDER_SELECT)
-            .eq("customer_id", p.customer_id)
-            .order("created_at", { ascending: false })
-            .limit(25),
-        ]);
-
-        setThreads(threadRows);
-        setWorkOrders(((wo as WorkOrderRow[] | null) ?? []).map(normalizeWorkOrderOption));
-        setSelectedId((prev) => {
-          if (prev && threadRows.some((t) => t.id === prev)) return prev;
-          return threadRows[0]?.id ?? null;
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not load inbox.");
-      }
-
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
       setLoading(false);
-    })();
-  }, [supabase, loadThreads]);
+      return;
+    }
+
+    const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+    setProfile(p as Profile);
+    if (!p?.customer_id) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const [threadRows, { data: wo }] = await Promise.all([
+        loadThreads(p.customer_id),
+        supabase
+          .from("work_orders")
+          .select(WORK_ORDER_SELECT)
+          .eq("customer_id", p.customer_id)
+          .order("created_at", { ascending: false })
+          .limit(25),
+      ]);
+
+      setThreads(threadRows);
+      setWorkOrders(((wo as WorkOrderRow[] | null) ?? []).map(normalizeWorkOrderOption));
+      setSelectedId((prev) => {
+        if (prev && threadRows.some((t) => t.id === prev)) return prev;
+        return threadRows[0]?.id ?? null;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load inbox.");
+    }
+
+    setLoading(false);
+  }, [loadThreads, supabase]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   function draftContextForWorkOrderId(workOrderId: string): FollowUpWorkOrderContext | null {
     const fromList = workOrders.find((w) => w.id === workOrderId);
@@ -321,7 +325,7 @@ function CustomerInboxPageInner() {
     setBusy(false);
   }
 
-  if (loading || !profile) {
+  if (!profile) {
     return <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>;
   }
 
@@ -329,7 +333,7 @@ function CustomerInboxPageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -338,16 +342,27 @@ function CustomerInboxPageInner() {
     <div>
       <PageHeader
         title="Inbox"
-        description="Messages with Ridley Equipment Services about your service, billing, and contracts."
+        description="Messages with EquipmentIQ about your service, billing, and contracts."
         actions={
-          <button
-            type="button"
-            className="btn btn-primary btn-sm gap-1"
-            onClick={() => setShowNew(true)}
-          >
-            <MessageSquarePlus className="h-4 w-4" />
-            New message
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm gap-1"
+              onClick={() => void refresh()}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm gap-1"
+              onClick={() => setShowNew(true)}
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+              New message
+            </button>
+          </div>
         }
       />
 
@@ -360,7 +375,9 @@ function CustomerInboxPageInner() {
         </div>
       ) : null}
 
-      {threads.length === 0 ? (
+      {loading && threads.length === 0 ? (
+        <div className="p-8 text-center text-sm opacity-60">Loading inbox…</div>
+      ) : threads.length === 0 ? (
         <EmptyState
           title="No messages yet"
           description="Ask about a visit, invoice, or contract — our team will reply here."
@@ -387,9 +404,18 @@ function CustomerInboxPageInner() {
                   <h2 className="font-semibold">{selectedThread.subject}</h2>
                   <p className="mt-1 text-xs opacity-60">
                     {inboxCategoryLabel(selectedThread.category)}
-                    {selectedThread.work_orders?.work_order_number
-                      ? ` · ${selectedThread.work_orders.work_order_number}`
-                      : ""}
+                    {selectedThread.work_order_id &&
+                    selectedThread.work_orders?.work_order_number ? (
+                      <>
+                        {" · "}
+                        <Link
+                          href={`/customer/open-request?work_order_id=${selectedThread.work_order_id}`}
+                          className="link link-hover"
+                        >
+                          {selectedThread.work_orders.work_order_number}
+                        </Link>
+                      </>
+                    ) : null}
                   </p>
                 </div>
                 <ConversationPanel

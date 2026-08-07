@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import type {
@@ -25,6 +26,8 @@ import {
   avgRating,
   canApproveVendors,
   canDeleteVendor,
+  canEditVendorMaster,
+  canRecordVendorPayment,
   canUseServiceVendor,
   isServiceVendorSchemaError,
   serviceVendorAllowedRoles,
@@ -142,7 +145,7 @@ export default function ServiceVendorDetailPage() {
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!vendor || !profile) return;
+    if (!vendor || !profile || !canEditVendorMaster(profile.role)) return;
     setSaving(true);
     setError(null);
     const { error: updErr } = await supabase
@@ -191,7 +194,7 @@ export default function ServiceVendorDetailPage() {
   }
 
   async function setActive(active: boolean) {
-    if (!vendor || !profile) return;
+    if (!vendor || !profile || !canEditVendorMaster(profile.role)) return;
     setBusy(true);
     await supabase
       .from("service_vendors")
@@ -292,7 +295,16 @@ export default function ServiceVendorDetailPage() {
       .select("*")
       .single();
     if (insertError || !bill) {
-      setError(insertError?.message ?? "Could not save bill.");
+      const msg = insertError?.message ?? "Could not save bill.";
+      const duplicate =
+        /duplicate|unique|service_vendor_bills_vendor_bill_number/i.test(msg);
+      setError(
+        duplicate
+          ? `Bill # ${billForm.bill_number.trim()} already exists for this provider.`
+          : /policy|row-level security|approved|active/i.test(msg)
+            ? "Provider must be approved and active before entering bills."
+            : msg,
+      );
       setBusy(false);
       return;
     }
@@ -310,7 +322,10 @@ export default function ServiceVendorDetailPage() {
   }
 
   async function markBillPaid(bill: ServiceVendorBill) {
-    if (!profile) return;
+    if (!profile || !canRecordVendorPayment(profile.role)) {
+      setError("Only managers and administrators can mark service bills paid.");
+      return;
+    }
     const balance = billBalance(bill);
     if (balance <= 0) return;
     setBusy(true);
@@ -374,6 +389,8 @@ export default function ServiceVendorDetailPage() {
 
   const approval = vendor.approval_status ?? "Approved";
   const isManager = canApproveVendors(profile.role);
+  const canEditMaster = canEditVendorMaster(profile.role);
+  const canPay = canRecordVendorPayment(profile.role);
   const usable = canUseServiceVendor(vendor);
 
   return (
@@ -455,94 +472,128 @@ export default function ServiceVendorDetailPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <form onSubmit={onSave} className="card bg-base-100 shadow lg:col-span-1">
+        <div className="card bg-base-100 shadow lg:col-span-1">
           <div className="card-body space-y-3">
             <h2 className="card-title text-base">Provider profile</h2>
-            <FormRow label="Name" required>
-              <input
-                className="input input-bordered w-full"
-                value={vendor.name}
-                onChange={(e) => setVendor({ ...vendor, name: e.target.value })}
-                required
-              />
-            </FormRow>
-            <FormRow label="Primary trade">
-              <select
-                className="select select-bordered w-full"
-                value={vendor.primary_trade}
-                onChange={(e) => setVendor({ ...vendor, primary_trade: e.target.value })}
-              >
-                {SERVICE_TRADES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </FormRow>
-            <FormRow label="Contact">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.contact_name ?? ""}
-                onChange={(e) => setVendor({ ...vendor, contact_name: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Email">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.email ?? ""}
-                onChange={(e) => setVendor({ ...vendor, email: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Phone">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.phone ?? ""}
-                onChange={(e) => setVendor({ ...vendor, phone: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Service area">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.service_area ?? ""}
-                onChange={(e) => setVendor({ ...vendor, service_area: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Notes">
-              <textarea
-                className="textarea textarea-bordered w-full"
-                rows={2}
-                value={vendor.notes ?? ""}
-                onChange={(e) => setVendor({ ...vendor, notes: e.target.value })}
-              />
-            </FormRow>
-            <p className="text-xs opacity-60">Approval: {approval}</p>
-            <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-            <div className="flex flex-wrap gap-2 border-t border-base-300 pt-3">
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                disabled={busy}
-                onClick={() => void setActive(!vendor.is_active)}
-              >
-                {vendor.is_active ? "Set inactive" : "Set active"}
-              </button>
-              {canDeleteVendor(profile.role) ? (
-                <button
-                  type="button"
-                  className="btn btn-error btn-outline btn-sm"
-                  disabled={busy}
-                  onClick={() => void deleteVendor()}
-                >
-                  Delete
+            {canEditMaster ? (
+              <form onSubmit={onSave} className="space-y-3">
+                <FormRow label="Name" required>
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.name}
+                    onChange={(e) => setVendor({ ...vendor, name: e.target.value })}
+                    required
+                  />
+                </FormRow>
+                <FormRow label="Primary trade">
+                  <select
+                    className="select select-bordered w-full"
+                    value={vendor.primary_trade}
+                    onChange={(e) => setVendor({ ...vendor, primary_trade: e.target.value })}
+                  >
+                    {SERVICE_TRADES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </FormRow>
+                <FormRow label="Contact">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.contact_name ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, contact_name: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Email">
+                  <input
+                    type="email"
+                    className="input input-bordered w-full"
+                    value={vendor.email ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, email: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Phone">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.phone ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, phone: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Service area">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.service_area ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, service_area: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Notes">
+                  <textarea
+                    className="textarea textarea-bordered w-full"
+                    rows={2}
+                    value={vendor.notes ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, notes: e.target.value })}
+                  />
+                </FormRow>
+                <p className="text-xs opacity-60">Approval: {approval}</p>
+                <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
+                  {saving ? "Saving…" : "Save"}
                 </button>
-              ) : null}
-            </div>
+                <div className="flex flex-wrap gap-2 border-t border-base-300 pt-3">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    disabled={busy}
+                    onClick={() => void setActive(!vendor.is_active)}
+                  >
+                    {vendor.is_active ? "Set inactive" : "Set active"}
+                  </button>
+                  {canDeleteVendor(profile.role) ? (
+                    <button
+                      type="button"
+                      className="btn btn-error btn-outline btn-sm"
+                      disabled={busy}
+                      onClick={() => void deleteVendor()}
+                    >
+                      Delete
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-2 text-sm">
+                <FormRow label="Trade">
+                  <span>{vendor.primary_trade}</span>
+                </FormRow>
+                <FormRow label="Contact">
+                  <span>{vendor.contact_name ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Email">
+                  <span>{vendor.email ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Phone">
+                  <span>{vendor.phone ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Service area">
+                  <span>{vendor.service_area ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Notes">
+                  <span>{vendor.notes ?? "—"}</span>
+                </FormRow>
+                <p className="text-xs opacity-60">
+                  Approval: {approval}
+                  {vendor.is_active ? " · Active" : " · Inactive"}
+                </p>
+                <p className="text-xs opacity-50">
+                  Only managers and administrators can edit provider master data.
+                </p>
+              </div>
+            )}
           </div>
-        </form>
+        </div>
 
         <div className="space-y-6 lg:col-span-2">
+
           <section className="card bg-base-100 shadow">
             <div className="card-body">
               <h2 className="card-title text-base">Assigned work orders</h2>
@@ -602,10 +653,15 @@ export default function ServiceVendorDetailPage() {
           <section className="card bg-base-100 shadow">
             <div className="card-body">
               <h2 className="card-title text-base">Service bills</h2>
+              {!canPay ? (
+                <p className="text-xs opacity-60">
+                  Billing can enter bills. Managers or administrators mark them paid.
+                </p>
+              ) : null}
               {bills.length === 0 ? (
                 <p className="text-sm opacity-60">No service bills yet.</p>
               ) : (
-                <div className="overflow-x-auto">
+                <DualHorizontalScroll>
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -628,7 +684,7 @@ export default function ServiceVendorDetailPage() {
                             <StatusBadge label={b.status} tone={statusTone(b.status)} />
                           </td>
                           <td className="text-right">
-                            {billBalance(b) > 0 ? (
+                            {canPay && billBalance(b) > 0 ? (
                               <button
                                 type="button"
                                 className="btn btn-primary btn-xs"
@@ -643,7 +699,7 @@ export default function ServiceVendorDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DualHorizontalScroll>
               )}
             </div>
           </section>

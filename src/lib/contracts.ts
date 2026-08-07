@@ -273,6 +273,25 @@ export function buildCustomerRequestContractName(input: {
   return `[Request] ${customer} · ${middle} · ${date} · REQ-${code}`;
 }
 
+const REQUEST_CONTRACT_NAME_PREFIX = "[Request]";
+
+/** Strip portal submission prefix once a contract is active (or for display). */
+export function stripRequestPrefixFromContractName(name: string): string {
+  const trimmed = name.trimStart();
+  if (trimmed.startsWith(REQUEST_CONTRACT_NAME_PREFIX)) {
+    return trimmed.slice(REQUEST_CONTRACT_NAME_PREFIX.length).trimStart();
+  }
+  return name;
+}
+
+export function formatContractDisplayName(name: string, status: string): string {
+  const s = status.toLowerCase();
+  if (s === "active" || s === "renewed") {
+    return stripRequestPrefixFromContractName(name);
+  }
+  return name;
+}
+
 type BuildSubmissionInput = {
   customerId: string;
   customerName: string;
@@ -395,13 +414,13 @@ export function tierBadgeClass(tierId: ContractTierId): string {
 export function contractStatusMessage(status: string): string {
   const s = status.toLowerCase();
   if (s.includes("pending")) {
-    return "Ridley is reviewing your request. You'll be notified when it's active.";
+    return "EquipmentIQ is reviewing your request. You'll be notified when it's active.";
   }
   if (s === "active") {
     return "This agreement is active and coverage applies to listed equipment.";
   }
   if (s.includes("canceled") || s.includes("cancelled")) {
-    return "This request was not approved. Contact Ridley Equipment Services or submit a new request.";
+    return "This request was not approved. Contact EquipmentIQ or submit a new request.";
   }
   if (s.includes("expired")) {
     return "This agreement has ended. Request a new contract to restore coverage.";
@@ -412,7 +431,7 @@ export function contractStatusMessage(status: string): string {
   if (s.includes("renewed")) {
     return "This agreement was renewed from a prior term.";
   }
-  return "Contact Ridley Equipment Services if you have questions about this agreement.";
+  return "Contact EquipmentIQ if you have questions about this agreement.";
 }
 
 export function daysUntilEnd(endDate: string): number | null {

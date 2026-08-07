@@ -2,27 +2,27 @@
 
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
-import { RefreshCw, Truck } from "lucide-react";
+import { ArrowLeft, RefreshCw, Truck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
-import type { Profile } from "@/lib/types";
-
-const DISPATCH_STATUSES = [
-  "Not Started",
-  "En Route",
-  "Arrived",
-  "Working",
-  "Paused",
-  "Parts Ordered",
-  "Coming in Late",
-  "Not Available",
-  "Ready for Review",
-  "Done",
-] as const;
-
-type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+import { ProofOfCompletion } from "@/components/ProofOfCompletion";
+import {
+  applyDispatchStatusTransition,
+  clockOutIfActive,
+  markWorkOrderTimeReadyToBill,
+  type DispatchFlowStatus,
+} from "@/lib/timesheets";
+import {
+  canPauseDispatch,
+  dispatchStatusTone,
+  getNextDispatchStatus,
+  getPreviousDispatchStatus,
+  normalizeDispatchStatus,
+  type DispatchStatus,
+} from "@/lib/dispatch-flow";
+import type { Profile, WorkOrder } from "@/lib/types";
 
 type DispatchWorkOrder = {
   id: string;
@@ -32,20 +32,20 @@ type DispatchWorkOrder = {
   scheduled_start_time: string | null;
   priority: string;
   problem_description: string | null;
-  dispatch_status: DispatchStatus;
+  dispatch_status: string;
   dispatch_note: string | null;
   dispatch_updated_at: string | null;
-  customers?: { name: string }[];
+  completion_proof_requirement?: WorkOrder["completion_proof_requirement"] | null;
+  customers?: { name: string }[] | { name: string } | null;
 };
 
 type DispatchTechnician = Pick<Profile, "id" | "full_name" | "email" | "is_active">;
 
-function dispatchTone(status: DispatchStatus): "success" | "warning" | "error" | "info" | "neutral" {
-  if (status === "Done" || status === "Working" || status === "Arrived") return "success";
-  if (status === "Parts Ordered" || status === "Coming in Late" || status === "Paused") return "warning";
-  if (status === "Not Available") return "error";
-  if (status === "En Route" || status === "Ready for Review") return "info";
-  return "neutral";
+function customerName(workOrder: DispatchWorkOrder): string {
+  const c = workOrder.customers;
+  if (!c) return "Unknown customer";
+  if (Array.isArray(c)) return c[0]?.name ?? "Unknown customer";
+  return c.name ?? "Unknown customer";
 }
 
 function WorkOrderCard({
@@ -65,51 +65,99 @@ function WorkOrderCard({
   onStatusChange: (status: DispatchStatus) => void;
   onSaveNote: () => void;
 }) {
+  const current = normalizeDispatchStatus(workOrder.dispatch_status);
+  const nextStatus = getNextDispatchStatus(workOrder.dispatch_status);
+  const previousStatus = getPreviousDispatchStatus(workOrder.dispatch_status);
+  const showPause = canPauseDispatch(workOrder.dispatch_status);
+
   return (
     <div className="rounded-box border border-base-300 bg-base-100 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="font-semibold">{workOrder.work_order_number}</p>
           <p className="text-sm opacity-70">
-            {workOrder.customers?.[0]?.name ?? "Unknown customer"}
+            {customerName(workOrder)}
             {workOrder.scheduled_date ? ` · ${workOrder.scheduled_date}` : ""}
             {workOrder.scheduled_start_time ? ` at ${workOrder.scheduled_start_time.slice(0, 5)}` : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge label={workOrder.priority} tone={workOrder.priority === "Critical" ? "error" : "neutral"} />
-          <StatusBadge label={workOrder.dispatch_status} tone={dispatchTone(workOrder.dispatch_status)} />
+          <StatusBadge label={current} tone={dispatchStatusTone(current)} />
         </div>
       </div>
 
       <p className="mt-3 text-sm">{workOrder.problem_description ?? "No problem description"}</p>
 
       {canUpdate ? (
-        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(12rem,16rem)_1fr_auto]">
-          <label className="form-control">
-            <span className="label-text font-medium">Status</span>
-            <select
-              className="select select-bordered mt-1 w-full"
-              value={workOrder.dispatch_status}
-              onChange={(event) => onStatusChange(event.target.value as DispatchStatus)}
+        <div className="mt-4 space-y-4">
+          <div>
+            <p className="mb-2 text-sm font-semibold">
+              {nextStatus ? "Next step" : "Job complete"}
+            </p>
+            <div className="flex flex-col gap-2">
+              {nextStatus ? (
+                <button
+                  type="button"
+                  className="btn btn-primary min-h-14 text-base"
+                  disabled={saving}
+                  onClick={() => onStatusChange(nextStatus)}
+                >
+                  {current === "Paused" ? `Resume — ${nextStatus}` : nextStatus === "Done" ? "Done — customer sign-off" : nextStatus}
+                </button>
+              ) : (
+                <p className="rounded-box bg-success/10 px-3 py-2 text-sm font-medium text-success">
+                  Marked Done. Use Go back if that was a mistake.
+                </p>
+              )}
+
+              {showPause ? (
+                <button
+                  type="button"
+                  className="btn btn-outline min-h-12"
+                  disabled={saving}
+                  onClick={() => onStatusChange("Paused")}
+                >
+                  Paused
+                </button>
+              ) : null}
+
+              {previousStatus ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost min-h-12 gap-2 border border-base-300"
+                  disabled={saving}
+                  onClick={() => onStatusChange(previousStatus)}
+                >
+                  <ArrowLeft className="h-4 w-4" aria-hidden />
+                  Go back to {previousStatus}
+                </button>
+              ) : (
+                <p className="text-xs opacity-60">
+                  Starts with En Route — no earlier status to undo.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="form-control min-w-0 flex-1">
+              <span className="label-text font-medium">Optional note</span>
+              <input
+                className="input input-bordered mt-1 w-full"
+                value={note}
+                onChange={(event) => onNoteChange(event.target.value)}
+                placeholder="Add a quick note"
+                disabled={saving}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-outline min-h-12 sm:min-h-10"
+              onClick={onSaveNote}
               disabled={saving}
             >
-              {DISPATCH_STATUSES.map((status) => <option key={status}>{status}</option>)}
-            </select>
-          </label>
-          <label className="form-control">
-            <span className="label-text font-medium">Work order note</span>
-            <input
-              className="input input-bordered mt-1 w-full"
-              value={note}
-              onChange={(event) => onNoteChange(event.target.value)}
-              placeholder="Add a dispatch note"
-              disabled={saving}
-            />
-          </label>
-          <div className="flex items-end">
-            <button type="button" className="btn btn-outline btn-sm" onClick={onSaveNote} disabled={saving}>
-              Save Note
+              Save note
             </button>
           </div>
         </div>
@@ -135,6 +183,7 @@ export default function DispatchPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [proofJob, setProofJob] = useState<DispatchWorkOrder | null>(null);
 
   const isDispatcher = profile?.role === "administrator" || profile?.role === "service_manager";
 
@@ -173,7 +222,9 @@ export default function DispatchPage() {
 
     let workOrdersQuery = supabase
       .from("work_orders")
-      .select("id, work_order_number, assigned_technician_id, scheduled_date, scheduled_start_time, priority, problem_description, dispatch_status, dispatch_note, dispatch_updated_at, customers(name)")
+      .select(
+        "id, work_order_number, assigned_technician_id, scheduled_date, scheduled_start_time, priority, problem_description, dispatch_status, dispatch_note, dispatch_updated_at, completion_proof_requirement, customers(name)",
+      )
       .or(`scheduled_date.eq.${today},dispatch_updated_at.gte.${startOfToday.toISOString()}`)
       .not("assigned_technician_id", "is", null)
       .not("status", "in", '("Closed","Canceled")')
@@ -207,34 +258,114 @@ export default function DispatchPage() {
     void loadBoard();
   }, []);
 
+  async function finishDoneWithProof(workOrder: DispatchWorkOrder) {
+    if (!profile) return;
+    setSavingId(workOrder.id);
+    setError(null);
+    setMessage(null);
+    try {
+      // Close any open travel/work punch before customer sign-off.
+      try {
+        await clockOutIfActive(supabase, {
+          profile,
+          notes: "Dispatch → Done",
+          skipWorkOrderDispatchUpdate: true,
+        });
+      } catch {
+        /* best-effort */
+      }
+      setProofJob(workOrder);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function onProofCompleted() {
+    if (!profile || !proofJob) return;
+    const job = proofJob;
+    setProofJob(null);
+    setSavingId(job.id);
+    setError(null);
+    try {
+      // RPC sets Completed + Done; ensure billing queue can pick it up.
+      const { data: woBilling } = await supabase
+        .from("work_orders")
+        .select("billing_status")
+        .eq("id", job.id)
+        .maybeSingle();
+      if ((woBilling as { billing_status?: string } | null)?.billing_status !== "Billed") {
+        await supabase
+          .from("work_orders")
+          .update({ billing_status: "Unbilled", updated_at: new Date().toISOString() })
+          .eq("id", job.id);
+      }
+      try {
+        await markWorkOrderTimeReadyToBill(supabase, job.id, profile.id);
+      } catch {
+        /* best-effort */
+      }
+      await logActivity(supabase, {
+        userId: profile.id,
+        action: "dispatch_status_change",
+        recordType: "work_order",
+        recordId: job.id,
+        previousValue: job.dispatch_status,
+        newValue: "Done",
+      });
+      setMessage(`${job.work_order_number} marked complete — available for billing.`);
+      await loadBoard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      void loadBoard();
+    }
+    setSavingId(null);
+  }
+
   async function updateDispatchStatus(workOrder: DispatchWorkOrder, status: DispatchStatus) {
     if (!profile || isDispatcher) return;
+
+    // Done requires customer photo/signature before status can become Completed.
+    if (status === "Done") {
+      await finishDoneWithProof(workOrder);
+      return;
+    }
+
     setSavingId(workOrder.id);
     setError(null);
     setMessage(null);
 
-    const { error: updateError } = await supabase
-      .from("work_orders")
-      .update({
-        dispatch_status: status,
-        dispatch_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", workOrder.id);
+    try {
+      const result = await applyDispatchStatusTransition(supabase, {
+        profile,
+        workOrderId: workOrder.id,
+        workOrderNumber: workOrder.work_order_number,
+        nextStatus: status as DispatchFlowStatus,
+      });
 
-    if (updateError) {
-      setError(updateError.message);
-    } else {
-      setWorkOrders((current) => current.map((order) => order.id === workOrder.id ? { ...order, dispatch_status: status } : order));
+      setWorkOrders((current) =>
+        current.map((order) =>
+          order.id === workOrder.id
+            ? {
+                ...order,
+                dispatch_status: result.dispatchStatus,
+                dispatch_updated_at: new Date().toISOString(),
+              }
+            : order,
+        ),
+      );
       await logActivity(supabase, {
         userId: profile.id,
         action: "dispatch_status_change",
         recordType: "work_order",
         recordId: workOrder.id,
         previousValue: workOrder.dispatch_status,
-        newValue: status,
+        newValue: result.dispatchStatus,
       });
-      setMessage(`${workOrder.work_order_number} status updated`);
+      setMessage(result.message ?? `${workOrder.work_order_number} → ${normalizeDispatchStatus(result.dispatchStatus)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      // Refresh so UI matches DB if WO updated before the failure
+      void loadBoard();
     }
     setSavingId(null);
   }
@@ -282,6 +413,16 @@ export default function DispatchPage() {
 
       {error ? <div role="alert" className="alert alert-error mb-4"><span>{error}</span></div> : null}
       {message ? <div role="status" className="alert alert-success mb-4"><span>{message}</span></div> : null}
+
+      {proofJob && profile ? (
+        <ProofOfCompletion
+          jobId={proofJob.id}
+          technicianId={profile.id}
+          requirement={proofJob.completion_proof_requirement ?? "photo_or_signature"}
+          onCancel={() => setProofJob(null)}
+          onCompleted={() => void onProofCompleted()}
+        />
+      ) : null}
 
       {loading ? (
         <div className="p-8 text-center opacity-60">Loading dispatch board…</div>

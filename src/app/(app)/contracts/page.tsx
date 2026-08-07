@@ -7,9 +7,17 @@ import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
-import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
-import { formatMoney, grossProfit, profitMargin, formatPct } from "@/lib/calculations";
-import type { Customer, Invoice, Profile, ServiceContract } from "@/lib/types";
+import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
+import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
+import { formatMoney, formatPct } from "@/lib/calculations";
+import type {
+  Customer,
+  Invoice,
+  Profile,
+  ServiceContract,
+  WorkOrder,
+} from "@/lib/types";
 import { ApplyContractPlanPreset } from "@/components/ApplyContractPlanPreset";
 import {
   contractMatchesPlanFilters,
@@ -31,8 +39,16 @@ import {
   resolvedMonthlyAmount,
   standingBadgeClass,
 } from "@/lib/contract-billing";
+import {
+  contractEconomicsInRange,
+  currentMonthRange,
+  periodLabel,
+  sumEconomics,
+  TECH_HOURLY_COST,
+} from "@/lib/contract-monthly-economics";
 import { ClipboardList } from "lucide-react";
 import { formatMonthLabel } from "@/lib/billing";
+import { stripRequestPrefixFromContractName } from "@/lib/contracts";
 
 type ContractRow = ServiceContract & { customers?: { id: string; name: string } | null };
 
@@ -102,11 +118,27 @@ export default function ContractsPage() {
     customer: "",
     type: typeFromUrl,
     price: "",
+    monthly: "",
+    directCost: "",
+    margin: "",
+    deductible: "",
+    feeStatus: "",
     status: statusFromUrl,
     end: "",
   });
   const [sort, setSort] = useState<{
-    column: "name" | "customer" | "type" | "price" | "status" | "end";
+    column:
+      | "name"
+      | "customer"
+      | "type"
+      | "price"
+      | "monthly"
+      | "directCost"
+      | "margin"
+      | "deductible"
+      | "feeStatus"
+      | "status"
+      | "end";
     direction: "asc" | "desc";
   }>({ column: "name", direction: "asc" });
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
@@ -114,6 +146,7 @@ export default function ContractsPage() {
   const [planTier, setPlanTier] = useState<"all" | ServiceLevelId>("all");
   const [planPacks, setPlanPacks] = useState<IndustryPack[]>([]);
   const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [genBusy, setGenBusy] = useState(false);
   const [genMessage, setGenMessage] = useState<string | null>(null);
 
@@ -133,7 +166,15 @@ export default function ContractsPage() {
   }, [statusFromUrl, typeFromUrl]);
 
   async function load() {
-    const [{ data: sc }, { data: cust }, { data: { user } }, { data: inv }] = await Promise.all([
+    const [
+      { data: sc },
+      { data: cust },
+      {
+        data: { user },
+      },
+      { data: inv },
+      { data: wo },
+    ] = await Promise.all([
       supabase
         .from("service_contracts")
         .select("*, customers(id, name)")
@@ -145,10 +186,12 @@ export default function ContractsPage() {
         .select("*")
         .is("work_order_id", null)
         .gt("recurring_service_charge", 0),
+      supabase.from("work_orders").select("id, contract_id, status, completion_date, scheduled_date, created_at"),
     ]);
     setContracts((sc as ContractRow[]) ?? []);
     setCustomers((cust as Customer[]) ?? []);
     setStandingInvoices((inv as Invoice[]) ?? []);
+    setWorkOrders((wo as WorkOrder[]) ?? []);
     if (user) {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -158,6 +201,30 @@ export default function ContractsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const monthRange = useMemo(() => currentMonthRange(new Date()), []);
+  const monthLabel = periodLabel(monthRange);
+
+  const economicsByContract = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof contractEconomicsInRange>>();
+    for (const c of contracts) {
+      map.set(c.id, contractEconomicsInRange(c, workOrders, monthRange));
+    }
+    return map;
+  }, [contracts, workOrders, monthRange]);
+
+  const activeMonthSummary = useMemo(() => {
+    const rows = contracts
+      .filter((c) => c.status === "Active")
+      .map((c) => economicsByContract.get(c.id)!)
+      .filter(Boolean);
+    return sumEconomics(rows);
+  }, [contracts, economicsByContract]);
+
+  const totalRevenue = activeMonthSummary.monthlyRevenue;
+  const directCost = activeMonthSummary.directCost;
+  const profit = activeMonthSummary.profit;
+  const margin = activeMonthSummary.margin;
 
   const filterOptions = useMemo(() => {
     const uniqueSorted = (values: string[]) =>
@@ -170,34 +237,81 @@ export default function ContractsPage() {
       customer: uniqueSorted(contracts.map((c) => c.customers?.name ?? "")),
       type: uniqueSorted(contracts.map((c) => c.contract_type)),
       price: uniqueSorted(contracts.map((c) => formatMoney(c.contract_price))),
+      monthly: uniqueSorted(contracts.map((c) => formatMoney(resolvedMonthlyAmount(c)))),
+      directCost: uniqueSorted(
+        contracts.map((c) => formatMoney(economicsByContract.get(c.id)?.directCost ?? 0)),
+      ),
+      margin: uniqueSorted(
+        contracts.map((c) => formatPct(economicsByContract.get(c.id)?.margin ?? null)),
+      ),
+      deductible: uniqueSorted(contracts.map((c) => formatMoney(resolvedDeductible(c)))),
+      feeStatus: uniqueSorted(
+        contracts.map((c) => {
+          const s = getContractPaymentStanding(c, standingInvoices);
+          return s.id === "not_monthly" ? "—" : s.label;
+        }),
+      ),
       status: uniqueSorted([
         ...contracts.map((c) => c.status),
         ...CONTRACT_STATUSES,
       ]),
       end: uniqueSorted(contracts.map((c) => c.end_date)),
     };
-  }, [contracts]);
+  }, [contracts, economicsByContract, standingInvoices]);
 
   const filteredContracts = useMemo(() => {
     const rows = contracts.filter((c) => {
+      const econ = economicsByContract.get(c.id);
+      const standing = getContractPaymentStanding(c, standingInvoices);
+      const feeLabel = standing.id === "not_monthly" ? "—" : standing.label;
       if (filters.name && c.name !== filters.name) return false;
       if (filters.customer && (c.customers?.name ?? "") !== filters.customer) return false;
       if (filters.type && c.contract_type !== filters.type) return false;
       if (filters.price && formatMoney(c.contract_price) !== filters.price) return false;
+      if (filters.monthly && formatMoney(resolvedMonthlyAmount(c)) !== filters.monthly) return false;
+      if (filters.directCost && formatMoney(econ?.directCost ?? 0) !== filters.directCost) {
+        return false;
+      }
+      if (filters.margin && formatPct(econ?.margin ?? null) !== filters.margin) return false;
+      if (filters.deductible && formatMoney(resolvedDeductible(c)) !== filters.deductible) {
+        return false;
+      }
+      if (filters.feeStatus && feeLabel !== filters.feeStatus) return false;
       if (filters.status && c.status !== filters.status) return false;
       if (filters.end && c.end_date !== filters.end) return false;
       if (!contractMatchesPlanFilters(c.notes, planIndustry, planTier)) return false;
       return true;
     });
 
-    const valueFor = (c: ContractRow) => {
+    const numericColumns = new Set(["price", "monthly", "directCost", "margin", "deductible"]);
+
+    const numericValue = (c: ContractRow): number => {
+      const econ = economicsByContract.get(c.id);
+      switch (sort.column) {
+        case "price":
+          return Number(c.contract_price) || 0;
+        case "monthly":
+          return resolvedMonthlyAmount(c);
+        case "directCost":
+          return econ?.directCost ?? 0;
+        case "margin":
+          return econ?.margin ?? -999;
+        case "deductible":
+          return resolvedDeductible(c);
+        default:
+          return 0;
+      }
+    };
+
+    const textValue = (c: ContractRow): string => {
+      const standing = getContractPaymentStanding(c, standingInvoices);
       switch (sort.column) {
         case "customer":
           return c.customers?.name ?? "";
         case "type":
           return c.contract_type;
-        case "price":
-          return String(c.contract_price).padStart(16, "0");
+        case "feeStatus":
+          return standing.id === "not_monthly" ? "—" : standing.label;
         case "status":
           return c.status;
         case "end":
@@ -209,14 +323,22 @@ export default function ContractsPage() {
     };
 
     return [...rows].sort((a, b) => {
-      if (sort.column === "price") {
-        const cmp = Number(a.contract_price) - Number(b.contract_price);
+      if (numericColumns.has(sort.column)) {
+        const cmp = numericValue(a) - numericValue(b);
         return sort.direction === "asc" ? cmp : -cmp;
       }
-      const cmp = valueFor(a).localeCompare(valueFor(b), undefined, { sensitivity: "base" });
+      const cmp = textValue(a).localeCompare(textValue(b), undefined, { sensitivity: "base" });
       return sort.direction === "asc" ? cmp : -cmp;
     });
-  }, [contracts, filters, sort, planIndustry, planTier]);
+  }, [
+    contracts,
+    filters,
+    sort,
+    planIndustry,
+    planTier,
+    economicsByContract,
+    standingInvoices,
+  ]);
 
   const hasActiveFilters =
     Object.values(filters).some((v) => v.trim() !== "") ||
@@ -224,7 +346,19 @@ export default function ContractsPage() {
     planTier !== "all";
 
   function clearFilters() {
-    setFilters({ name: "", customer: "", type: "", price: "", status: "", end: "" });
+    setFilters({
+      name: "",
+      customer: "",
+      type: "",
+      price: "",
+      monthly: "",
+      directCost: "",
+      margin: "",
+      deductible: "",
+      feeStatus: "",
+      status: "",
+      end: "",
+    });
     setPlanIndustry("all");
     setPlanTier("all");
     if (searchParams.toString()) {
@@ -233,12 +367,11 @@ export default function ContractsPage() {
   }
 
   function onColumnFilterChange(column: keyof typeof filters, value: string) {
-    if (value === "__sort_asc") {
-      setSort({ column, direction: "asc" });
-      return;
-    }
-    if (value === "__sort_desc") {
-      setSort({ column, direction: "desc" });
+    if (
+      applyColumnSortValue(value, (direction) =>
+        setSort({ column, direction }),
+      )
+    ) {
       return;
     }
     setFilters((prev) => ({ ...prev, [column]: value }));
@@ -251,48 +384,23 @@ export default function ContractsPage() {
     }
   }
 
-  function ColumnFilterSelect({
-    column,
-    label,
-    options,
-  }: {
-    column: keyof typeof filters;
-    label: string;
-    options: string[];
-  }) {
-    const sortingThis = sort.column === column;
+  function contractColumnFilter(
+    column: keyof typeof filters,
+    label: string,
+    options: string[],
+    sortMode: "text" | "numeric" | "date" = "text",
+  ) {
     return (
-      <select
-        className="select select-bordered select-xs w-full min-w-0"
+      <ColumnFilterSelect
+        label={label}
         value={filters[column]}
-        onChange={(e) => onColumnFilterChange(column, e.target.value)}
-        aria-label={`Filter or sort ${label}`}
-      >
-        <option value="">All</option>
-        <option value="__sort_asc">
-          Sort A–Z{sortingThis && sort.direction === "asc" ? " ✓" : ""}
-        </option>
-        <option value="__sort_desc">
-          Sort Z–A{sortingThis && sort.direction === "desc" ? " ✓" : ""}
-        </option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
+        options={options}
+        sortMode={sortMode}
+        activeSort={sort.column === column ? { direction: sort.direction } : null}
+        onChange={(v) => onColumnFilterChange(column, v)}
+      />
     );
   }
-
-  const totalRevenue = contracts
-    .filter((c) => c.status === "Active")
-    .reduce((s, c) => s + Number(c.contract_price), 0);
-  const estCostPerVisit = 350;
-  const estDirectCost = contracts
-    .filter((c) => c.status === "Active")
-    .reduce((s, c) => s + c.included_service_visits * estCostPerVisit, 0);
-  const profit = grossProfit(totalRevenue, estDirectCost);
-  const margin = profitMargin(totalRevenue, profit);
 
   async function onCreateCustomer(e?: React.FormEvent | React.MouseEvent) {
     e?.preventDefault();
@@ -403,16 +511,30 @@ export default function ContractsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const contract = contracts.find((c) => c.id === contractId);
+    const patch: {
+      status: string;
+      updated_at: string;
+      name?: string;
+    } = { status: next, updated_at: new Date().toISOString() };
+    if (contract && (next === "Active" || next === "Renewed")) {
+      const cleanedName = stripRequestPrefixFromContractName(contract.name);
+      if (cleanedName !== contract.name) patch.name = cleanedName;
+    }
     const { error: updateError } = await supabase
       .from("service_contracts")
-      .update({ status: next, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq("id", contractId);
     if (updateError) {
       setError(updateError.message);
       return;
     }
     setContracts((prev) =>
-      prev.map((c) => (c.id === contractId ? { ...c, status: next } : c)),
+      prev.map((c) =>
+        c.id === contractId
+          ? { ...c, status: next, ...(patch.name ? { name: patch.name } : {}) }
+          : c,
+      ),
     );
     await logActivity(supabase, {
       userId: user?.id ?? null,
@@ -445,10 +567,13 @@ export default function ContractsPage() {
       monthly = monthlyFromAnnual(price);
     }
 
+    const activatedName = stripRequestPrefixFromContractName(contract.name);
+
     const { error: updateError } = await supabase
       .from("service_contracts")
       .update({
         status: "Active",
+        name: activatedName,
         contract_price: price,
         monthly_amount: monthly,
         deductible,
@@ -466,6 +591,7 @@ export default function ContractsPage() {
           ? {
               ...c,
               status: "Active",
+              name: activatedName,
               contract_price: price,
               monthly_amount: monthly,
               deductible,
@@ -516,7 +642,7 @@ export default function ContractsPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const note = [contract.notes, "Rejected by Ridley (customer request not approved)."]
+    const note = [contract.notes, "Rejected by EquipmentIQ (customer request not approved)."]
       .filter(Boolean)
       .join("\n");
     const { error: updateError } = await supabase
@@ -665,46 +791,31 @@ export default function ContractsPage() {
         </div>
       ) : null}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        {isManager ? (
-          <>
-            <ClickableStatCard
-              label="Active Contract Revenue"
-              value={formatMoney(totalRevenue)}
-              href="/reports/contracts?from=contracts&focus=revenue"
-              ariaLabel="View active contract revenue on reports"
-            />
-            <ClickableStatCard
-              label="Est. Direct Cost"
-              value={formatMoney(estDirectCost)}
-              hint="Assumes $350/visit avg"
-              href="/reports/contracts?from=contracts&focus=cost"
-              ariaLabel="View estimated direct cost on reports"
-            />
-            <ClickableStatCard
-              label="Est. Gross Margin"
-              value={formatPct(margin)}
-              hint={`Profit ${formatMoney(profit)}`}
-              href="/reports/contracts?from=contracts&focus=margin"
-              ariaLabel="View estimated gross margin on reports"
-            />
-          </>
-        ) : (
-          <>
-            <StatCard label="Active Contract Revenue" value={formatMoney(totalRevenue)} />
-            <StatCard
-              label="Est. Direct Cost"
-              value={formatMoney(estDirectCost)}
-              hint="Assumes $350/visit avg"
-            />
-            <StatCard
-              label="Est. Gross Margin"
-              value={formatPct(margin)}
-              hint={`Profit ${formatMoney(profit)}`}
-            />
-          </>
-        )}
-      </div>
+      {isManager ? (
+        <div className="mb-6 grid gap-4 sm:grid-cols-3">
+          <ClickableStatCard
+            label="Monthly Fee Revenue"
+            value={formatMoney(totalRevenue)}
+            hint={`${monthLabel} · sum of monthly fees`}
+            href="/reports/contracts?from=contracts&focus=revenue"
+            ariaLabel="View monthly fee revenue on reports"
+          />
+          <ClickableStatCard
+            label="Monthly Direct Cost"
+            value={formatMoney(directCost)}
+            hint={`Labor @ $${TECH_HOURLY_COST}/hr + parts ÷ 12`}
+            href="/reports/contracts?from=contracts&focus=cost"
+            ariaLabel="View monthly direct cost on reports"
+          />
+          <ClickableStatCard
+            label="Monthly Gross Margin"
+            value={formatPct(margin)}
+            hint={`Profit ${formatMoney(profit)} · ${monthLabel}`}
+            href="/reports/contracts?from=contracts&focus=margin"
+            ariaLabel="View monthly gross margin on reports"
+          />
+        </div>
+      ) : null}
 
       {showForm ? (
         <dialog className="modal modal-open">
@@ -1022,7 +1133,7 @@ export default function ContractsPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -1030,7 +1141,13 @@ export default function ContractsPage() {
                     <th>Customer</th>
                     <th>Type</th>
                     <th>Annual</th>
-                    <th>Monthly</th>
+                    <th>Monthly fee</th>
+                    {isManager ? (
+                      <>
+                        <th>Direct cost ({monthLabel.split(" ")[0]})</th>
+                        <th>Margin</th>
+                      </>
+                    ) : null}
                     <th>Deductible</th>
                     <th>Fee status</th>
                     <th>Status</th>
@@ -1039,34 +1156,48 @@ export default function ContractsPage() {
                   {isManager ? (
                     <tr className="bg-base-200/50">
                       <th className="font-normal">
-                        <ColumnFilterSelect column="name" label="name" options={filterOptions.name} />
+                        {contractColumnFilter("name", "name", filterOptions.name)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="customer"
-                          label="customer"
-                          options={filterOptions.customer}
-                        />
+                        {contractColumnFilter("customer", "customer", filterOptions.customer)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect column="type" label="type" options={filterOptions.type} />
+                        {contractColumnFilter("type", "type", filterOptions.type)}
                       </th>
                       <th className="font-normal">
-                        <ColumnFilterSelect column="price" label="price" options={filterOptions.price} />
+                        {contractColumnFilter("price", "annual", filterOptions.price, "numeric")}
                       </th>
-                      <th />
-                      <th />
-                      <th />
                       <th className="font-normal">
-                        <ColumnFilterSelect
-                          column="status"
-                          label="status"
-                          options={filterOptions.status}
-                        />
+                        {contractColumnFilter("monthly", "monthly fee", filterOptions.monthly, "numeric")}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter(
+                          "directCost",
+                          "direct cost",
+                          filterOptions.directCost,
+                          "numeric",
+                        )}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter("margin", "margin", filterOptions.margin, "numeric")}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter(
+                          "deductible",
+                          "deductible",
+                          filterOptions.deductible,
+                          "numeric",
+                        )}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter("feeStatus", "fee status", filterOptions.feeStatus)}
+                      </th>
+                      <th className="font-normal">
+                        {contractColumnFilter("status", "status", filterOptions.status)}
                       </th>
                       <th className="font-normal">
                         <div className="flex gap-1">
-                          <ColumnFilterSelect column="end" label="end date" options={filterOptions.end} />
+                          {contractColumnFilter("end", "end date", filterOptions.end, "date")}
                           {hasActiveFilters ? (
                             <button
                               type="button"
@@ -1084,7 +1215,7 @@ export default function ContractsPage() {
                 <tbody>
                   {filteredContracts.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="p-6">
+                      <td colSpan={isManager ? 11 : 9} className="p-6">
                         <EmptyState
                           title="No matching contracts"
                           description="Try clearing one or more column filters."
@@ -1101,6 +1232,7 @@ export default function ContractsPage() {
                   ) : (
                     filteredContracts.map((c) => {
                       const standing = getContractPaymentStanding(c, standingInvoices);
+                      const econ = economicsByContract.get(c.id);
                       return (
                       <tr key={c.id}>
                         <td className="align-top">
@@ -1144,6 +1276,35 @@ export default function ContractsPage() {
                         <td className="align-top tabular-nums">
                           {formatMoney(resolvedMonthlyAmount(c))}
                         </td>
+                        {isManager ? (
+                          <>
+                            <td className="align-top tabular-nums">
+                              <span>{formatMoney(econ?.directCost ?? 0)}</span>
+                              {econ ? (
+                                <p className="mt-0.5 text-[11px] opacity-60">
+                                  {econ.includedLaborHours}h × ${TECH_HOURLY_COST} + parts{" "}
+                                  {formatMoney(econ.includedPartsAllowance)} ÷ 12
+                                  {econ.includedVisits > 0
+                                    ? ` · ${econ.usedVisits}/${econ.includedVisits} visits`
+                                    : ""}
+                                </p>
+                              ) : null}
+                            </td>
+                            <td className="align-top tabular-nums">
+                              <span
+                                className={
+                                  econ && econ.margin !== null && econ.margin < 0.2
+                                    ? econ.margin < 0
+                                      ? "text-error font-medium"
+                                      : "text-warning font-medium"
+                                    : undefined
+                                }
+                              >
+                                {formatPct(econ?.margin ?? null)}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
                         <td className="align-top tabular-nums">
                           {formatMoney(resolvedDeductible(c))}
                         </td>
@@ -1200,7 +1361,7 @@ export default function ContractsPage() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

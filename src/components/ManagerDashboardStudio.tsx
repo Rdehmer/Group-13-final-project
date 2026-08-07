@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { differenceInCalendarDays, isBefore, parseISO, startOfDay } from "date-fns";
 import { Grip, Plus, Settings2, Trash2, X } from "lucide-react";
@@ -280,6 +281,11 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
   const [attentionOpen, setAttentionOpen] = useState(
     () => data.attentionTiles.length > 0,
   );
+  const [portalReady, setPortalReady] = useState(false);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
 
   useEffect(() => {
     if (data.attentionTiles.length === 0) setAttentionOpen(false);
@@ -287,11 +293,17 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
 
   useEffect(() => {
     if (!attentionOpen) return;
+    window.scrollTo(0, 0);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setAttentionOpen(false);
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [attentionOpen]);
 
   const attentionItemCount = useMemo(
@@ -711,7 +723,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
     <div>
       <PageHeader
         title="Dashboard"
-        description="Manager overview — add widgets, resize frames, open any tile for details"
+        description="Operations overview — add widgets, resize frames, open any tile for details"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -795,84 +807,141 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
         </div>
       ) : null}
 
-      {/* Needs attention — opens every visit when there is work to review */}
-      {attentionOpen && data.attentionTiles.length > 0 ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button
-            type="button"
-            className="absolute inset-0 bg-base-content/45 backdrop-blur-[2px]"
-            aria-label="Dismiss needs attention"
-            onClick={() => setAttentionOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="needs-attention-title"
-            className="relative z-10 flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl"
-          >
-            <div className="flex items-center justify-between gap-2 border-b border-base-300 px-3 py-2.5">
-              <div className="min-w-0">
-                <h2
-                  id="needs-attention-title"
-                  className="font-display text-base font-semibold leading-tight"
+      {/* Modal over full app: body portal + top-anchored (not middle-centered). */}
+      {portalReady && attentionOpen && data.attentionTiles.length > 0
+        ? createPortal(
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 99999,
+                pointerEvents: "auto",
+              }}
+            >
+              <button
+                type="button"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  border: 0,
+                  margin: 0,
+                  padding: 0,
+                  cursor: "pointer",
+                  background: "rgba(15, 23, 20, 0.45)",
+                  backdropFilter: "blur(2px)",
+                }}
+                aria-label="Dismiss needs attention"
+                onClick={() => setAttentionOpen(false)}
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="needs-attention-title"
+                style={{
+                  position: "absolute",
+                  top: 12,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  width: "min(28rem, calc(100vw - 1.5rem))",
+                  maxHeight: "min(70vh, calc(100dvh - 1.5rem))",
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden",
+                  borderRadius: "1rem",
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#ffffff",
+                  color: "#111827",
+                  boxShadow: "0 25px 50px -12px rgba(0,0,0,0.35)",
+                }}
+              >
+                <div
+                  className="flex shrink-0 items-center justify-between gap-2 px-3 py-2.5"
+                  style={{ borderBottom: "1px solid #e5e7eb", backgroundColor: "#ffffff" }}
                 >
-                  Needs attention
-                </h2>
-                <p className="text-xs text-base-content/55">
-                  {data.attentionTiles.length} item
-                  {data.attentionTiles.length === 1 ? "" : "s"} to review
-                  {attentionItemCount > 0 ? ` · ${attentionItemCount} total` : ""}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs btn-circle shrink-0"
-                aria-label="Close and view dashboard"
-                onClick={() => setAttentionOpen(false)}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <ul className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2">
-              {data.attentionTiles.map((tile) => (
-                <li key={tile.label}>
-                  <Link
-                    href={tile.href}
-                    onClick={() => setAttentionOpen(false)}
-                    className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-colors hover:border-primary/45 hover:bg-base-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                      tile.danger
-                        ? "border-error/40 bg-error/5"
-                        : "border-base-300/70 bg-base-100"
-                    }`}
-                  >
-                    <span className="min-w-0 flex-1 truncate text-sm font-semibold leading-snug">
-                      {tile.label}
-                    </span>
-                    <span
-                      className={`shrink-0 font-display text-xl font-semibold tabular-nums ${
-                        tile.danger ? "text-error" : "text-base-content"
-                      }`}
+                  <div className="min-w-0">
+                    <h2
+                      id="needs-attention-title"
+                      className="font-display text-base font-semibold leading-tight"
+                      style={{ color: "#111827" }}
                     >
-                      {tile.value}
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+                      Needs attention
+                    </h2>
+                    <p className="text-xs" style={{ color: "#6b7280" }}>
+                      {data.attentionTiles.length} item
+                      {data.attentionTiles.length === 1 ? "" : "s"} to review
+                      {attentionItemCount > 0 ? ` · ${attentionItemCount} total` : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs btn-circle shrink-0"
+                    aria-label="Close and view dashboard"
+                    onClick={() => setAttentionOpen(false)}
+                    style={{ color: "#374151" }}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
 
-            <div className="flex items-center justify-end border-t border-base-300 px-3 py-2">
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={() => setAttentionOpen(false)}
-              >
-                View full dashboard
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+                <ul
+                  className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3"
+                  style={{ backgroundColor: "#ffffff" }}
+                >
+                  {data.attentionTiles.map((tile) => (
+                    <li key={tile.label}>
+                      <Link
+                        href={tile.href}
+                        onClick={() => setAttentionOpen(false)}
+                        className="flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                        style={{
+                          backgroundColor: "#fef2f2",
+                          borderColor: "#f87171",
+                          color: "#7f1d1d",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = "#fee2e2";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = "#fef2f2";
+                        }}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-semibold" style={{ color: "#991b1b" }}>
+                            {tile.label}
+                          </span>
+                          <span className="block text-xs" style={{ color: "#b91c1c" }}>
+                            Open to review and resolve
+                          </span>
+                        </span>
+                        <span
+                          className="shrink-0 font-display text-2xl font-semibold tabular-nums"
+                          style={{ color: "#dc2626" }}
+                        >
+                          {tile.value}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+
+                <div
+                  className="flex shrink-0 items-center justify-end px-3 py-2"
+                  style={{ borderTop: "1px solid #e5e7eb", backgroundColor: "#ffffff" }}
+                >
+                  <button
+                    type="button"
+                    className="btn btn-sm border-0 text-white"
+                    style={{ backgroundColor: "#1f5c42" }}
+                    onClick={() => setAttentionOpen(false)}
+                  >
+                    View full dashboard
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {/* iOS-style add widget sheet */}
       {pickerOpen ? (

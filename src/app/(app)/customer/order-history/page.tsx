@@ -114,7 +114,7 @@ function CustomerOrderHistoryPageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -128,8 +128,22 @@ function CustomerOrderHistoryPageInner() {
 
       {workOrders.length > 0 ? (
         <div className="mb-6 grid gap-4 sm:grid-cols-2">
-          <StatCard label="Total visits" value={stats.totalVisits} hint="All service records" />
-          <StatCard label="Completed" value={stats.completed} hint="Finished visits" />
+          <StatCard
+            label="Total visits"
+            value={stats.totalVisits}
+            hint="All service records"
+            onClick={() => setFilter("all")}
+            active={filter === "all"}
+            scrollTarget="service-history-list"
+          />
+          <StatCard
+            label="Completed"
+            value={stats.completed}
+            hint="Finished visits"
+            onClick={() => setFilter("completed")}
+            active={filter === "completed"}
+            scrollTarget="service-history-list"
+          />
         </div>
       ) : null}
 
@@ -145,7 +159,7 @@ function CustomerOrderHistoryPageInner() {
         />
       ) : (
         <>
-          <div className="tabs tabs-boxed mb-4 w-fit max-w-full flex-wrap">
+          <div id="service-history-list" className="tabs tabs-boxed mb-4 w-fit max-w-full flex-wrap scroll-mt-4">
             {FILTER_TABS.map((tab) => (
               <button
                 key={tab.id}

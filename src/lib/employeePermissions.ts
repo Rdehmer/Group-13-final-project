@@ -20,7 +20,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   equipment: "Equipment",
   contracts: "Contracts",
   work_orders: "Work Orders",
-  technician: "Technician Schedule",
+  technician: "My Day / Availability",
   time_off: "Time Off Requests",
   timesheets: "Timesheets & Payroll Sign-off",
   dispatch: "Dispatch Board",
@@ -89,9 +89,9 @@ const HREF_PERMISSION: { prefix: string; key: PermissionKey }[] = [
   { prefix: "/contracts", key: "contracts" },
   { prefix: "/work-orders", key: "work_orders" },
   { prefix: "/technician", key: "technician" },
+  { prefix: "/scheduling", key: "technician" },
   { prefix: "/time-off", key: "time_off" },
   { prefix: "/timesheets", key: "timesheets" },
-  { prefix: "/scheduling", key: "technician" },
   { prefix: "/dispatch", key: "dispatch" },
   { prefix: "/parts", key: "parts" },
   { prefix: "/vendors", key: "vendors" },
@@ -133,6 +133,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "parts",
     "vendors",
     "service_vendors",
+    "inbox",
     "billing",
     "payments",
     "batches",
@@ -141,6 +142,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "timesheets",
   ],
   customer: [],
+  vendor: [],
 };
 
 export function permissionKeyForHref(href: string): PermissionKey | null {
@@ -149,6 +151,9 @@ export function permissionKeyForHref(href: string): PermissionKey | null {
     if (path === prefix || path.startsWith(`${prefix}/`)) return key;
   }
   if (path.startsWith("/customer")) return null;
+  if (path.startsWith("/vendor") && path !== "/vendors" && !path.startsWith("/vendors/")) {
+    return null;
+  }
   return null;
 }
 
@@ -196,9 +201,12 @@ export function profileHasModule(profile: Profile, key: PermissionKey): boolean 
 
 export function profileCanAccessHref(profile: Profile, href: string): boolean {
   if (!profile.is_active) return false;
-  // Customer portal uses role only
+  // Customer / vendor portals use role only (not employee permission matrix)
   if (profile.role === "customer") {
     return href === "/customer" || href.startsWith("/customer/");
+  }
+  if (profile.role === "vendor") {
+    return href === "/vendor" || href.startsWith("/vendor/");
   }
   const key = permissionKeyForHref(href);
   if (!key) return false;
@@ -209,36 +217,65 @@ function navAllowed(item: NavItem, profile: Profile): boolean {
   if (profile.role === "customer") {
     return item.roles.includes("customer");
   }
+  if (profile.role === "vendor") {
+    return item.roles.includes("vendor");
+  }
+  // Section headers are labels only — visibility comes from children / role list.
+  if (item.section) {
+    return item.roles.includes(profile.role);
+  }
   // Honor NAV_ITEMS.roles so manager-only tabs stay off Admin / other staff.
   if (!item.roles.includes(profile.role)) return false;
   return profileCanAccessHref(profile, item.href);
 }
 
+function filterNavItem(item: NavItem, profile: Profile): NavItem | null {
+  if (profile.role === "customer") {
+    if (!item.roles.includes("customer")) return null;
+    if (!item.children?.length) return item;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  if (profile.role === "vendor") {
+    if (!item.roles.includes("vendor")) return null;
+    if (!item.children?.length) return item;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  if (item.section) {
+    if (!item.roles.includes(profile.role)) return null;
+    const kids = (item.children ?? [])
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    if (kids.length === 0) return null;
+    return { ...item, children: kids };
+  }
+
+  // Nested parent page (e.g. Settings) with sub-links
+  if (item.children?.length) {
+    if (!navAllowed(item, profile)) return null;
+    const kids = item.children
+      .map((c) => filterNavItem(c, profile))
+      .filter((c): c is NavItem => c != null);
+    return { ...item, children: kids };
+  }
+
+  return navAllowed(item, profile) ? item : null;
+}
+
 /** Sidebar items filtering by effective employee permissions. */
 export function filterNavForProfile(profile: Profile): NavItem[] {
-  return NAV_ITEMS.filter((item) => {
-    if (profile.role === "customer") {
-      return item.roles.includes("customer");
-    }
-    if (item.children?.length) {
-      const kids = item.children.filter((c) => navAllowed(c, profile));
-      if (kids.length || navAllowed(item, profile)) {
-        return true;
-      }
-      return false;
-    }
-    return navAllowed(item, profile);
-  }).map((item) => {
-    if (!item.children?.length) return item;
-    return {
-      ...item,
-      children: item.children.filter((c) =>
-        profile.role === "customer"
-          ? c.roles.includes("customer")
-          : navAllowed(c, profile),
-      ),
-    };
-  });
+  return NAV_ITEMS.map((item) => filterNavItem(item, profile)).filter(
+    (item): item is NavItem => item != null,
+  );
 }
 
 export function staffRoles(): UserRole[] {
@@ -246,7 +283,7 @@ export function staffRoles(): UserRole[] {
 }
 
 export function isStaffRole(role: UserRole): boolean {
-  return role !== "customer";
+  return role !== "customer" && role !== "vendor";
 }
 
 /** Is an override different from the role default? */

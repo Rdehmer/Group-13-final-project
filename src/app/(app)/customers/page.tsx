@@ -7,8 +7,10 @@ import { Download } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge } from "@/components/ui";
-import type { Customer, ServiceContract } from "@/lib/types";
+import type { Customer, Profile, ServiceContract } from "@/lib/types";
 import {
   inferContractTier,
   tierBadgeClass,
@@ -253,6 +255,7 @@ function downloadCustomersExcel(rows: CustomerRow[]) {
 
 export default function CustomersPage() {
   const supabase = createClient();
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -261,14 +264,42 @@ export default function CustomersPage() {
   const [filterState, setFilterState] = useState(ALL);
   const [filterCity, setFilterCity] = useState(ALL);
   const [form, setForm] = useState(emptyCustomerForm);
+  const [columnFilters, setColumnFilters] = useState({
+    name: "",
+    contact: "",
+    location: "",
+    equipment: "",
+    serviceType: "",
+    status: "",
+  });
+  const [sort, setSort] = useState<{
+    column: "name" | "contact" | "location" | "equipment" | "serviceType" | "status";
+    direction: "asc" | "desc";
+  }>({ column: "equipment", direction: "desc" });
+
+  const isManager =
+    profile?.role === "service_manager" || profile?.role === "administrator";
 
   async function load() {
     setLoading(true);
-    const [{ data: customerData }, { data: equipmentData }, { data: contractData }] = await Promise.all([
+    const [
+      { data: customerData },
+      { data: equipmentData },
+      { data: contractData },
+      {
+        data: { user },
+      },
+    ] = await Promise.all([
       supabase.from("customers").select("*").order("name"),
       supabase.from("equipment").select("customer_id, operating_status"),
       supabase.from("service_contracts").select("id, customer_id, name, status, end_date"),
+      supabase.auth.getUser(),
     ]);
+
+    if (user) {
+      const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      setProfile(p as Profile);
+    }
 
     const counts = new Map<string, number>();
     for (const eq of equipmentData ?? []) {
@@ -317,25 +348,113 @@ export default function CustomersPage() {
     return uniqueSorted(base.map((c) => c.city));
   }, [customers, filterState]);
 
+  const columnFilterOptions = useMemo(() => {
+    return {
+      name: uniqueSorted(customers.map((c) => c.name)),
+      contact: uniqueSorted(customers.map((c) => nonEmpty(c.primary_contact_name) ?? "—")),
+      location: uniqueSorted(customers.map((c) => formatCustomerLocationLabel(c))),
+      equipment: uniqueSorted(customers.map((c) => String(c.activeEquipmentCount))),
+      serviceType: uniqueSorted(customers.map((c) => c.serviceType.label)),
+      status: uniqueSorted(customers.map((c) => c.status)),
+    };
+  }, [customers]);
+
   const filteredCustomers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const terms = q ? q.split(/\s+/).filter(Boolean) : [];
 
-    return customers.filter((c) => {
+    const rows = customers.filter((c) => {
       if (!locationMatches(c, filterState, c.state)) return false;
       if (!locationMatches(c, filterCity, c.city)) return false;
+      if (columnFilters.name && c.name !== columnFilters.name) return false;
+      if (columnFilters.contact) {
+        const contact = nonEmpty(c.primary_contact_name) ?? "—";
+        if (contact !== columnFilters.contact) return false;
+      }
+      if (columnFilters.location && formatCustomerLocationLabel(c) !== columnFilters.location) {
+        return false;
+      }
+      if (columnFilters.equipment && String(c.activeEquipmentCount) !== columnFilters.equipment) {
+        return false;
+      }
+      if (columnFilters.serviceType && c.serviceType.label !== columnFilters.serviceType) {
+        return false;
+      }
+      if (columnFilters.status && c.status !== columnFilters.status) return false;
       if (terms.length === 0) return true;
       const hay = customerSearchHaystack(c);
       return terms.every((t) => hay.includes(t));
     });
-  }, [customers, filterState, filterCity, searchQuery]);
 
-  const hasFilters = Boolean(searchQuery.trim() || filterState || filterCity);
+    return [...rows].sort((a, b) => {
+      if (sort.column === "equipment") {
+        const cmp = a.activeEquipmentCount - b.activeEquipmentCount;
+        return sort.direction === "asc" ? cmp : -cmp;
+      }
+      const textFor = (c: CustomerRow) => {
+        switch (sort.column) {
+          case "contact":
+            return nonEmpty(c.primary_contact_name) ?? "";
+          case "location":
+            return formatCustomerLocationLabel(c);
+          case "serviceType":
+            return c.serviceType.label;
+          case "status":
+            return c.status;
+          case "name":
+          default:
+            return c.name;
+        }
+      };
+      const cmp = textFor(a).localeCompare(textFor(b), undefined, { sensitivity: "base" });
+      return sort.direction === "asc" ? cmp : -cmp;
+    });
+  }, [customers, filterState, filterCity, searchQuery, columnFilters, sort]);
+
+  const hasFilters = Boolean(
+    searchQuery.trim() ||
+      filterState ||
+      filterCity ||
+      Object.values(columnFilters).some((v) => v.trim() !== ""),
+  );
 
   function clearFilters() {
     setSearchQuery("");
     setFilterState(ALL);
     setFilterCity(ALL);
+    setColumnFilters({
+      name: "",
+      contact: "",
+      location: "",
+      equipment: "",
+      serviceType: "",
+      status: "",
+    });
+  }
+
+  function onColumnFilterChange(column: keyof typeof columnFilters, value: string) {
+    if (applyColumnSortValue(value, (direction) => setSort({ column, direction }))) {
+      return;
+    }
+    setColumnFilters((prev) => ({ ...prev, [column]: value }));
+  }
+
+  function customerColumnFilter(
+    column: keyof typeof columnFilters,
+    label: string,
+    options: string[],
+    sortMode: "text" | "numeric" | "date" = "text",
+  ) {
+    return (
+      <ColumnFilterSelect
+        label={label}
+        value={columnFilters[column]}
+        options={options}
+        sortMode={sortMode}
+        activeSort={sort.column === column ? { direction: sort.direction } : null}
+        onChange={(v) => onColumnFilterChange(column, v)}
+      />
+    );
   }
 
   async function onCreate(e: React.FormEvent) {
@@ -578,7 +697,7 @@ export default function CustomersPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table">
                 <thead>
                   <tr>
@@ -589,6 +708,48 @@ export default function CustomersPage() {
                     <th>Service Type</th>
                     <th>Status</th>
                   </tr>
+                  {isManager ? (
+                    <tr className="bg-base-200/50">
+                      <th className="font-normal">
+                        {customerColumnFilter("name", "name", columnFilterOptions.name)}
+                      </th>
+                      <th className="font-normal">
+                        {customerColumnFilter("contact", "contact", columnFilterOptions.contact)}
+                      </th>
+                      <th className="font-normal">
+                        {customerColumnFilter("location", "location", columnFilterOptions.location)}
+                      </th>
+                      <th className="font-normal">
+                        {customerColumnFilter(
+                          "equipment",
+                          "active equipment",
+                          columnFilterOptions.equipment,
+                          "numeric",
+                        )}
+                      </th>
+                      <th className="font-normal">
+                        {customerColumnFilter(
+                          "serviceType",
+                          "service type",
+                          columnFilterOptions.serviceType,
+                        )}
+                      </th>
+                      <th className="font-normal">
+                        <div className="flex gap-1">
+                          {customerColumnFilter("status", "status", columnFilterOptions.status)}
+                          {hasFilters ? (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs shrink-0"
+                              onClick={clearFilters}
+                            >
+                              Clear
+                            </button>
+                          ) : null}
+                        </div>
+                      </th>
+                    </tr>
+                  ) : null}
                 </thead>
                 <tbody>
                   {filteredCustomers.map((c) => {
@@ -641,7 +802,7 @@ export default function CustomersPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           )}
         </div>
       </div>

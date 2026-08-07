@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
@@ -11,7 +11,6 @@ import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import {
   CONTRACT_START_DATE_BLOCK_MESSAGE,
-  CONTRACT_START_DATE_ONE_OFF_DESCRIPTION,
   CONTRACT_START_DATE_ONE_OFF_TITLE,
   findBlockingContractForServiceRequest,
   isContractStartDateBlockError,
@@ -417,7 +416,7 @@ function RequestServicePageInner() {
     return (
       <EmptyState
         title="No customer account linked"
-        description="Contact Ridley Equipment Services to link your portal account."
+        description="Contact EquipmentIQ to link your portal account."
       />
     );
   }
@@ -448,9 +447,10 @@ function RequestServicePageInner() {
 
             {error && isContractStartDateBlockError(error) && !oneOffOutsideContract ? (
               <div role="alert" className="alert alert-warning text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
                 <div className="flex w-full flex-col gap-3">
                   <div>
-                    <p className="font-medium">{error}</p>
+                    <p className="font-semibold">{error}</p>
                     {blockingContract ? (
                       <p className="mt-1 opacity-80">
                         Your contract <span className="font-medium">{blockingContract.name}</span> started on{" "}
@@ -459,9 +459,13 @@ function RequestServicePageInner() {
                       </p>
                     ) : null}
                   </div>
-                  <div className="rounded-box border border-warning/40 bg-base-100 p-4">
-                    <p className="font-medium">{CONTRACT_START_DATE_ONE_OFF_TITLE}</p>
-                    <p className="mt-1 text-sm opacity-80">{CONTRACT_START_DATE_ONE_OFF_DESCRIPTION}</p>
+                  <div className="border-t border-warning/30 pt-3">
+                    <p className="font-medium">Need service sooner?</p>
+                    <p className="mt-1 opacity-80">
+                      Submit a <strong>{CONTRACT_START_DATE_ONE_OFF_TITLE}</strong> — a billable visit outside your
+                      contract coverage. Standard rates apply and this visit will not count toward included contract
+                      visits.
+                    </p>
                     <button
                       type="button"
                       className="btn btn-primary btn-sm mt-3"

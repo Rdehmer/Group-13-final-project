@@ -15,8 +15,8 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Equipment Service Manager",
-  description: "Commercial equipment service management for Ridley Equipment Services",
+  title: "EquipmentIQ",
+  description: "Commercial equipment service management — from request to invoice",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -24,10 +24,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${plusJakarta.variable} ${sora.variable} h-full antialiased`}
-      data-theme="ridley"
+      data-theme="equipmentiq"
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col bg-base-200" suppressHydrationWarning>
+      <body className="min-h-full flex flex-col bg-[#eef2f5] text-[#1e2a36]" suppressHydrationWarning>
         <HydrationAttrGuard />
         <ThemeLock />
         {children}

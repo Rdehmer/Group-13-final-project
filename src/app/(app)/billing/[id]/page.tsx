@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, CreditCard, Send, FileEdit, Plus, Trash2, Save } from "lucide-react";
+import { ArrowLeft, CreditCard, Download, Mail, Send, FileEdit, Plus, Trash2, Save } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { StatusBadge, statusTone } from "@/components/ui";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { formatMoney } from "@/lib/calculations";
 import { formatMonthlyPremium } from "@/lib/contract-pricing";
 import {
@@ -24,9 +25,12 @@ import {
   type EditableInvoiceLine,
 } from "@/lib/billing";
 import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
+import { EmailInvoiceModal, type EmailInvoiceRecipient } from "@/components/EmailInvoiceModal";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
 import { loadInvoiceBatchMap, type BatchLookup } from "@/lib/batches";
+import { downloadInvoicePdf, invoicePdfToBase64 } from "@/lib/invoicePdf";
+import type { ServiceHistoryWorkOrder } from "@/lib/invoices";
 import type { Invoice, Payment, Profile, ServiceContract, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
 import {
   coverageCapsFromContract,
@@ -44,9 +48,24 @@ type InvoiceDetail = Invoice & {
     billing_address?: string | null;
     email?: string | null;
     phone?: string | null;
+    city?: string | null;
+    state?: string | null;
   };
-  work_orders?: { work_order_number: string; problem_description?: string | null } | null;
+  work_orders?: {
+    id?: string;
+    work_order_number: string;
+    problem_description?: string | null;
+    work_order_type?: string | null;
+    service_vendor_id?: string | null;
+  } | null;
   equipment?: EquipmentOption | null;
+};
+
+type ServiceVendorBrief = {
+  id: string;
+  name: string;
+  email: string | null;
+  contact_name: string | null;
 };
 
 /**
@@ -76,13 +95,17 @@ export default function InvoiceDetailPage() {
     message: string;
     suggestFee?: number;
   } | null>(null);
+  const [serviceVendor, setServiceVendor] = useState<ServiceVendorBrief | null>(null);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   async function load() {
     const [{ data }, { data: pay }, { data: settings }, { data: members }, batchRes] = await Promise.all([
       supabase
         .from("invoices")
         .select(
-          "*, customers(name, billing_address, email, phone), work_orders(work_order_number, problem_description), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
+          "*, customers(name, billing_address, email, phone, city, state), work_orders(id, work_order_number, problem_description, work_order_type, service_vendor_id), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
         )
         .eq("id", id)
         .single(),
@@ -103,11 +126,26 @@ export default function InvoiceDetailPage() {
     setTeam((members as typeof team) ?? []);
     setInvoiceBatch(invoice ? batchRes.map.get(invoice.id) ?? null : null);
     if (settings?.default_tax_rate) setTaxRate(Number(settings.default_tax_rate));
-    if (!invoice) return;
+    if (!invoice) {
+      setServiceVendor(null);
+      return;
+    }
 
     setNotes(invoice.notes ?? "");
     setDirty(false);
     setSavedMsg(null);
+
+    const vendorId = invoice.work_orders?.service_vendor_id;
+    if (vendorId) {
+      const { data: sv } = await supabase
+        .from("service_vendors")
+        .select("id, name, email, contact_name")
+        .eq("id", vendorId)
+        .maybeSingle();
+      setServiceVendor((sv as ServiceVendorBrief | null) ?? null);
+    } else {
+      setServiceVendor(null);
+    }
 
     if (invoice.customer_id) {
       const { data: eqList } = await supabase
@@ -534,6 +572,135 @@ export default function InvoiceDetailPage() {
     setSaving(false);
   }
 
+  const emailRecipients: EmailInvoiceRecipient[] = useMemo(() => {
+    if (!inv) return [];
+    const customerEmail = inv.customers?.email?.trim() ?? "";
+    const vendorEmail = serviceVendor?.email?.trim() ?? "";
+    const hasWo = Boolean(inv.work_order_id);
+    const hasVendor = Boolean(inv.work_orders?.service_vendor_id && serviceVendor);
+    return [
+      {
+        kind: "customer",
+        label: `Customer — ${inv.customers?.name ?? "Bill-to"}`,
+        defaultTo: customerEmail,
+        available: true,
+        hint: customerEmail ? undefined : "No customer email on file — enter one to send.",
+      },
+      {
+        kind: "service_vendor",
+        label: hasVendor
+          ? `Service vendor — ${serviceVendor!.name}`
+          : "Service vendor",
+        defaultTo: vendorEmail,
+        available: hasWo && hasVendor,
+        hint: !hasWo
+          ? "Link a work order to email a service vendor."
+          : !hasVendor
+            ? "Assign a service vendor on the work order first."
+            : vendorEmail
+              ? undefined
+              : "Vendor has no email — enter one to send.",
+      },
+    ];
+  }, [inv, serviceVendor]);
+
+  function pdfWorkOrder(): ServiceHistoryWorkOrder {
+    return {
+      id: inv!.work_orders?.id ?? inv!.work_order_id ?? "",
+      work_order_number: inv!.work_orders?.work_order_number ?? "—",
+      work_order_type: inv!.work_orders?.work_order_type ?? null,
+      equipment: inv!.equipment
+        ? {
+            id: inv!.equipment.id,
+            name: inv!.equipment.name,
+            location: inv!.equipment.location ?? null,
+          }
+        : null,
+    } as ServiceHistoryWorkOrder;
+  }
+
+  async function handleDownloadPdf() {
+    if (!inv) return;
+    setError(null);
+    try {
+      await downloadInvoicePdf(inv, pdfWorkOrder(), {
+        name: inv.customers?.name ?? "Customer",
+        email: inv.customers?.email,
+        phone: inv.customers?.phone,
+        city: inv.customers?.city,
+        state: inv.customers?.state,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not build PDF.");
+    }
+  }
+
+  async function handleEmailSend(payload: {
+    recipients: Array<{ kind: "customer" | "service_vendor"; to: string }>;
+    subject: string;
+    message: string;
+  }) {
+    if (!inv) return;
+    if (payload.recipients.length === 0) {
+      setEmailError("Select at least one recipient.");
+      return;
+    }
+    setEmailBusy(true);
+    setEmailError(null);
+    try {
+      const pdfBase64 = await invoicePdfToBase64(inv, pdfWorkOrder(), {
+        name: inv.customers?.name ?? "Customer",
+        email: inv.customers?.email,
+        phone: inv.customers?.phone,
+        city: inv.customers?.city,
+        state: inv.customers?.state,
+      });
+
+      const res = await fetch(`/api/invoices/${inv.id}/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, pdfBase64 }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        sent?: Array<{ kind: string; to: string }>;
+        failures?: Array<{ kind: string; error: string }>;
+      };
+      if (!res.ok) {
+        throw new Error(json.error || "Email failed.");
+      }
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const sentKinds = (json.sent ?? []).map((s) => s.kind);
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "invoice_emailed",
+        recordType: "invoice",
+        recordId: inv.id,
+        newValue: sentKinds.join(","),
+      });
+
+      if (sentKinds.includes("customer") && isUnsentInvoice(inv.status)) {
+        await setStatus("Sent");
+      }
+
+      const failNote =
+        json.failures && json.failures.length
+          ? ` Some failed: ${json.failures.map((f) => f.error).join("; ")}`
+          : "";
+      setSavedMsg(
+        `Emailed invoice to ${(json.sent ?? []).map((s) => s.to).join(", ")}.${failNote}`,
+      );
+      setEmailOpen(false);
+    } catch (e) {
+      setEmailError(e instanceof Error ? e.message : "Email failed.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
   if (!inv) {
     return <div className="p-8 text-center opacity-60">Loading invoice…</div>;
   }
@@ -628,6 +795,25 @@ export default function InvoiceDetailPage() {
               <CreditCard className="h-4 w-4" /> Record payment
             </Link>
           ) : null}
+          <button
+            type="button"
+            className="btn btn-outline btn-sm gap-1"
+            disabled={saving || emailBusy}
+            onClick={() => void handleDownloadPdf()}
+          >
+            <Download className="h-4 w-4" /> Download PDF
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm gap-1"
+            disabled={saving || emailBusy || inv.status === "Canceled"}
+            onClick={() => {
+              setEmailError(null);
+              setEmailOpen(true);
+            }}
+          >
+            <Mail className="h-4 w-4" /> Email invoice
+          </button>
         </div>
       </div>
 
@@ -751,7 +937,7 @@ export default function InvoiceDetailPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider opacity-60">
-                Ridley Equipment Services
+                EquipmentIQ
               </p>
               <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{inv.invoice_number}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -810,6 +996,38 @@ export default function InvoiceDetailPage() {
                 </a>
               </p>
             ) : null}
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide opacity-60">
+                Email recipients
+              </p>
+              <ul className="mt-1 space-y-1 text-sm">
+                <li>
+                  Customer:{" "}
+                  {inv.customers?.email ? (
+                    <span className="opacity-80">{inv.customers.email}</span>
+                  ) : (
+                    <span className="text-warning">No email on file</span>
+                  )}
+                </li>
+                <li>
+                  Service vendor:{" "}
+                  {serviceVendor ? (
+                    <>
+                      <span className="font-medium">{serviceVendor.name}</span>
+                      {serviceVendor.email ? (
+                        <span className="opacity-80"> · {serviceVendor.email}</span>
+                      ) : (
+                        <span className="text-warning"> · No email on file</span>
+                      )}
+                    </>
+                  ) : inv.work_order_id ? (
+                    <span className="opacity-60">None assigned on work order</span>
+                  ) : (
+                    <span className="opacity-60">No work order linked</span>
+                  )}
+                </li>
+              </ul>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm sm:text-right">
             <div>
@@ -889,7 +1107,7 @@ export default function InvoiceDetailPage() {
             ) : null}
           </div>
 
-          <div className="overflow-x-auto rounded-box border border-base-300">
+          <DualHorizontalScroll className="rounded-box border border-base-300">
             {canEdit ? (
               <table className="table table-sm">
                 <thead>
@@ -1014,7 +1232,7 @@ export default function InvoiceDetailPage() {
                 </tbody>
               </table>
             )}
-          </div>
+          </DualHorizontalScroll>
 
           {canEdit ? (
             <p className="mt-2 text-xs opacity-60">
@@ -1109,7 +1327,7 @@ export default function InvoiceDetailPage() {
         {payments.length > 0 ? (
           <div className="border-t border-base-300 px-6 py-4 sm:px-8">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide opacity-70">Payments</h2>
-            <div className="overflow-x-auto">
+            <DualHorizontalScroll>
               <table className="table table-sm">
                 <thead>
                   <tr>
@@ -1130,10 +1348,23 @@ export default function InvoiceDetailPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DualHorizontalScroll>
           </div>
         ) : null}
       </article>
+
+      <EmailInvoiceModal
+        open={emailOpen}
+        invoiceNumber={inv.invoice_number}
+        customerName={inv.customers?.name ?? "Customer"}
+        recipients={emailRecipients}
+        busy={emailBusy}
+        error={emailError}
+        onClose={() => {
+          if (!emailBusy) setEmailOpen(false);
+        }}
+        onSend={(payload) => void handleEmailSend(payload)}
+      />
     </div>
   );
 }

@@ -11,7 +11,8 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/PageHeader";
-import { StatCard, StatusBadge, statusTone, EmptyState } from "@/components/ui";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
+import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ClickableStatCard } from "@/components/ClickableStatCard";
 import {
   DashboardCharts,
@@ -19,9 +20,14 @@ import {
   type InvoiceActivityPoint,
 } from "@/components/DashboardCharts";
 import { ManagerDashboardStudio } from "@/components/ManagerDashboardStudio";
+import {
+  AdminDashboardHome,
+  summarizeStaffProfiles,
+} from "@/components/AdminDashboardHome";
 import { formatMoney } from "@/lib/calculations";
 import { relatedName } from "@/lib/relations";
 import { fetchManagerUnreadInboxCount } from "@/lib/manager-inbox";
+import type { UserRole } from "@/lib/types";
 
 function safeNumber(value: unknown): number {
   const n = Number(value);
@@ -69,15 +75,34 @@ function groupPieSlices(
 }
 
 /**
- * This business faces operational blind-spot risk when managers lack real-time visibility.
- * Our app reduces the risk by surfacing open work, revenue, and contract health on one dashboard.
+ * Service managers get the live ops widget board.
+ * Administrators get a lean control-plane home (users / access first).
  */
 export default async function DashboardPage() {
   const supabase = await createClient();
   const profile = await getProfile();
-  const isManager = profile?.role === "service_manager";
-  const canManageContracts =
-    profile?.role === "service_manager" || profile?.role === "administrator";
+  const isAdmin = profile?.role === "administrator";
+  const isServiceManager = profile?.role === "service_manager";
+  const isManager = isServiceManager;
+  const canManageContracts = isServiceManager || isAdmin;
+
+  if (isAdmin) {
+    const { data: staffRows } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, role, is_active")
+      .in("role", ["administrator", "service_manager", "technician", "billing"])
+      .order("full_name");
+    const data = summarizeStaffProfiles(
+      ((staffRows as {
+        id: string;
+        full_name: string | null;
+        email: string;
+        role: UserRole;
+        is_active: boolean;
+      }[] | null) ?? []),
+    );
+    return <AdminDashboardHome data={data} />;
+  }
 
   const [
     { count: customerCount },
@@ -288,6 +313,12 @@ export default async function DashboardPage() {
           href: "/work-orders?filter=urgent",
           danger: (criticalCount ?? 0) > 0,
         },
+        {
+          label: "Timesheet exceptions review",
+          value: 1,
+          href: "/timesheets",
+          danger: true,
+        },
       ].filter((t) => t.value > 0)
     : [];
 
@@ -344,7 +375,7 @@ export default async function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard"
-        description="Operations overview for Ridley Equipment Services"
+        description="Operations overview for EquipmentIQ"
         actions={
           <Link href="/work-orders" className="btn btn-primary btn-sm">
             New Work Order
@@ -393,24 +424,41 @@ export default async function DashboardPage() {
           </>
         ) : (
           <>
-            <StatCard label="Active Customers" value={customerCount ?? 0} />
-            <StatCard
+            <ClickableStatCard
+              label="Active Customers"
+              value={customerCount ?? 0}
+              href="/customers"
+              ariaLabel="View active customers"
+            />
+            <ClickableStatCard
               label="Open Work Orders"
               value={openWoCount ?? 0}
               hint={`${criticalCount ?? 0} high/critical`}
+              href="/work-orders?filter=open"
+              ariaLabel="View open work orders"
             />
-            <StatCard
+            <ClickableStatCard
               label="Active Contracts"
               value={activeContracts}
               hint={`${expiringSoonCount} expiring soon`}
+              href="/contracts?status=Active"
+              ariaLabel="View service contracts"
             />
-            <StatCard
+            <ClickableStatCard
               label="Pending Approvals"
               value={pendingApprovals}
               hint={pendingApprovals > 0 ? "Customer requests awaiting review" : "No requests waiting"}
+              href="/contracts?status=Pending%20Approval"
               danger={pendingApprovals > 0}
+              ariaLabel="View contracts pending approval"
             />
-            <StatCard label="Open AR" value={formatMoney(arBalance)} danger={arBalance > 0} />
+            <ClickableStatCard
+              label="Open AR"
+              value={formatMoney(arBalance)}
+              href="/billing"
+              danger={arBalance > 0}
+              ariaLabel="View accounts receivable"
+            />
           </>
         )}
       </div>
@@ -434,7 +482,7 @@ export default async function DashboardPage() {
             {(openWorkOrders ?? []).length === 0 ? (
               <EmptyState title="No open work orders" description="Create a work order to get started." />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -466,7 +514,7 @@ export default async function DashboardPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>
@@ -477,7 +525,7 @@ export default async function DashboardPage() {
             {(lowStockParts ?? []).length === 0 ? (
               <EmptyState title="Inventory looks good" description="No parts at or below reorder level." />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -500,7 +548,7 @@ export default async function DashboardPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>

@@ -1,4 +1,4 @@
--- Customer inbox: threads and messages between customers and Ridley staff.
+-- Customer inbox: threads and messages between customers and EquipmentIQ staff.
 
 create table if not exists public.customer_inbox_threads (
   id uuid primary key default gen_random_uuid(),
@@ -139,7 +139,7 @@ create policy customer_inbox_messages_staff_insert
     )
   );
 
--- Demo seed: one service thread for Northwind demo customer (customer1@ridley-demo.test)
+-- Demo seed: one service thread for Northwind demo customer (customer1@equipmentiq-demo.test)
 insert into public.customer_inbox_threads (customer_id, subject, category, work_order_id, status, last_message_at)
 select
   p.customer_id,
@@ -152,7 +152,7 @@ from public.profiles p
 left join public.work_orders wo
   on wo.customer_id = p.customer_id
   and wo.work_order_number = 'WO-77715073'
-where p.email = 'customer1@ridley-demo.test'
+where p.email = 'customer1@equipmentiq-demo.test'
   and p.customer_id is not null
   and not exists (
     select 1
@@ -169,7 +169,7 @@ select
   'Hi Chris — we received your emergency repair request for the forklift (WO-77715073). A coordinator is reviewing scheduling and will confirm your visit window here. Reply if you have dock access notes or preferred contact times.'
 from public.customer_inbox_threads t
 join public.profiles p on p.customer_id = t.customer_id
-where p.email = 'customer1@ridley-demo.test'
+where p.email = 'customer1@equipmentiq-demo.test'
   and t.subject = 'Update on WO-77715073'
   and not exists (
     select 1

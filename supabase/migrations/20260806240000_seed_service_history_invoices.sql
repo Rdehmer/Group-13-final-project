@@ -1,4 +1,4 @@
--- Demo seed: service history work orders + invoices for Northwind (customer1@ridley-demo.test).
+-- Demo seed: service history work orders + invoices for Northwind (customer1@equipmentiq-demo.test).
 -- Idempotent — skips rows that already exist by work_order_number / invoice_number.
 
 DO $$

@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import { postApBill, postApPayment } from "@/lib/accounting/postings";
@@ -26,13 +27,17 @@ import {
   billBalance,
   canApproveVendors,
   canDeleteVendor,
+  canEditVendorMaster,
   canEnterBillsForVendor,
+  canRecordVendorPayment,
   isVendorSchemaError,
   openBalanceForBills,
   overdueBalanceForBills,
   recomputeBillStatus,
   todayIso,
 } from "@/lib/vendors";
+import { VENDOR_SPECIALTIES } from "@/lib/vendorPortal";
+import { VendorPortalAssignments } from "@/components/VendorPortalAssignments";
 
 const ALLOWED_ROLES = new Set(["administrator", "service_manager", "billing"]);
 const PAYMENT_METHODS: VendorPaymentMethod[] = ["Check", "ACH", "Cash", "Card", "Other"];
@@ -151,7 +156,7 @@ export default function VendorDetailPage() {
 
   async function onSaveVendor(e: React.FormEvent) {
     e.preventDefault();
-    if (!vendor || !profile) return;
+    if (!vendor || !profile || !canEditVendorMaster(profile.role)) return;
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -167,6 +172,7 @@ export default function VendorDetailPage() {
         state: vendor.state?.trim() || null,
         postal_code: vendor.postal_code?.trim() || null,
         payment_terms: vendor.payment_terms.trim() || "Net 30",
+        specialty: vendor.specialty?.trim() || null,
         notes: vendor.notes?.trim() || null,
         is_active: vendor.is_active,
         updated_at: new Date().toISOString(),
@@ -213,7 +219,7 @@ export default function VendorDetailPage() {
   }
 
   async function setVendorActive(active: boolean) {
-    if (!vendor || !profile) return;
+    if (!vendor || !profile || !canEditVendorMaster(profile.role)) return;
     setBusy(true);
     setError(null);
     setSuccess(null);
@@ -335,7 +341,16 @@ export default function VendorDetailPage() {
       .single();
 
     if (insertError || !bill) {
-      setError(insertError?.message ?? "Could not create bill.");
+      const msg = insertError?.message ?? "Could not create bill.";
+      const duplicate =
+        /duplicate|unique|vendor_bills_vendor_bill_number/i.test(msg);
+      setError(
+        duplicate
+          ? `Bill # ${billForm.bill_number.trim()} already exists for this supplier.`
+          : /policy|row-level security|approved|active/i.test(msg)
+            ? "Vendor must be approved and active before entering bills."
+            : msg,
+      );
       setBusy(false);
       return;
     }
@@ -367,6 +382,10 @@ export default function VendorDetailPage() {
   }
 
   function openPayBill(bill: VendorBill) {
+    if (!profile || !canRecordVendorPayment(profile.role)) {
+      setError("Only managers and administrators can record vendor payments.");
+      return;
+    }
     const balance = billBalance(bill);
     setPayForm({
       payment_date: todayIso(),
@@ -382,6 +401,10 @@ export default function VendorDetailPage() {
   async function submitPayment(e: React.FormEvent) {
     e.preventDefault();
     if (!vendor || !profile || !showPay) return;
+    if (!canRecordVendorPayment(profile.role)) {
+      setError("Only managers and administrators can record vendor payments.");
+      return;
+    }
     const amount = Number(payForm.amount);
     const balance = billBalance(showPay);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -409,7 +432,12 @@ export default function VendorDetailPage() {
       .single();
 
     if (payErr || !payment) {
-      setError(payErr?.message ?? "Could not record payment.");
+      const msg = payErr?.message ?? "Could not record payment.";
+      setError(
+        /policy|row-level security|permission/i.test(msg)
+          ? "Only managers and administrators can record vendor payments."
+          : msg,
+      );
       setBusy(false);
       return;
     }
@@ -508,7 +536,9 @@ export default function VendorDetailPage() {
   const approval = vendor.approval_status ?? "Approved";
   const canBill = canEnterBillsForVendor(vendor);
   const isManager = canApproveVendors(profile.role);
+  const canEditMaster = canEditVendorMaster(profile.role);
   const canDelete = canDeleteVendor(profile.role);
+  const canPay = canRecordVendorPayment(profile.role);
 
   return (
     <div>
@@ -586,140 +616,195 @@ export default function VendorDetailPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <form onSubmit={onSaveVendor} className="card bg-base-100 shadow lg:col-span-1">
+        <div className="card bg-base-100 shadow lg:col-span-1">
           <div className="card-body space-y-3">
             <h2 className="card-title text-base">Details</h2>
-            <FormRow label="Name" required>
-              <input
-                className="input input-bordered w-full"
-                value={vendor.name}
-                onChange={(e) => setVendor({ ...vendor, name: e.target.value })}
-                required
-              />
-            </FormRow>
-            <FormRow label="Contact">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.contact_name ?? ""}
-                onChange={(e) => setVendor({ ...vendor, contact_name: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Email">
-              <input
-                type="email"
-                className="input input-bordered w-full"
-                value={vendor.email ?? ""}
-                onChange={(e) => setVendor({ ...vendor, email: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Phone">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.phone ?? ""}
-                onChange={(e) => setVendor({ ...vendor, phone: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Address">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.address_line1 ?? ""}
-                onChange={(e) => setVendor({ ...vendor, address_line1: e.target.value })}
-              />
-            </FormRow>
-            <div className="grid grid-cols-3 gap-2">
-              <FormRow label="City">
-                <input
-                  className="input input-bordered w-full"
-                  value={vendor.city ?? ""}
-                  onChange={(e) => setVendor({ ...vendor, city: e.target.value })}
-                />
-              </FormRow>
-              <FormRow label="State">
-                <input
-                  className="input input-bordered w-full"
-                  value={vendor.state ?? ""}
-                  onChange={(e) => setVendor({ ...vendor, state: e.target.value })}
-                />
-              </FormRow>
-              <FormRow label="ZIP">
-                <input
-                  className="input input-bordered w-full"
-                  value={vendor.postal_code ?? ""}
-                  onChange={(e) => setVendor({ ...vendor, postal_code: e.target.value })}
-                />
-              </FormRow>
-            </div>
-            <FormRow label="Payment terms">
-              <input
-                className="input input-bordered w-full"
-                value={vendor.payment_terms}
-                onChange={(e) => setVendor({ ...vendor, payment_terms: e.target.value })}
-              />
-            </FormRow>
-            <FormRow label="Notes">
-              <textarea
-                className="textarea textarea-bordered w-full"
-                rows={2}
-                value={vendor.notes ?? ""}
-                onChange={(e) => setVendor({ ...vendor, notes: e.target.value })}
-              />
-            </FormRow>
-            <label className="label cursor-pointer justify-start gap-2">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm"
-                checked={vendor.is_active}
-                onChange={(e) => setVendor({ ...vendor, is_active: e.target.checked })}
-              />
-              <span className="label-text">Active</span>
-            </label>
-            <p className="text-xs opacity-60">
-              Status: {approval}
-              {approval === "Pending" ? " — bills locked until approved" : ""}
-            </p>
-            <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-            <div className="flex flex-wrap gap-2 border-t border-base-300 pt-3">
-              {vendor.is_active ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  disabled={busy}
-                  onClick={() => void setVendorActive(false)}
-                >
-                  Set inactive
+            {canEditMaster ? (
+              <form onSubmit={onSaveVendor} className="space-y-3">
+                <FormRow label="Name" required>
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.name}
+                    onChange={(e) => setVendor({ ...vendor, name: e.target.value })}
+                    required
+                  />
+                </FormRow>
+                <FormRow label="Contact">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.contact_name ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, contact_name: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Email">
+                  <input
+                    type="email"
+                    className="input input-bordered w-full"
+                    value={vendor.email ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, email: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Phone">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.phone ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, phone: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Specialty / trade">
+                  <select
+                    className="select select-bordered w-full"
+                    value={vendor.specialty ?? ""}
+                    onChange={(e) =>
+                      setVendor({ ...vendor, specialty: e.target.value || null })
+                    }
+                  >
+                    <option value="">Select…</option>
+                    {VENDOR_SPECIALTIES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </FormRow>
+                <FormRow label="Address">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.address_line1 ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, address_line1: e.target.value })}
+                  />
+                </FormRow>
+                <div className="grid grid-cols-3 gap-2">
+                  <FormRow label="City">
+                    <input
+                      className="input input-bordered w-full"
+                      value={vendor.city ?? ""}
+                      onChange={(e) => setVendor({ ...vendor, city: e.target.value })}
+                    />
+                  </FormRow>
+                  <FormRow label="State">
+                    <input
+                      className="input input-bordered w-full"
+                      value={vendor.state ?? ""}
+                      onChange={(e) => setVendor({ ...vendor, state: e.target.value })}
+                    />
+                  </FormRow>
+                  <FormRow label="ZIP">
+                    <input
+                      className="input input-bordered w-full"
+                      value={vendor.postal_code ?? ""}
+                      onChange={(e) => setVendor({ ...vendor, postal_code: e.target.value })}
+                    />
+                  </FormRow>
+                </div>
+                <FormRow label="Payment terms">
+                  <input
+                    className="input input-bordered w-full"
+                    value={vendor.payment_terms}
+                    onChange={(e) => setVendor({ ...vendor, payment_terms: e.target.value })}
+                  />
+                </FormRow>
+                <FormRow label="Notes">
+                  <textarea
+                    className="textarea textarea-bordered w-full"
+                    rows={2}
+                    value={vendor.notes ?? ""}
+                    onChange={(e) => setVendor({ ...vendor, notes: e.target.value })}
+                  />
+                </FormRow>
+                <label className="label cursor-pointer justify-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-sm"
+                    checked={vendor.is_active}
+                    onChange={(e) => setVendor({ ...vendor, is_active: e.target.checked })}
+                  />
+                  <span className="label-text">Active</span>
+                </label>
+                <p className="text-xs opacity-60">
+                  Status: {approval}
+                  {approval === "Pending" ? " — bills locked until approved" : ""}
+                </p>
+                <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
+                  {saving ? "Saving…" : "Save"}
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  disabled={busy}
-                  onClick={() => void setVendorActive(true)}
-                >
-                  Set active
-                </button>
-              )}
-              {canDelete ? (
-                <button
-                  type="button"
-                  className="btn btn-error btn-outline btn-sm"
-                  disabled={busy}
-                  onClick={() => void deleteVendor()}
-                  title={
-                    bills.length > 0
-                      ? "Delete blocked while bills exist — use inactive"
-                      : "Permanently delete vendor"
-                  }
-                >
-                  Delete vendor
-                </button>
-              ) : (
-                <p className="text-xs opacity-50">Billing can set inactive; only managers/admins can delete.</p>
-              )}
-            </div>
+                <div className="flex flex-wrap gap-2 border-t border-base-300 pt-3">
+                  {vendor.is_active ? (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      disabled={busy}
+                      onClick={() => void setVendorActive(false)}
+                    >
+                      Set inactive
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      disabled={busy}
+                      onClick={() => void setVendorActive(true)}
+                    >
+                      Set active
+                    </button>
+                  )}
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      className="btn btn-error btn-outline btn-sm"
+                      disabled={busy}
+                      onClick={() => void deleteVendor()}
+                      title={
+                        bills.length > 0
+                          ? "Delete blocked while bills exist — use inactive"
+                          : "Permanently delete vendor"
+                      }
+                    >
+                      Delete vendor
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-2 text-sm">
+                <FormRow label="Contact">
+                  <span>{vendor.contact_name ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Email">
+                  <span>{vendor.email ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Phone">
+                  <span>{vendor.phone ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Specialty">
+                  <span>{vendor.specialty ?? "—"}</span>
+                </FormRow>
+                <FormRow label="Address">
+                  <span>
+                    {[vendor.address_line1, vendor.city, vendor.state, vendor.postal_code]
+                      .filter(Boolean)
+                      .join(", ") || "—"}
+                  </span>
+                </FormRow>
+                <FormRow label="Payment terms">
+                  <span>{vendor.payment_terms}</span>
+                </FormRow>
+                <FormRow label="Notes">
+                  <span>{vendor.notes ?? "—"}</span>
+                </FormRow>
+                <p className="text-xs opacity-60">
+                  Status: {approval}
+                  {vendor.is_active ? " · Active" : " · Inactive"}
+                  {approval === "Pending" ? " — bills locked until approved" : ""}
+                </p>
+                <p className="text-xs opacity-50">
+                  Only managers and administrators can edit supplier master data. Billing can enter
+                  bills and payments.
+                </p>
+              </div>
+            )}
           </div>
-        </form>
+        </div>
 
         <section className="card bg-base-100 shadow lg:col-span-2">
           <div className="card-body">
@@ -729,6 +814,11 @@ export default function VendorDetailPage() {
                 Enter bill
               </button>
             </div>
+            {!canPay ? (
+              <p className="mb-2 text-xs opacity-60">
+                Billing can enter bills. Managers or administrators record payments.
+              </p>
+            ) : null}
 
             {bills.length === 0 ? (
               <EmptyState
@@ -736,7 +826,7 @@ export default function VendorDetailPage() {
                 description="Enter a vendor bill to post AP and track what you owe."
               />
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -782,7 +872,7 @@ export default function VendorDetailPage() {
                           </td>
                           <td className="text-right">
                             <div className="flex flex-wrap justify-end gap-1">
-                              {balance > 0 && bill.status !== "Void" ? (
+                              {canPay && balance > 0 && bill.status !== "Void" ? (
                                 <button
                                   type="button"
                                   className="btn btn-primary btn-xs"
@@ -809,11 +899,19 @@ export default function VendorDetailPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </section>
       </div>
+
+      {profile ? (
+        <VendorPortalAssignments
+          vendorId={id}
+          profile={profile}
+          canManage={canEditMaster}
+        />
+      ) : null}
 
       {showBill ? (
         <dialog className="modal modal-open">

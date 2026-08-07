@@ -5,10 +5,10 @@
 
 import { accountName, ACCOUNT_BY_CODE } from "@/lib/accounting/coa";
 
-const KEY_PERIODS = "ridley_accounting_periods_v1";
-const KEY_JOURNALS = "ridley_accounting_journals_v1";
-const KEY_LINES = "ridley_accounting_journal_lines_v1";
-const KEY_META = "ridley_accounting_meta_v1";
+const KEY_PERIODS = "equipmentiq_accounting_periods_v1";
+const KEY_JOURNALS = "equipmentiq_accounting_journals_v1";
+const KEY_LINES = "equipmentiq_accounting_journal_lines_v1";
+const KEY_META = "equipmentiq_accounting_meta_v1";
 
 export type PeriodStatus = "Open" | "Soft Closed" | "Closed";
 

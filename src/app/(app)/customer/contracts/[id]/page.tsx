@@ -15,6 +15,7 @@ import {
   formatRenewalNote,
   inferContractTier,
   isExpiringSoon,
+  formatContractDisplayName,
   parseCustomerContracts,
   tierBadgeClass,
   type CustomerContract,
@@ -49,7 +50,7 @@ function WhatsNextPanel({ contract }: { contract: CustomerContract }) {
       <SectionCard title="What's next">
         <ul className="steps steps-vertical w-full sm:steps-horizontal">
           <li className="step step-primary">Submitted</li>
-          <li className="step step-primary">Ridley review</li>
+          <li className="step step-primary">EquipmentIQ review</li>
           <li className="step">Activation</li>
         </ul>
         <p className="text-sm opacity-70">{contractStatusMessage(contract.status)}</p>
@@ -63,8 +64,8 @@ function WhatsNextPanel({ contract }: { contract: CustomerContract }) {
         <p className="text-sm">
           This agreement expires in <span className="font-semibold">{daysLeft} days</span>.
           {formatRenewalNote(contract.renewal_option)?.includes("Auto")
-            ? " It is set to auto-renew unless you contact Ridley."
-            : " Contact Ridley to discuss renewal."}
+            ? " It is set to auto-renew unless you contact EquipmentIQ."
+            : " Contact EquipmentIQ to discuss renewal."}
         </p>
       </SectionCard>
     );
@@ -144,7 +145,7 @@ export default function CustomerContractDetailPage() {
 
   if (!profile.customer_id) {
     return (
-      <EmptyState title="No customer account linked" description="Contact Ridley Equipment Services to link your portal account." />
+      <EmptyState title="No customer account linked" description="Contact EquipmentIQ to link your portal account." />
     );
   }
 
@@ -163,6 +164,7 @@ export default function CustomerContractDetailPage() {
   }
 
   const tier = inferContractTier(contract.name);
+  const displayName = formatContractDisplayName(contract.name, contract.status);
   const renewal = formatRenewalNote(contract.renewal_option);
   const typeHelp = CONTRACT_TYPE_HELP[contract.contract_type];
   const isActive = contract.status.toLowerCase() === "active" || contract.status.toLowerCase() === "renewed";
@@ -178,7 +180,7 @@ export default function CustomerContractDetailPage() {
       </div>
 
       <PageHeader
-        title={contract.name}
+        title={displayName}
         description={typeHelp ?? contract.contract_type}
         actions={
           <div className="flex flex-wrap gap-2">

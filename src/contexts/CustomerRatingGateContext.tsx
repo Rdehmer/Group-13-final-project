@@ -14,6 +14,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { ServiceHistoryWorkOrder } from "@/lib/invoices";
 import {
+  deferRatingWorkOrders,
+  filterOutDeferredWorkOrders,
+} from "@/lib/customer-rating-deferral";
+import {
   fetchUnratedCompletedWorkOrders,
   shouldPromptForRating,
 } from "@/lib/service-ratings";
@@ -27,6 +31,7 @@ type CustomerRatingGateContextValue = {
   pendingCount: number;
   activeWorkOrder: ServiceHistoryWorkOrder | null;
   refreshPending: () => Promise<void>;
+  dismissRatingPrompt: () => void;
   blockNavigation: (event: MouseEvent<HTMLElement>) => void;
 };
 
@@ -40,6 +45,7 @@ export function useCustomerRatingGate(): CustomerRatingGateContextValue {
       pendingCount: 0,
       activeWorkOrder: null,
       refreshPending: async () => {},
+      dismissRatingPrompt: () => {},
       blockNavigation: () => {},
     };
   }
@@ -90,7 +96,7 @@ function CustomerRatingGateProviderInner({
 
   const refreshPending = useCallback(async () => {
     const unrated = await fetchUnratedCompletedWorkOrders(supabase, customerId);
-    setPendingQueue(unrated);
+    setPendingQueue(filterOutDeferredWorkOrders(customerId, unrated));
     setLoading(false);
   }, [customerId, supabase]);
 
@@ -129,6 +135,19 @@ function CustomerRatingGateProviderInner({
     setModalOpen(false);
   }
 
+  const dismissRatingPrompt = useCallback(() => {
+    if (pendingQueue.length === 0) {
+      setModalOpen(false);
+      return;
+    }
+    deferRatingWorkOrders(
+      customerId,
+      pendingQueue.map((wo) => wo.id),
+    );
+    setPendingQueue([]);
+    setModalOpen(false);
+  }, [customerId, pendingQueue]);
+
   function blockNavigation(event: MouseEvent<HTMLElement>) {
     if (!isGateActive) return;
     event.preventDefault();
@@ -141,9 +160,10 @@ function CustomerRatingGateProviderInner({
       pendingCount,
       activeWorkOrder,
       refreshPending,
+      dismissRatingPrompt,
       blockNavigation,
     }),
-    [activeWorkOrder, blockNavigation, isGateActive, pendingCount, refreshPending],
+    [activeWorkOrder, blockNavigation, dismissRatingPrompt, isGateActive, pendingCount, refreshPending],
   );
 
   return (
@@ -157,6 +177,7 @@ function CustomerRatingGateProviderInner({
           customerId={customerId}
           workOrder={activeWorkOrder}
           onClose={handleModalClose}
+          onDismissLater={dismissRatingPrompt}
           onSubmitted={() => handleRated(activeWorkOrder.id)}
           onAlreadyRated={() => handleAlreadyRated(activeWorkOrder.id)}
         />

@@ -7,6 +7,7 @@ import { Search, FileText, ClipboardList, ChevronRight, Paperclip, Clipboard } f
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
+import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import {
@@ -64,6 +65,7 @@ export default function BillingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const deepLinkWo = searchParams.get("wo");
+  const deepLinkInvoice = searchParams.get("invoice");
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [completedWo, setCompletedWo] = useState<WoRow[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
@@ -218,15 +220,33 @@ export default function BillingPage() {
     setInvoiceBatchMap(batchMap);
     const rate = settings?.default_tax_rate ? Number(settings.default_tax_rate) : taxRate;
     if (settings?.default_tax_rate) setTaxRate(rate);
-    if (!selectedId && !deepLinkWo && list.length > 0) setSelectedId(list[0].id);
+    if (!selectedId && !deepLinkWo && !deepLinkInvoice && list.length > 0) setSelectedId(list[0].id);
     if (deepLinkWo && ready.some((w) => w.id === deepLinkWo)) {
       await loadWoPreview(deepLinkWo, rate);
+    }
+    if (deepLinkInvoice) {
+      const match = list.find(
+        (inv) =>
+          inv.id === deepLinkInvoice ||
+          inv.invoice_number.toLowerCase() === deepLinkInvoice.toLowerCase(),
+      );
+      if (match) {
+        setSelectedId(match.id);
+        setPreviewWoId(null);
+        setWoPreview(null);
+        setQuery(match.invoice_number);
+        window.setTimeout(() => {
+          document
+            .getElementById("invoice-queue")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 80);
+      }
     }
   }
 
   useEffect(() => {
     load();
-  }, [deepLinkWo]);
+  }, [deepLinkWo, deepLinkInvoice]);
 
   const today = useMemo(() => new Date(), []);
 
@@ -310,6 +330,11 @@ export default function BillingPage() {
     setFilter((prev) => (prev === next ? "all" : next));
     setPreviewWoId(null);
     setWoPreview(null);
+    window.setTimeout(() => {
+      document
+        .getElementById("invoice-queue")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }
 
   const selected = invoices.find((i) => i.id === selectedId) ?? null;
@@ -425,7 +450,20 @@ export default function BillingPage() {
       return;
     }
 
-    await supabase.from("work_orders").update({ billing_status: "Billed" }).eq("id", wo.id);
+    const { error: billStatusError } = await supabase
+      .from("work_orders")
+      .update({ billing_status: "Billed" })
+      .eq("id", wo.id);
+    if (billStatusError) {
+      setError(
+        `Invoice ${invoiceNumber} created, but work order was not marked Billed: ${billStatusError.message}`,
+      );
+      setBusy(false);
+      await load();
+      setSelectedId(inv.id);
+      router.push(`/billing/${inv.id}`);
+      return;
+    }
     await linkWorkOrderPosToInvoice(supabase, wo.id, inv.id);
     await logActivity(supabase, {
       userId: user?.id ?? null,
@@ -533,7 +571,10 @@ export default function BillingPage() {
         </div>
       ) : null}
 
-      <div className="mb-4 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+      <div
+        id="invoice-queue"
+        className="mb-4 scroll-mt-4 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end"
+      >
         <label className="form-control w-full sm:max-w-[14rem]">
           <select
             className="select select-bordered select-sm w-full"
@@ -601,7 +642,7 @@ export default function BillingPage() {
                 />
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <DualHorizontalScroll>
                 <table className="table table-sm">
                   <thead>
                     <tr>
@@ -736,7 +777,7 @@ export default function BillingPage() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </DualHorizontalScroll>
             )}
           </div>
         </div>
