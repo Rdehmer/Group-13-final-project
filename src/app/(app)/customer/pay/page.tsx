@@ -4,9 +4,9 @@
  * Customer bill-pay portal (QBO-style) with Stripe Payment Element.
  */
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   CheckCircle2,
   FileText,
@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
+import { StripeCheckout } from "@/components/StripeCheckout";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
 import { formatMoney } from "@/lib/calculations";
 import { daysPastDue, formatMonthLabel } from "@/lib/billing";
@@ -48,195 +49,9 @@ type StripeSession = {
   demo?: boolean;
 };
 
-type StripeElementsInstance = {
-  create: (type: "payment", options?: { layout?: string }) => {
-    mount: (el: HTMLElement) => void;
-    unmount: () => void;
-  };
-};
-
-type StripeInstance = {
-  elements: (options: {
-    clientSecret: string;
-    appearance?: { theme?: string; variables?: Record<string, string> };
-  }) => StripeElementsInstance;
-  confirmPayment: (options: {
-    elements: StripeElementsInstance;
-    redirect?: string;
-    confirmParams?: { return_url?: string };
-  }) => Promise<{ error?: { message?: string }; paymentIntent?: { id?: string; status?: string } }>;
-};
-
-declare global {
-  interface Window {
-    Stripe?: (publishableKey: string) => StripeInstance;
-  }
-}
-
-const STRIPE_SCRIPT_ID = "stripe-js-v3";
-const STRIPE_SCRIPT_SRC = "https://js.stripe.com/v3/";
-
-function loadStripeScript(): Promise<void> {
-  if (typeof window === "undefined") return Promise.resolve();
-  if (window.Stripe) return Promise.resolve();
-
-  const existing = document.getElementById(STRIPE_SCRIPT_ID) as HTMLScriptElement | null;
-  if (existing?.dataset.loaded === "true") return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const script = existing ?? document.createElement("script");
-    script.id = STRIPE_SCRIPT_ID;
-    script.src = STRIPE_SCRIPT_SRC;
-    script.async = true;
-    script.onload = () => {
-      script.dataset.loaded = "true";
-      resolve();
-    };
-    script.onerror = () => reject(new Error("Could not load Stripe.js."));
-    if (!existing) document.head.appendChild(script);
-  });
-}
-
-function PayPageStripeForm({
-  clientSecret,
-  publishableKey,
-  amount,
-  paymentIntentId,
-  onSuccess,
-  onError,
-  onCancel,
-}: StripeSession & {
-  onSuccess: (paymentIntentId: string) => void;
-  onError: (message: string) => void;
-  onCancel: () => void;
-}) {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const stripeRef = useRef<StripeInstance | null>(null);
-  const elementsRef = useRef<StripeElementsInstance | null>(null);
-  const [ready, setReady] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    let paymentElement: { mount: (el: HTMLElement) => void; unmount: () => void } | null = null;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        await loadStripeScript();
-        if (cancelled || !mountRef.current || !window.Stripe) {
-          throw new Error("Stripe is unavailable in this browser.");
-        }
-
-        const stripe = window.Stripe(publishableKey);
-        const elements = stripe.elements({
-          clientSecret,
-          appearance: {
-            theme: "stripe",
-            variables: {
-              colorPrimary: "#047857",
-              borderRadius: "8px",
-            },
-          },
-        });
-
-        paymentElement = elements.create("payment", { layout: "tabs" });
-        paymentElement.mount(mountRef.current);
-
-        stripeRef.current = stripe;
-        elementsRef.current = elements;
-        if (!cancelled) setReady(true);
-      } catch (err) {
-        if (!cancelled) {
-          onError(err instanceof Error ? err.message : "Could not load Stripe checkout.");
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      paymentElement?.unmount();
-      stripeRef.current = null;
-      elementsRef.current = null;
-    };
-  }, [clientSecret, publishableKey, onError]);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const stripe = stripeRef.current;
-    const elements = elementsRef.current;
-    if (!stripe || !elements) return;
-
-    setBusy(true);
-    setMessage(null);
-
-    const { error, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      redirect: "if_required",
-      confirmParams: {
-        return_url:
-          typeof window !== "undefined"
-            ? `${window.location.origin}/customer/pay?stripe=return`
-            : undefined,
-      },
-    });
-
-    if (error) {
-      const msg = error.message ?? "Payment failed.";
-      setMessage(msg);
-      onError(msg);
-      setBusy(false);
-      return;
-    }
-
-    const status = paymentIntent?.status;
-    if (status === "succeeded" || status === "processing") {
-      onSuccess(paymentIntent?.id ?? paymentIntentId);
-      setBusy(false);
-      return;
-    }
-
-    const msg = `Payment not completed (${status ?? "unknown"}).`;
-    setMessage(msg);
-    onError(msg);
-    setBusy(false);
-  }
-
-  return (
-    <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6">
-      {!ready ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-base-200 bg-base-200/30 py-12">
-          <span className="loading loading-spinner loading-md text-success" />
-          <p className="text-sm opacity-70">Loading secure payment form…</p>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-base-200 bg-base-100 p-4">
-          <div ref={mountRef} className="min-h-[220px]" />
-        </div>
-      )}
-      {message ? (
-        <div role="alert" className="alert alert-error text-sm">
-          <span>{message}</span>
-        </div>
-      ) : null}
-      <div className="space-y-3 pt-1">
-        <button type="submit" className="btn btn-success btn-lg w-full gap-2" disabled={!ready || busy}>
-          {busy ? <span className="loading loading-spinner loading-sm" /> : <Lock className="h-4 w-4" />}
-          {busy ? "Processing…" : `Pay ${formatMoney(amount)} Securely`}
-        </button>
-        <button type="button" className="btn btn-ghost w-full" disabled={busy} onClick={onCancel}>
-          Cancel Payment
-        </button>
-      </div>
-      <p className="text-center text-xs leading-relaxed opacity-60">
-        Secured by Stripe. Test card: 4242 4242 4242 4242 · Any future expiry · Any CVC.
-      </p>
-    </form>
-  );
-}
-
 function PayPortalInner() {
   const supabase = createClient();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const preselectInvoice = searchParams.get("invoice");
   const stripeReturn = searchParams.get("stripe");
@@ -264,20 +79,21 @@ function PayPortalInner() {
   const [stripeDemo, setStripeDemo] = useState(false);
   const [stripeSession, setStripeSession] = useState<StripeSession | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent) setLoading(true);
     setError(null);
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
     const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
     setProfile(p as Profile);
     if (!p?.customer_id) {
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
 
@@ -345,8 +161,24 @@ function PayPortalInner() {
       return still.size ? still : new Set(open.map((i) => i.id));
     });
 
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, [supabase, preselectInvoice]);
+
+  const completePaymentAndRedirect = useCallback(
+    async (receipt: Receipt) => {
+      setStripeSession(null);
+      setMemo("");
+      setCustomAmount("");
+      setPartialMode(false);
+      setSuccess(receipt);
+      await load({ silent: true });
+      const cleanUrl = preselectInvoice ? `/customer/pay?invoice=${preselectInvoice}` : "/customer/pay";
+      router.replace(cleanUrl, { scroll: false });
+      router.refresh();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [load, preselectInvoice, router],
+  );
 
   useEffect(() => {
     void load();
@@ -372,15 +204,13 @@ function PayPortalInner() {
         if (!res.ok) {
           setError(data.error ?? "Could not finalize Stripe payment.");
         } else {
-          setSuccess({
+          await completePaymentAndRedirect({
             paymentNumbers: data.paymentNumbers ?? [],
             totalPaid: data.totalPaid ?? 0,
             method: data.method ?? "Stripe",
             paidAt: data.paidAt ?? new Date().toISOString(),
             invoiceLabels: data.invoiceLabels ?? [],
           });
-          setStripeSession(null);
-          await load();
         }
       } catch {
         if (!cancelled) setError("Could not finalize Stripe payment.");
@@ -391,7 +221,7 @@ function PayPortalInner() {
     return () => {
       cancelled = true;
     };
-  }, [stripeReturn, paymentIntentFromUrl, load]);
+  }, [stripeReturn, paymentIntentFromUrl, completePaymentAndRedirect]);
 
   void clientSecretFromUrl; // reserved for full return_url flows
 
@@ -537,18 +367,13 @@ function PayPortalInner() {
         setBusy(false);
         return;
       }
-      setSuccess({
+      await completePaymentAndRedirect({
         paymentNumbers: data.paymentNumbers ?? [],
         totalPaid: data.totalPaid ?? 0,
         method: data.method ?? "Stripe",
         paidAt: data.paidAt ?? new Date().toISOString(),
         invoiceLabels: data.invoiceLabels ?? [],
       });
-      setStripeSession(null);
-      setMemo("");
-      setCustomAmount("");
-      setPartialMode(false);
-      await load();
     } catch {
       setError("Could not record payment on invoices.");
     }
@@ -619,7 +444,7 @@ function PayPortalInner() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div id="pay-balance-summary" className="grid gap-3 sm:grid-cols-3 scroll-mt-4">
         <StatCard
           label="Balance Due"
           value={formatMoney(totalDue)}
@@ -891,7 +716,7 @@ function PayPortalInner() {
                   </button>
                 </div>
               ) : (
-                <PayPageStripeForm
+                <StripeCheckout
                   clientSecret={stripeSession.clientSecret}
                   publishableKey={stripeSession.publishableKey}
                   amount={stripeSession.amount}

@@ -157,6 +157,74 @@ export function formatPaymentMethodLabel(kind: PayMethodKind, last4?: string): s
   return "Check";
 }
 
+/** Values allowed by payments_payment_method_check in Postgres. */
+export const ALLOWED_PAYMENT_METHODS = [
+  "Check",
+  "Credit Card",
+  "ACH",
+  "Bank Transfer",
+  "Other",
+] as const;
+
+export type AllowedPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
+
+export function normalizePaymentMethod(raw: string): AllowedPaymentMethod {
+  const trimmed = raw.trim();
+  if ((ALLOWED_PAYMENT_METHODS as readonly string[]).includes(trimmed)) {
+    return trimmed as AllowedPaymentMethod;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("card")) return "Credit Card";
+  if (lower.includes("ach")) return "ACH";
+  if (lower.includes("bank")) return "Bank Transfer";
+  if (lower.includes("check")) return "Check";
+  return "Other";
+}
+
+type StripePaymentMethodShape = {
+  type?: string | null;
+  card?: { last4?: string | null } | null;
+  us_bank_account?: { last4?: string | null } | null;
+};
+
+/** Map Stripe PaymentMethod to DB-safe tender + customer-facing label. */
+export function stripePortalPaymentMethod(
+  pm: StripePaymentMethodShape | null | string | undefined,
+): { method: AllowedPaymentMethod; display: string } {
+  if (!pm || typeof pm === "string") {
+    return { method: "Credit Card", display: "Credit Card" };
+  }
+  if (pm.card) {
+    const last4 = pm.card.last4;
+    return {
+      method: "Credit Card",
+      display: last4 ? `Credit Card ···· ${last4}` : "Credit Card",
+    };
+  }
+  if (pm.us_bank_account) {
+    const last4 = pm.us_bank_account.last4;
+    return {
+      method: "ACH",
+      display: last4 ? `ACH ···· ${last4}` : "ACH",
+    };
+  }
+  const type = pm.type ?? "";
+  if (type === "card") return { method: "Credit Card", display: "Credit Card" };
+  if (type === "us_bank_account") return { method: "ACH", display: "ACH" };
+  return { method: "Other", display: type ? `Stripe ${type}` : "Stripe" };
+}
+
+export function portalPaymentNotes(
+  detail: string,
+  memo?: string | null,
+  reference?: string | null,
+): string {
+  const parts = [detail.trim()];
+  if (memo?.trim()) parts.push(memo.trim());
+  if (reference?.trim()) parts.push(reference.trim());
+  return parts.join(" · ").slice(0, 500);
+}
+
 export type AllocatableInvoice = {
   id: string;
   invoice_number: string;
