@@ -34,6 +34,7 @@ import type {
   Part,
   Profile,
   TechnicianLabor,
+  Vendor,
   WorkOrder,
   WorkOrderPart,
   AdditionalWorkRequest,
@@ -83,6 +84,12 @@ import {
   daysPastScheduled,
 } from "@/lib/technician-schedule";
 import { statusAfterPlacingOnSchedule } from "@/lib/work-order-status";
+import {
+  assignTargetFromWorkOrder,
+  assignmentPatchFromTarget,
+  decodeAssignTarget,
+  encodeAssignTarget,
+} from "@/lib/work-order-assign";
 import {
   approvedTimeOffOnDay,
   formatTimeOffLabel,
@@ -224,6 +231,7 @@ export default function TechnicianSchedulePage() {
   const [closeoutBusyId, setCloseoutBusyId] = useState<string | null>(null);
   const [closeoutMessage, setCloseoutMessage] = useState<string | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
+  const [portalVendors, setPortalVendors] = useState<Vendor[]>([]);
   const [timeOffRanges, setTimeOffRanges] = useState<TimeOffRange[]>([]);
   const [timeOffLoadError, setTimeOffLoadError] = useState<string | null>(null);
   const [scheduleForm, setScheduleForm] = useState({
@@ -234,9 +242,9 @@ export default function TechnicianSchedulePage() {
     endHour: "11",
     endMinute: "00",
     endPeriod: "AM" as Meridiem,
-    assigned_technician_id: "",
+    assign_target: "",
   });
-  const [bulkForm, setBulkForm] = useState({ scheduled_date: "", assigned_technician_id: "" });
+  const [bulkForm, setBulkForm] = useState({ scheduled_date: "", assign_target: "" });
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [scheduleSaved, setScheduleSaved] = useState(false);
   const [scheduleDirty, setScheduleDirty] = useState(false);
@@ -303,7 +311,9 @@ export default function TechnicianSchedulePage() {
       setScheduleForm((prev) => ({
         ...prev,
         scheduled_date: suggestDay,
-        assigned_technician_id: prev.assigned_technician_id || wo.assigned_technician_id || "",
+        assign_target:
+          prev.assign_target ||
+          encodeAssignTarget(assignTargetFromWorkOrder(wo)),
       }));
     }
 
@@ -393,7 +403,12 @@ export default function TechnicianSchedulePage() {
   }, [supabase]);
 
   const loadWorkOrders = useCallback(
-    async (techId?: string, role?: Profile["role"], techRoster?: Profile[]) => {
+    async (
+      techId?: string,
+      role?: Profile["role"],
+      techRoster?: Profile[],
+      vendorRoster?: Vendor[],
+    ) => {
       let query = supabase
         .from("work_orders")
         .select("*, customers(id, name)")
@@ -409,26 +424,51 @@ export default function TechnicianSchedulePage() {
       const techMap: Record<string, Profile> = {};
       for (const t of roster) techMap[t.id] = t;
 
-      const missingIds = Array.from(
+      const vendors = vendorRoster ?? portalVendors;
+      const vendorMap: Record<string, Vendor> = {};
+      for (const v of vendors) vendorMap[v.id] = v;
+
+      const missingTechIds = Array.from(
         new Set(
           rows
             .map((r) => r.assigned_technician_id)
             .filter((id): id is string => typeof id === "string" && id.length > 0 && !techMap[id]),
         ),
       );
-      if (missingIds.length > 0) {
-        const { data: techs } = await supabase.from("profiles").select("*").in("id", missingIds);
+      if (missingTechIds.length > 0) {
+        const { data: techs } = await supabase.from("profiles").select("*").in("id", missingTechIds);
         for (const t of (techs as Profile[]) ?? []) techMap[t.id] = t;
+      }
+
+      const missingVendorIds = Array.from(
+        new Set(
+          rows
+            .map((r) => r.assigned_vendor_id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0 && !vendorMap[id]),
+        ),
+      );
+      if (missingVendorIds.length > 0) {
+        const { data: vendRows } = await supabase
+          .from("vendors")
+          .select("id, name, approval_status, is_active")
+          .in("id", missingVendorIds);
+        for (const v of (vendRows as Vendor[]) ?? []) vendorMap[v.id] = v;
       }
 
       setWorkOrders(
         rows.map((r) => ({
           ...r,
           technician: r.assigned_technician_id ? techMap[r.assigned_technician_id] ?? null : null,
+          portal_vendor: r.assigned_vendor_id
+            ? {
+                id: r.assigned_vendor_id,
+                name: vendorMap[r.assigned_vendor_id]?.name ?? null,
+              }
+            : null,
         })),
       );
     },
-    [supabase, technicians],
+    [supabase, technicians, portalVendors],
   );
 
   const loadTimeOff = useCallback(async () => {
@@ -441,10 +481,12 @@ export default function TechnicianSchedulePage() {
   const reloadAll = useCallback(async () => {
     // Always refresh leave + work orders when possible (don't wait for profile for leave).
     await Promise.all([
-      profile ? loadWorkOrders(profile.id, profile.role, technicians) : Promise.resolve(),
+      profile
+        ? loadWorkOrders(profile.id, profile.role, technicians, portalVendors)
+        : Promise.resolve(),
       loadTimeOff(),
     ]);
-  }, [loadWorkOrders, loadTimeOff, profile, technicians]);
+  }, [loadWorkOrders, loadTimeOff, profile, technicians, portalVendors]);
 
   const loadInventory = useCallback(async () => {
     // Match Parts tab: load full inventory, then prefer active / in-stock items for the picker.
@@ -477,15 +519,23 @@ export default function TechnicianSchedulePage() {
     (async () => {
       const p = await loadProfile();
       if (cancelled) return;
-      const { data: techData } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("role", "technician")
-        .order("full_name");
+      const [{ data: techData }, { data: vendorData }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("role", "technician").order("full_name"),
+        supabase
+          .from("vendors")
+          .select("id, name, approval_status, is_active")
+          .eq("is_active", true)
+          .eq("approval_status", "Approved")
+          .order("name"),
+      ]);
       // Include inactive techs so approved leave still shows with names after deactivation.
       const roster = (techData as Profile[]) ?? [];
-      if (!cancelled) setTechnicians(roster);
-      if (p) await loadWorkOrders(p.id, p.role, roster);
+      const vendors = (vendorData as Vendor[]) ?? [];
+      if (!cancelled) {
+        setTechnicians(roster);
+        setPortalVendors(vendors);
+      }
+      if (p) await loadWorkOrders(p.id, p.role, roster, vendors);
       if (!cancelled) {
         await Promise.all([loadInventory(), loadTimeOff()]);
       }
@@ -521,7 +571,7 @@ export default function TechnicianSchedulePage() {
       endHour: endParts.hour12,
       endMinute: snapMinuteOption(endParts.minute),
       endPeriod: endParts.period,
-      assigned_technician_id: wo.assigned_technician_id ?? "",
+      assign_target: encodeAssignTarget(assignTargetFromWorkOrder(wo)),
     });
     setScheduleError(null);
   }, [selectedId, workOrders, scheduleDirty]);
@@ -924,6 +974,8 @@ export default function TechnicianSchedulePage() {
       scheduled_end_time?: string | null;
       estimated_labor_hours?: number | null;
       assigned_technician_id?: string | null;
+      assigned_vendor_id?: string | null;
+      vendor_assignment_status?: "Pending" | "Accepted" | "Rejected" | null;
       status?: string;
       completion_date?: string | null;
       updated_at?: string;
@@ -932,10 +984,19 @@ export default function TechnicianSchedulePage() {
     setWorkOrders((prev) =>
       prev.map((w) => {
         if (w.id !== woId) return w;
-        const next = { ...w, ...patch };
+        const next: ScheduleWo = { ...w, ...patch };
         if ("assigned_technician_id" in patch) {
           const tid = patch.assigned_technician_id;
           next.technician = tid ? technicians.find((t) => t.id === tid) ?? w.technician : null;
+        }
+        if ("assigned_vendor_id" in patch) {
+          const vid = patch.assigned_vendor_id;
+          next.portal_vendor = vid
+            ? {
+                id: vid,
+                name: portalVendors.find((v) => v.id === vid)?.name ?? w.portal_vendor?.name ?? null,
+              }
+            : null;
         }
         return next;
       }),
@@ -1064,20 +1125,26 @@ export default function TechnicianSchedulePage() {
   async function persistScheduleUpdate(
     woId: string,
     patch: {
-      scheduled_date: string;
-      scheduled_start_time: string;
+      scheduled_date?: string;
+      scheduled_start_time?: string;
       scheduled_end_time?: string;
-      estimated_labor_hours: number;
+      estimated_labor_hours?: number;
       assigned_technician_id?: string | null;
+      assigned_vendor_id?: string | null;
+      vendor_assignment_status?: "Pending" | "Accepted" | "Rejected" | null;
+      status?: string;
     },
   ): Promise<boolean> {
     const current = workOrders.find((w) => w.id === woId);
-    const nextStatus =
-      isServiceManager &&
-      patch.scheduled_date != null &&
-      String(patch.scheduled_date).trim() !== ""
+    const vendorPending =
+      !!patch.assigned_vendor_id && patch.vendor_assignment_status === "Pending";
+    const nextStatus = vendorPending
+      ? patch.status ?? "Requested"
+      : isServiceManager &&
+          patch.scheduled_date != null &&
+          String(patch.scheduled_date).trim() !== ""
         ? statusAfterPlacingOnSchedule(current?.status)
-        : null;
+        : patch.status ?? null;
     const payload: Record<string, unknown> = {
       ...patch,
       updated_at: new Date().toISOString(),
@@ -1089,11 +1156,18 @@ export default function TechnicianSchedulePage() {
       const { scheduled_end_time: _, ...fallback } = payload;
       const { error: err2 } = await supabase.from("work_orders").update(fallback).eq("id", woId);
       if (err2) return false;
-      if (nextStatus) applyLocalScheduleUpdate(woId, { status: nextStatus });
+      applyLocalScheduleUpdate(woId, {
+        ...patch,
+        scheduled_end_time: undefined,
+        ...(nextStatus ? { status: nextStatus } : {}),
+      });
       return true;
     }
-    if (!error && nextStatus) {
-      applyLocalScheduleUpdate(woId, { status: nextStatus });
+    if (!error) {
+      applyLocalScheduleUpdate(woId, {
+        ...patch,
+        ...(nextStatus ? { status: nextStatus } : {}),
+      });
     }
     return !error;
   }
@@ -1287,16 +1361,13 @@ export default function TechnicianSchedulePage() {
       return;
     }
 
+    const assignTarget = decodeAssignTarget(scheduleForm.assign_target);
     if (
-      technicianOnApprovedTimeOff(
-        timeOffRanges,
-        scheduleForm.assigned_technician_id || null,
-        scheduleForm.scheduled_date,
-      )
+      assignTarget.kind === "tech" &&
+      technicianOnApprovedTimeOff(timeOffRanges, assignTarget.id, scheduleForm.scheduled_date)
     ) {
       const techNameLabel =
-        technicians.find((t) => t.id === scheduleForm.assigned_technician_id)?.full_name ||
-        "This technician";
+        technicians.find((t) => t.id === assignTarget.id)?.full_name || "This technician";
       setScheduleError(
         `${techNameLabel} has approved time off on ${scheduleForm.scheduled_date}. That day is blocked — choose another date or technician.`,
       );
@@ -1312,16 +1383,23 @@ export default function TechnicianSchedulePage() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    const nextStatus = isServiceManager
-      ? statusAfterPlacingOnSchedule(workOrders.find((w) => w.id === selectedId)?.status)
-      : null;
+    const currentWo = workOrders.find((w) => w.id === selectedId);
+    const assignee = assignmentPatchFromTarget(assignTarget, currentWo);
+    const vendorPending =
+      assignTarget.kind === "vendor" && assignee.vendor_assignment_status === "Pending";
+
+    const nextStatus = vendorPending
+      ? "Requested"
+      : isServiceManager
+        ? statusAfterPlacingOnSchedule(currentWo?.status)
+        : null;
 
     const payload = {
       scheduled_date: scheduleForm.scheduled_date,
       scheduled_start_time: startTimeDb,
       scheduled_end_time: endTimeDb,
       estimated_labor_hours: hours,
-      assigned_technician_id: scheduleForm.assigned_technician_id || null,
+      ...assignee,
       updated_at: new Date().toISOString(),
       ...(nextStatus ? { status: nextStatus } : {}),
     };
@@ -1346,6 +1424,8 @@ export default function TechnicianSchedulePage() {
           scheduled_date: payload.scheduled_date,
           scheduled_start_time: payload.scheduled_start_time,
           estimated_labor_hours: payload.estimated_labor_hours,
+          ...assignee,
+          ...(nextStatus ? { status: nextStatus } : {}),
         });
       } else {
         const { error: err2 } = await supabase.from("work_orders").update(payload).eq("id", selectedId);
@@ -1359,27 +1439,44 @@ export default function TechnicianSchedulePage() {
           scheduled_start_time: payload.scheduled_start_time,
           scheduled_end_time: payload.scheduled_end_time,
           estimated_labor_hours: payload.estimated_labor_hours,
+          ...assignee,
+          ...(nextStatus ? { status: nextStatus } : {}),
         });
       }
     } else if (updated) {
       const tech = payload.assigned_technician_id
         ? technicians.find((t) => t.id === payload.assigned_technician_id) ?? null
         : null;
+      const portalVendor = payload.assigned_vendor_id
+        ? {
+            id: payload.assigned_vendor_id,
+            name:
+              portalVendors.find((v) => v.id === payload.assigned_vendor_id)?.name ?? null,
+          }
+        : null;
       setWorkOrders((prev) =>
         prev.map((w) =>
-          w.id === selectedId ? { ...(updated as ScheduleWo), technician: tech } : w,
+          w.id === selectedId
+            ? { ...(updated as ScheduleWo), technician: tech, portal_vendor: portalVendor }
+            : w,
         ),
       );
     }
 
-    const techLabel =
-      technicians.find((t) => t.id === scheduleForm.assigned_technician_id)?.full_name || "Unassigned";
+    const assigneeLabel =
+      assignTarget.kind === "tech"
+        ? technicians.find((t) => t.id === assignTarget.id)?.full_name || "Technician"
+        : assignTarget.kind === "vendor"
+          ? portalVendors.find((v) => v.id === assignTarget.id)?.name || "Vendor"
+          : "Unassigned";
     await logActivity(supabase, {
       userId: user?.id ?? null,
       action: "rescheduled",
       recordType: "work_order",
       recordId: selectedId,
-      newValue: `${payload.scheduled_date} ${minutesToLabel(startMin)}–${minutesToLabel(endMin)} · ${techLabel}`,
+      newValue: `${payload.scheduled_date} ${minutesToLabel(startMin)}–${minutesToLabel(endMin)} · ${assigneeLabel}${
+        vendorPending ? " (vendor pending)" : ""
+      }`,
     });
 
     const startParts = minutesToClockParts(startMin);
@@ -1454,16 +1551,25 @@ export default function TechnicianSchedulePage() {
     setBusy(true);
     setScheduleError(null);
     for (const id of bulkSelected) {
+      const bulkTarget = decodeAssignTarget(bulkForm.assign_target);
+      const currentWo = workOrders.find((w) => w.id === id);
+      const assigneePatch =
+        bulkTarget.kind === "none"
+          ? null
+          : assignmentPatchFromTarget(bulkTarget, currentWo);
       const patch: {
         scheduled_date?: string;
         scheduled_start_time?: string;
         scheduled_end_time?: string;
         estimated_labor_hours?: number;
         assigned_technician_id?: string | null;
-      } = { assigned_technician_id: bulkForm.assigned_technician_id || null };
+        assigned_vendor_id?: string | null;
+        vendor_assignment_status?: "Pending" | "Accepted" | "Rejected" | null;
+        status?: string;
+      } = assigneePatch ? { ...assigneePatch } : {};
       if (bulkForm.scheduled_date) {
         const assignTech =
-          bulkForm.assigned_technician_id || techIdForScheduleBlock(id);
+          assigneePatch?.assigned_technician_id || techIdForScheduleBlock(id);
         if (isPtoBlockedDay(bulkForm.scheduled_date, id, assignTech)) {
           setScheduleError(ptoBlockMessage(bulkForm.scheduled_date, assignTech));
           continue;
@@ -1473,7 +1579,15 @@ export default function TechnicianSchedulePage() {
         patch.scheduled_start_time = wo?.scheduled_start_time ?? formatTimeForDb(9 * 60);
         patch.scheduled_end_time = wo?.scheduled_end_time ?? formatTimeForDb(11 * 60);
         patch.estimated_labor_hours = wo?.estimated_labor_hours ?? 2;
+        if (
+          assigneePatch &&
+          bulkTarget.kind === "vendor" &&
+          assigneePatch.vendor_assignment_status === "Pending"
+        ) {
+          patch.status = "Requested";
+        }
       }
+      if (Object.keys(patch).length === 0) continue;
       await persistScheduleUpdate(id, patch as Parameters<typeof persistScheduleUpdate>[1]);
     }
     setBulkSelected(new Set());
@@ -1913,18 +2027,27 @@ export default function TechnicianSchedulePage() {
                   onChange={(e) => setBulkForm({ ...bulkForm, scheduled_date: e.target.value })}
                 />
               </FormRow>
-              <FormRow label="Technician">
+              <FormRow label="Assigned to">
                 <select
                   className="select select-bordered select-sm"
-                  value={bulkForm.assigned_technician_id}
-                  onChange={(e) => setBulkForm({ ...bulkForm, assigned_technician_id: e.target.value })}
+                  value={bulkForm.assign_target}
+                  onChange={(e) => setBulkForm({ ...bulkForm, assign_target: e.target.value })}
                 >
                   <option value="">No change</option>
-                  {technicians.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {profileLabel(t)}
-                    </option>
-                  ))}
+                  <optgroup label="Technicians">
+                    {technicians.map((t) => (
+                      <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                        {profileLabel(t)}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Vendors (portal)">
+                    {portalVendors.map((v) => (
+                      <option key={v.id} value={encodeAssignTarget({ kind: "vendor", id: v.id })}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </FormRow>
               <button type="button" className="btn btn-primary btn-sm" onClick={() => void applyBulkSchedule()} disabled={busy}>
@@ -2612,7 +2735,10 @@ export default function TechnicianSchedulePage() {
                             }}
                           >
                             <span className="font-semibold">{wo.work_order_number}</span>
-                            {wo.assigned_technician_id || wo.technician ? (
+                            {wo.assigned_technician_id ||
+                            wo.technician ||
+                            wo.assigned_vendor_id ||
+                            wo.portal_vendor ? (
                               <span className="opacity-80"> · {techName(wo).split(" ")[0]}</span>
                             ) : null}
                           </button>
@@ -2867,10 +2993,11 @@ export default function TechnicianSchedulePage() {
             {isManager ? (
               <div id="schedule-assign-panel" className="card border border-primary/20 bg-base-100 shadow">
                 <div className="card-body">
-                  <h3 className="font-semibold">Schedule & assign technician</h3>
+                  <h3 className="font-semibold">Schedule & assign</h3>
                   <p className="text-sm opacity-70">
                     Use the contract checkup criteria below (Gold / Silver / Bronze frequency), set the
-                    customer’s preferred date &amp; time, then assign a technician.
+                    customer’s preferred date &amp; time, then assign a technician or offer the job to a
+                    vendor (they accept in the vendor portal).
                   </p>
                   {selected?.manager_notes ? (
                     <div className="rounded-box border border-warning/30 bg-warning/10 px-3 py-2 text-sm whitespace-pre-line">
@@ -2898,23 +3025,38 @@ export default function TechnicianSchedulePage() {
                         required
                       />
                     </FormRow>
-                    <FormRow label="Assigned technician">
+                    <FormRow label="Assigned to">
                       <select
                         className="select select-bordered w-full"
-                        value={scheduleForm.assigned_technician_id}
+                        value={scheduleForm.assign_target}
                         onChange={(e) => {
                           setScheduleSaved(false);
                           setScheduleDirty(true);
-                          setScheduleForm({ ...scheduleForm, assigned_technician_id: e.target.value });
+                          setScheduleForm({ ...scheduleForm, assign_target: e.target.value });
                         }}
                       >
                         <option value="">Unassigned</option>
-                        {technicians.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {profileLabel(t)}
-                          </option>
-                        ))}
+                        <optgroup label="Technicians">
+                          {technicians.map((t) => (
+                            <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                              {profileLabel(t)}
+                            </option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Vendors (portal)">
+                          {portalVendors.map((v) => (
+                            <option
+                              key={v.id}
+                              value={encodeAssignTarget({ kind: "vendor", id: v.id })}
+                            >
+                              {v.name}
+                            </option>
+                          ))}
+                        </optgroup>
                       </select>
+                      <p className="mt-1 text-xs opacity-50">
+                        Vendors must accept the offer on Vendor Home before the job is fully assigned.
+                      </p>
                     </FormRow>
                     <AmpmTimeFields
                       label="Start time"

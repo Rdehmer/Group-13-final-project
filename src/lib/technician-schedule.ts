@@ -11,6 +11,8 @@ import type { Profile, WorkOrder } from "@/lib/types";
 export type ScheduleWo = WorkOrder & {
   customers?: { id?: string; name: string } | null;
   technician?: { id?: string; full_name: string | null } | null;
+  /** Portal vendor offered/assigned via assigned_vendor_id. */
+  portal_vendor?: { id?: string; name: string | null } | null;
   /** Optional explicit end time when column exists; otherwise derived. */
   scheduled_end_time?: string | null;
 };
@@ -318,7 +320,13 @@ export function markConflicts(orders: TimedWo[]): TimedWo[] {
 }
 
 export function techName(wo: ScheduleWo): string {
-  return wo.technician?.full_name?.trim() || "Unassigned";
+  const tech = wo.technician?.full_name?.trim();
+  if (tech) return tech;
+  const vendor = wo.portal_vendor?.name?.trim();
+  if (vendor) {
+    return wo.vendor_assignment_status === "Pending" ? `${vendor} (pending)` : vendor;
+  }
+  return "Unassigned";
 }
 
 export function customerName(wo: ScheduleWo): string {
@@ -334,7 +342,7 @@ export function densityRowHeight(density: "compact" | "comfortable"): number {
 export const DAY_TIMELINE_MIN_LANES = 2;
 
 export function exportDayCsv(day: Date, orders: TimedWo[]): string {
-  const header = ["Work Order", "Start", "End", "Technician", "Customer", "Status", "Category", "Conflict"];
+  const header = ["Work Order", "Start", "End", "Assignee", "Customer", "Status", "Category", "Conflict"];
   const lines = orders.map((wo) =>
     [
       wo.work_order_number,
