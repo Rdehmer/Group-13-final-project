@@ -969,7 +969,7 @@ export default function BillingPage() {
                 preview={woPreview}
                 busy={previewBusy || busy}
                 error={error}
-                pendingAwrCount={previewAwrPending || pendingAwrByWo[previewWoId] ?? 0}
+                pendingAwrCount={previewAwrPending || (pendingAwrByWo[previewWoId] ?? 0)}
                 taxRate={taxRate}
                 poInfo={poByWorkOrder[previewWoId]}
                 onCancel={() => {
@@ -1252,7 +1252,6 @@ function WorkOrderInvoicePreview({
   pendingAwrCount = 0,
   taxRate,
   poInfo,
-  pendingAwrCount,
   onCancel,
   onCreateDraft,
   onCreateReview,
@@ -1265,7 +1264,6 @@ function WorkOrderInvoicePreview({
   pendingAwrCount?: number;
   taxRate: number;
   poInfo?: PoBadge;
-  pendingAwrCount: number;
   onCancel: () => void;
   onCreateDraft: () => void;
   onCreateReview: () => void;
