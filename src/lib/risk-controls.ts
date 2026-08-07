@@ -175,5 +175,5 @@ export function riskControlSummary(row: RiskControlActivityRow): string {
   return parts.join(" · ") || "—";
 }
 
-/** Roles that may open the Risk Controls demonstration page. */
-export const RISK_CONTROLS_ROLES = ["administrator", "service_manager"] as const;
+/** Roles that may open the Risk Controls audit page. */
+export const RISK_CONTROLS_ROLES = ["administrator"] as const;

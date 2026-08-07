@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Risk Controls — manager audit of create / approve parts / release billing.
+ * Risk Controls — administrator audit of create / approve parts / release billing.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -29,7 +29,6 @@ import {
   type RiskControlCategoryId,
 } from "@/lib/risk-controls";
 import type { Profile } from "@/lib/types";
-import { profileHasModule } from "@/lib/employeePermissions";
 
 type TabFilter = "all" | RiskControlCategoryId;
 
@@ -72,7 +71,7 @@ export default function RiskControlsPage() {
     })();
   }, [supabase]);
 
-  const allowed = profile ? profileHasModule(profile, "risk_controls") : false;
+  const isAdmin = profile?.role === "administrator";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,12 +114,12 @@ export default function RiskControlsPage() {
 
   useEffect(() => {
     if (!authReady) return;
-    if (!allowed) {
+    if (!isAdmin) {
       setLoading(false);
       return;
     }
     void load();
-  }, [authReady, allowed, load]);
+  }, [authReady, isAdmin, load]);
 
   const filtered = useMemo(() => {
     if (tab === "all") return rows;
@@ -145,7 +144,7 @@ export default function RiskControlsPage() {
     return <div className="p-8 text-center opacity-60">Loading…</div>;
   }
 
-  if (!allowed) {
+  if (!isAdmin) {
     return (
       <div className="space-y-4">
         <PageHeader
@@ -154,7 +153,7 @@ export default function RiskControlsPage() {
         />
         <EmptyState
           title="Access restricted"
-          description="Risk Controls is available to administrators and service managers only."
+          description="Risk Controls is available to administrators only."
           action={
             <Link href="/dashboard" className="btn btn-outline btn-sm">
               Back to dashboard
@@ -172,11 +171,9 @@ export default function RiskControlsPage() {
         description="Who created work orders, approved extra parts, and authorized billing releases"
         actions={
           <div className="flex flex-wrap gap-2">
-            {profile?.role === "administrator" ? (
-              <Link href="/settings" className="btn btn-outline btn-sm gap-1">
-                <ArrowLeft className="h-4 w-4" /> Settings
-              </Link>
-            ) : null}
+            <Link href="/settings" className="btn btn-outline btn-sm gap-1">
+              <ArrowLeft className="h-4 w-4" /> Settings
+            </Link>
             <button
               type="button"
               className="btn btn-outline btn-sm gap-1"

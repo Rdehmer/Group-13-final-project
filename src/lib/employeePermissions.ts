@@ -137,7 +137,6 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "inbox",
     "reports",
     "invoice_cash",
-    "risk_controls",
   ],
   technician: ["technician", "time_off", "timesheets", "dispatch", "parts"],
   billing: [

@@ -133,11 +133,6 @@ export const NAV_ITEMS: NavItem[] = [
         label: "Inbox",
         roles: ["service_manager", "billing"],
       },
-      {
-        href: "/settings/risk-controls",
-        label: "Risk Controls",
-        roles: ["service_manager"],
-      },
     ],
   },
   // ── Manager / billing: Customers & portfolio ───────────────────────
