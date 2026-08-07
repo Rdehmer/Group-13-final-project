@@ -40,7 +40,7 @@ const emptyCustomerForm = {
 };
 
 /** Manager list: membership tier, one-off service (hot order), or ended membership. */
-export type ServiceTypeKind = "tier" | "hot_order" | "inactive" | "active_membership";
+export type ServiceTypeKind = "tier" | "hot_customer" | "inactive" | "active_membership";
 
 export type ServiceTypeInfo = {
   kind: ServiceTypeKind;
@@ -116,13 +116,13 @@ const TIER_RANK: Record<string, number> = { gold: 3, silver: 2, bronze: 1 };
  * Active + known tier → Gold/Silver/Bronze.
  * Active + unknown tier (until customer branch stores tier reliably) → Active membership placeholder.
  * Past contracts only → Inactive.
- * No contracts → Hot Order (one-off service, not a tier membership).
+ * No contracts → Hot Customer (break/fix prospect, not a tier membership).
  */
 export function resolveServiceType(
   contracts: Array<Pick<ServiceContract, "name" | "status" | "end_date">>,
 ): ServiceTypeInfo {
   if (!contracts.length) {
-    return { kind: "hot_order", label: "Hot Order" };
+    return { kind: "hot_customer", label: "Hot Customer" };
   }
 
   const active = contracts.filter((c) => isActiveContract(c.status));
@@ -150,7 +150,7 @@ function serviceTypeTone(info: ServiceTypeInfo): "success" | "warning" | "error"
     if (info.tierId === "silver") return "info";
     return "neutral";
   }
-  if (info.kind === "hot_order") return "info";
+  if (info.kind === "hot_customer") return "info";
   if (info.kind === "inactive") return "error";
   return "success";
 }
