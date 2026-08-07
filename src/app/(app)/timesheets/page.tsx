@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { format, parseISO, addDays } from "date-fns";
+import { format, parseISO, addDays, differenceInSeconds } from "date-fns";
 import {
   CheckCircle2,
   ChevronLeft,
@@ -23,6 +23,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PageHeader, FormRow } from "@/components/PageHeader";
+import { ColumnFilterSelect, applyColumnSortValue } from "@/components/ColumnFilterSelect";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
 import { createClient } from "@/lib/supabase/client";
@@ -97,6 +98,59 @@ function shortIso(iso: string | null) {
   }
 }
 
+type TimesheetColFilter =
+  | "when"
+  | "tech"
+  | "job"
+  | "activity"
+  | "status"
+  | "billing";
+
+type TimesheetSort = {
+  column: TimesheetColFilter | "duration";
+  direction: "asc" | "desc";
+};
+
+function uniqueSorted(values: string[]) {
+  return Array.from(new Set(values.filter((v) => v.trim() !== ""))).sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" }),
+  );
+}
+
+function jobCustomerLabel(entry: TimeEntry): string {
+  const cust = entry.customers?.name || entry.work_orders?.customers?.name || "—";
+  const wo = entry.work_orders?.work_order_number;
+  return wo ? `${wo} · ${cust}` : `Non-job · ${cust}`;
+}
+
+function techDisplayName(entry: TimeEntry): string {
+  return entry.technician?.full_name || entry.technician?.email || "—";
+}
+
+function billingDisplayLabel(entry: TimeEntry): string {
+  const key = entry.billing_status ?? "not_ready";
+  return BILLING_STATUS_LABELS[key as keyof typeof BILLING_STATUS_LABELS] ?? key;
+}
+
+function entryDurationHours(entry: TimeEntry): number {
+  if (
+    (entry.approval_status === "active" || entry.approval_status === "missing_clock_out") &&
+    entry.clock_in_at
+  ) {
+    return Math.max(0, differenceInSeconds(new Date(), parseISO(entry.clock_in_at)) / 3600);
+  }
+  const reg = Number(entry.regular_hours) || 0;
+  const ot = Number(entry.overtime_hours) || 0;
+  if (reg + ot > 0) return reg + ot;
+  if (entry.clock_in_at && entry.clock_out_at) {
+    return Math.max(
+      0,
+      differenceInSeconds(parseISO(entry.clock_out_at), parseISO(entry.clock_in_at)) / 3600,
+    );
+  }
+  return 0;
+}
+
 export default function TimesheetsPage() {
   const supabase = createClient();
   const searchParams = useSearchParams();
@@ -120,6 +174,11 @@ export default function TimesheetsPage() {
   const [filterWoNumber, setFilterWoNumber] = useState(deep.job ?? "");
   const [filterCustomer, setFilterCustomer] = useState(deep.customer ?? "");
   const [filterTech, setFilterTech] = useState(deep.tech ?? "all");
+  const [filterDate, setFilterDate] = useState("");
+  const [filterJob, setFilterJob] = useState("");
+  const [filterActivity, setFilterActivity] = useState("");
+  const [filterBilling, setFilterBilling] = useState("");
+  const [tableSort, setTableSort] = useState<TimesheetSort>({ column: "when", direction: "desc" });
   const [techs, setTechs] = useState<Profile[]>([]);
   const [linkedJobLabel, setLinkedJobLabel] = useState<string | null>(null);
   const scrollDoneForEntry = useRef<string | null>(null);
@@ -238,24 +297,10 @@ export default function TimesheetsPage() {
         technicianId: techFilter,
         workOrderId: filterWoId.trim() || undefined,
         customerId: undefined,
-        status: filterStatus,
+        status: "all",
       });
 
-      let filtered = rows;
-      if (filterCustomer.trim()) {
-        const q = filterCustomer.trim().toLowerCase();
-        filtered = filtered.filter((e) => {
-          const name = e.customers?.name || e.work_orders?.customers?.name || "";
-          return name.toLowerCase().includes(q);
-        });
-      }
-      if (filterWoNumber.trim()) {
-        const q = filterWoNumber.trim().toLowerCase();
-        filtered = filtered.filter((e) =>
-          (e.work_orders?.work_order_number || "").toLowerCase().includes(q),
-        );
-      }
-      setEntries(filtered);
+      setEntries(rows);
 
       if (filterWoId) {
         const { data: jobRow } = await supabase
@@ -335,7 +380,7 @@ export default function TimesheetsPage() {
     } finally {
       setLoading(false);
     }
-  }, [supabase, week, filterStatus, filterWoId, filterWoNumber, filterCustomer, filterTech]);
+  }, [supabase, week, filterWoId, filterTech]);
 
   useEffect(() => {
     void load();
@@ -354,8 +399,212 @@ export default function TimesheetsPage() {
     return () => window.clearTimeout(t);
   }, [highlightId, loading, entries]);
 
-  const totals = useMemo(() => sumEntries(entries), [entries]);
-  const jobBillableHours = useMemo(() => sumDispatchJobHours(entries), [entries]);
+  const columnFilterOptions = useMemo(
+    () => ({
+      when: uniqueSorted(entries.map((e) => e.entry_date)),
+      tech: uniqueSorted(entries.map(techDisplayName)),
+      job: uniqueSorted(entries.map(jobCustomerLabel)),
+      activity: uniqueSorted(entries.map((e) => ACTIVITY_LABELS[e.activity_type])),
+      status: uniqueSorted(
+        entries.map((e) => APPROVAL_LABELS[e.approval_status] ?? e.approval_status),
+      ),
+      billing: uniqueSorted(entries.map(billingDisplayLabel)),
+    }),
+    [entries],
+  );
+
+  const displayEntries = useMemo(() => {
+    let rows = [...entries];
+
+    if (filterDate) {
+      rows = rows.filter((e) => e.entry_date === filterDate);
+    }
+    if (isManager && filterTech !== "all") {
+      rows = rows.filter((e) => e.technician_id === filterTech);
+    }
+    if (filterJob) {
+      rows = rows.filter((e) => jobCustomerLabel(e) === filterJob);
+    } else {
+      if (filterCustomer.trim()) {
+        const q = filterCustomer.trim().toLowerCase();
+        rows = rows.filter((e) => {
+          const name = e.customers?.name || e.work_orders?.customers?.name || "";
+          return name.toLowerCase().includes(q);
+        });
+      }
+      if (filterWoNumber.trim()) {
+        const q = filterWoNumber.trim().toLowerCase();
+        rows = rows.filter((e) =>
+          (e.work_orders?.work_order_number || "").toLowerCase().includes(q),
+        );
+      }
+    }
+    if (filterActivity) {
+      rows = rows.filter((e) => ACTIVITY_LABELS[e.activity_type] === filterActivity);
+    }
+    if (filterStatus !== "all") {
+      rows = rows.filter((e) => e.approval_status === filterStatus);
+    }
+    if (filterBilling) {
+      rows = rows.filter((e) => billingDisplayLabel(e) === filterBilling);
+    }
+
+    const dir = tableSort.direction === "asc" ? 1 : -1;
+    rows.sort((a, b) => {
+      let cmp = 0;
+      switch (tableSort.column) {
+        case "when":
+          cmp =
+            a.entry_date.localeCompare(b.entry_date) ||
+            (a.clock_in_at || "").localeCompare(b.clock_in_at || "");
+          break;
+        case "tech":
+          cmp = techDisplayName(a).localeCompare(techDisplayName(b), undefined, {
+            sensitivity: "base",
+          });
+          break;
+        case "job":
+          cmp = jobCustomerLabel(a).localeCompare(jobCustomerLabel(b), undefined, {
+            sensitivity: "base",
+          });
+          break;
+        case "activity":
+          cmp = ACTIVITY_LABELS[a.activity_type].localeCompare(
+            ACTIVITY_LABELS[b.activity_type],
+            undefined,
+            { sensitivity: "base" },
+          );
+          break;
+        case "duration":
+          cmp = entryDurationHours(a) - entryDurationHours(b);
+          break;
+        case "status":
+          cmp = (APPROVAL_LABELS[a.approval_status] ?? a.approval_status).localeCompare(
+            APPROVAL_LABELS[b.approval_status] ?? b.approval_status,
+            undefined,
+            { sensitivity: "base" },
+          );
+          break;
+        case "billing":
+          cmp = billingDisplayLabel(a).localeCompare(billingDisplayLabel(b), undefined, {
+            sensitivity: "base",
+          });
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * dir;
+    });
+
+    return rows;
+  }, [
+    entries,
+    filterDate,
+    filterTech,
+    filterJob,
+    filterCustomer,
+    filterWoNumber,
+    filterActivity,
+    filterStatus,
+    filterBilling,
+    isManager,
+    tableSort,
+  ]);
+
+  const hasActiveColumnFilters =
+    filterDate !== "" ||
+    filterTech !== "all" ||
+    filterJob !== "" ||
+    filterCustomer.trim() !== "" ||
+    filterWoNumber.trim() !== "" ||
+    filterActivity !== "" ||
+    filterStatus !== "all" ||
+    filterBilling !== "" ||
+    filterWoId !== "" ||
+    highlightId !== null;
+
+  function clearColumnFilters() {
+    setFilterDate("");
+    setFilterTech("all");
+    setFilterJob("");
+    setFilterCustomer("");
+    setFilterWoNumber("");
+    setFilterActivity("");
+    setFilterStatus("all");
+    setFilterBilling("");
+    setFilterWoId("");
+    setHighlightId(null);
+    setLinkedJobLabel(null);
+    setTableSort({ column: "when", direction: "desc" });
+  }
+
+  function onColumnFilterChange(column: TimesheetColFilter | "duration", value: string) {
+    if (applyColumnSortValue(value, (direction) => setTableSort({ column, direction }))) {
+      return;
+    }
+    switch (column) {
+      case "when":
+        setFilterDate(value);
+        break;
+      case "tech": {
+        if (!value) {
+          setFilterTech("all");
+          break;
+        }
+        const match = techs.find((t) => (t.full_name || t.email) === value);
+        setFilterTech(match?.id ?? "all");
+        break;
+      }
+      case "job":
+        setFilterJob(value);
+        if (value) {
+          setFilterWoNumber("");
+          setFilterCustomer("");
+        }
+        break;
+      case "activity":
+        setFilterActivity(value);
+        break;
+      case "status": {
+        if (!value) {
+          setFilterStatus("all");
+          break;
+        }
+        const statusKey = (Object.keys(APPROVAL_LABELS) as TimeApprovalStatus[]).find(
+          (k) => APPROVAL_LABELS[k] === value,
+        );
+        setFilterStatus(statusKey ?? "all");
+        break;
+      }
+      case "billing":
+        setFilterBilling(value);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function timesheetColumnFilter(
+    column: TimesheetColFilter | "duration",
+    label: string,
+    options: string[],
+    sortMode: "text" | "numeric" | "date" = "text",
+    currentValue = "",
+  ) {
+    return (
+      <ColumnFilterSelect
+        label={label}
+        value={currentValue}
+        options={options}
+        sortMode={sortMode}
+        activeSort={tableSort.column === column ? { direction: tableSort.direction } : null}
+        onChange={(v) => onColumnFilterChange(column, v)}
+      />
+    );
+  }
+
+  const totals = useMemo(() => sumEntries(displayEntries), [displayEntries]);
+  const jobBillableHours = useMemo(() => sumDispatchJobHours(displayEntries), [displayEntries]);
   const otherHours = useMemo(() => {
     const job = jobBillableHours;
     const rest = Math.max(0, totals.totalHours - job);
@@ -389,6 +638,8 @@ export default function TimesheetsPage() {
   }, [entries]);
 
   const exceptions = useMemo(() => detectExceptions(entries), [entries]);
+  const managerRosterView = isManager && filterTech === "all";
+
   const otMsgs = useMemo(
     () => (isManager && filterTech === "all" ? [] : weeklyOtWarnings(weekShiftHours)),
     [weekShiftHours, isManager, filterTech],
@@ -448,6 +699,13 @@ export default function TimesheetsPage() {
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  const selectedTechLabel =
+    filterTech === "all"
+      ? ""
+      : techs.find((t) => t.id === filterTech)?.full_name ||
+        techs.find((t) => t.id === filterTech)?.email ||
+        "";
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -469,10 +727,10 @@ export default function TimesheetsPage() {
                 Open job{linkedJobLabel ? ` ${linkedJobLabel}` : ""}
               </Link>
             ) : null}
-            {filterWoId || filterTech !== "all" || filterWoNumber || filterCustomer || highlightId ? (
-              <Link href="/timesheets" className="btn btn-ghost btn-sm">
+            {hasActiveColumnFilters ? (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={clearColumnFilters}>
                 Clear filters
-              </Link>
+              </button>
             ) : null}
             <button
               type="button"
@@ -595,16 +853,18 @@ export default function TimesheetsPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Today hours"
-          value={formatHours(todayShiftHours)}
+          label={managerRosterView ? "Total hours" : "Today hours"}
+          value={formatHours(managerRosterView ? totals.totalHours : todayShiftHours)}
           hint={
-            isManager && filterTech === "all"
-              ? "All technicians · My Day Clock in / out only"
-              : dayClocksWeek.filter((r) => r.work_date === todayIso()).length === 0
-                ? "My Day Clock in / out only"
-                : dayClocksWeek.some((r) => r.work_date === todayIso() && !r.clock_out_at)
-                  ? "My Day shift (live)"
-                  : "My Day clock out − clock in"
+            managerRosterView
+              ? "All techs · payroll total this week"
+              : isManager
+                ? "My Day clock in / out only"
+                : dayClocksWeek.filter((r) => r.work_date === todayIso()).length === 0
+                  ? "My Day Clock in / out only"
+                  : dayClocksWeek.some((r) => r.work_date === todayIso() && !r.clock_out_at)
+                    ? "My Day shift (live)"
+                    : "My Day clock out − clock in"
           }
           scrollTarget="timesheet-entries"
           onClick={() => setFilterStatus("all")}
@@ -613,17 +873,25 @@ export default function TimesheetsPage() {
           label="Week hours"
           value={formatHours(weekShiftHours)}
           hint={
-            isManager && filterTech === "all"
-              ? "Sum of all technicians’ My Day Clock in → out this week"
-              : "Sum of My Day Clock in → out for each day this week"
+            managerRosterView
+              ? "All techs · My Day shifts"
+              : "My Day clock in → out this week"
           }
-          danger={!(isManager && filterTech === "all") && weekShiftHours > 40}
+          danger={!managerRosterView && weekShiftHours > 40}
           scrollTarget="timesheet-entries"
         />
         <StatCard
-          label="Billable / other"
-          value={`${formatHours(jobBillableHours)} / ${formatHours(otherHours)}`}
-          hint="Billable = En Route → Done job time"
+          label={managerRosterView ? "Billable hours" : "Billable job · Other time"}
+          value={
+            managerRosterView
+              ? `${formatHours(totals.billableHours)} hrs`
+              : `${formatHours(jobBillableHours)} hrs · ${formatHours(otherHours)} hrs`
+          }
+          hint={
+            managerRosterView
+              ? "Approved billable job time (all techs)"
+              : "Job field time (En Route → Done) · shop, admin, and other payroll hours"
+          }
           scrollTarget="timesheet-entries"
         />
         <StatCard
@@ -787,80 +1055,11 @@ export default function TimesheetsPage() {
         </div>
       ) : null}
 
-      <div
-        id="timesheet-entries"
-        className="scroll-mt-4 flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-end"
-      >
-        <label className="form-control">
-          <span className="label-text text-xs">Status</span>
-          <select
-            className="select select-bordered select-sm"
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as TimeApprovalStatus | "all")}
-          >
-            <option value="all">All</option>
-            {(Object.keys(APPROVAL_LABELS) as TimeApprovalStatus[]).map((s) => (
-              <option key={s} value={s}>
-                {APPROVAL_LABELS[s]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {isManager ? (
-          <label className="form-control">
-            <span className="label-text text-xs">Technician</span>
-            <select
-              className="select select-bordered select-sm"
-              value={filterTech}
-              onChange={(e) => setFilterTech(e.target.value)}
-            >
-              <option value="all">All technicians</option>
-              {techs.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.full_name || t.email}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <label className="form-control min-w-[10rem]">
-          <span className="label-text text-xs">Job (WO #)</span>
-          <input
-            className="input input-bordered input-sm"
-            placeholder="WO-"
-            value={filterWoNumber}
-            onChange={(e) => setFilterWoNumber(e.target.value)}
-          />
-        </label>
-        {filterWoId ? (
-          <div className="form-control">
-            <span className="label-text text-xs">Linked job</span>
-            <div className="flex items-center gap-2">
-              <Link
-                href={`/work-orders/${filterWoId}`}
-                className="btn btn-outline btn-sm"
-              >
-                {linkedJobLabel ?? "Open"}
-              </Link>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setFilterWoId("")}
-              >
-                Clear job
-              </button>
-            </div>
-          </div>
-        ) : null}
-        <label className="form-control">
-          <span className="label-text text-xs">Customer</span>
-          <input
-            className="input input-bordered input-sm"
-            placeholder="Name…"
-            value={filterCustomer}
-            onChange={(e) => setFilterCustomer(e.target.value)}
-          />
-        </label>
+      <div id="timesheet-entries" className="scroll-mt-4">
+        <p className="text-xs opacity-60">
+          Use the column filters below the headers to narrow by date, technician, job, activity,
+          status, or billing. Each dropdown also includes sort options.
+        </p>
       </div>
 
       {(isTech || isApprover) && (
@@ -970,6 +1169,16 @@ export default function TimesheetsPage() {
             ) : undefined
           }
         />
+      ) : displayEntries.length === 0 ? (
+        <EmptyState
+          title="No entries match these filters"
+          description="Clear column filters or pick a different value from the dropdowns under the table headers."
+          action={
+            <button type="button" className="btn btn-primary btn-sm" onClick={clearColumnFilters}>
+              Clear filters
+            </button>
+          }
+        />
       ) : (
         <DualHorizontalScroll className="rounded-box border border-base-300 bg-base-100 shadow-sm">
           <table className="table table-sm">
@@ -986,9 +1195,83 @@ export default function TimesheetsPage() {
                 <th>Flags</th>
                 <th />
               </tr>
+              <tr className="bg-base-200/40">
+                <th className="font-normal min-w-[8rem]">
+                  {timesheetColumnFilter(
+                    "when",
+                    "date",
+                    columnFilterOptions.when,
+                    "date",
+                    filterDate,
+                  )}
+                </th>
+                {isManager ? (
+                  <th className="font-normal min-w-[8rem]">
+                    {timesheetColumnFilter(
+                      "tech",
+                      "technician",
+                      columnFilterOptions.tech,
+                      "text",
+                      selectedTechLabel,
+                    )}
+                  </th>
+                ) : null}
+                <th className="font-normal min-w-[10rem]">
+                  {timesheetColumnFilter(
+                    "job",
+                    "job or customer",
+                    columnFilterOptions.job,
+                    "text",
+                    filterJob,
+                  )}
+                </th>
+                <th className="font-normal min-w-[8rem]">
+                  {timesheetColumnFilter(
+                    "activity",
+                    "activity",
+                    columnFilterOptions.activity,
+                    "text",
+                    filterActivity,
+                  )}
+                </th>
+                <th className="font-normal min-w-[7rem]">
+                  {timesheetColumnFilter("duration", "duration", [], "numeric")}
+                </th>
+                {showCost ? <th /> : null}
+                <th className="font-normal min-w-[8rem]">
+                  {timesheetColumnFilter(
+                    "status",
+                    "status",
+                    columnFilterOptions.status,
+                    "text",
+                    filterStatus === "all" ? "" : APPROVAL_LABELS[filterStatus],
+                  )}
+                </th>
+                <th className="font-normal min-w-[8rem]">
+                  {timesheetColumnFilter(
+                    "billing",
+                    "billing",
+                    columnFilterOptions.billing,
+                    "text",
+                    filterBilling,
+                  )}
+                </th>
+                <th className="font-normal">
+                  {hasActiveColumnFilters ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs whitespace-nowrap"
+                      onClick={clearColumnFilters}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </th>
+                <th />
+              </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => {
+              {displayEntries.map((entry) => {
                 const weekH = weekByTech.get(entry.technician_id) ?? 0;
                 const flags = flagEntry(entry, entries, weekH);
                 const warn = isApprover ? managerApprovalWarnings(entry, entries) : [];
@@ -1066,6 +1349,7 @@ export default function TimesheetsPage() {
                               className="link link-hover text-[10px] opacity-70"
                               onClick={() => {
                                 if (entry.work_order_id) setFilterWoId(entry.work_order_id);
+                                setFilterJob(jobCustomerLabel(entry));
                                 setHighlightId(entry.id);
                                 scrollDoneForEntry.current = null;
                               }}
