@@ -82,7 +82,6 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
 
   const [stripeConfigured, setStripeConfigured] = useState(initialStripeConfig.configured);
   const [stripeDemo, setStripeDemo] = useState(initialStripeConfig.demo);
-  const [stripeSetupHint, setStripeSetupHint] = useState<string | null>(null);
   const [stripeSession, setStripeSession] = useState<StripeSession | null>(null);
 
   const load = useCallback(async (options?: { silent?: boolean }) => {
@@ -196,7 +195,6 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
         if (!config) return;
         setStripeConfigured(Boolean(config.configured));
         setStripeDemo(Boolean(config.demo));
-        setStripeSetupHint(typeof config.setupHint === "string" ? config.setupHint : null);
       })
       .catch(() => {});
   }, []);
@@ -459,11 +457,6 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
               .
             </p>
           </div>
-        </div>
-      ) : stripeSetupHint ? (
-        <div className="alert alert-info text-sm">
-          <AlertCircle className="h-4 w-4" />
-          <span>{stripeSetupHint}</span>
         </div>
       ) : null}
 

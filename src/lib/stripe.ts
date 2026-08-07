@@ -26,9 +26,16 @@ type DemoTokenPayload = {
 
 const DEMO_TOKEN_TTL_MS = 30 * 60 * 1000;
 
-/** Standard secret keys only — restricted rk_/rkcs_ keys cannot create PaymentIntents. */
+/** Secret keys that can create PaymentIntents (standard sk_ or restricted rk_/rkcs_ with intent permissions). */
 export function isUsableStripeSecretKey(key: string): boolean {
-  return key.startsWith("sk_test_") || key.startsWith("sk_live_");
+  return (
+    key.startsWith("sk_test_") ||
+    key.startsWith("sk_live_") ||
+    key.startsWith("rk_test_") ||
+    key.startsWith("rk_live_") ||
+    key.startsWith("rkcs_test_") ||
+    key.startsWith("rkcs_live_")
+  );
 }
 
 export function isStripeConfigured(): boolean {
@@ -39,26 +46,12 @@ export function isStripeConfigured(): boolean {
 }
 
 /**
- * Simulated checkout when live Stripe keys are absent or unusable.
- * On by default (local + Vercel). Force off with STRIPE_DEMO_MODE=false.
+ * Simulated checkout when live Stripe keys are absent.
+ * Opt-in only: set STRIPE_DEMO_MODE=true (local or Vercel).
  */
 export function isStripeDemoMode(): boolean {
   if (isStripeConfigured()) return false;
-  if (process.env.STRIPE_DEMO_MODE === "false") return false;
-  return true;
-}
-
-/** Non-fatal setup note when env vars are partial or a restricted key is set. */
-export function getStripeSetupHint(): string | null {
-  const secret = process.env.STRIPE_SECRET_KEY?.trim();
-  const publishable = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim();
-  if (!secret && !publishable) return null;
-  if (!publishable) return "Add NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY for live Stripe checkout.";
-  if (!secret) return "Add STRIPE_SECRET_KEY for live Stripe checkout.";
-  if (!isUsableStripeSecretKey(secret)) {
-    return "Use a standard sk_test_ secret key in Vercel (restricted rk_ keys cannot charge cards). Demo checkout is active instead.";
-  }
-  return null;
+  return process.env.STRIPE_DEMO_MODE === "true";
 }
 
 export function canAcceptPortalPayments(): boolean {
