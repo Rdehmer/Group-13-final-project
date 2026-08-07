@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BookOpen, ClipboardList, Users } from "lucide-react";
+import { BookOpen, ClipboardList, ShieldCheck, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -68,6 +68,9 @@ export default function SettingsPage() {
             <Link href="/settings/contract-plans" className="btn btn-outline btn-sm gap-1">
               <ClipboardList className="h-4 w-4" /> Contract Plans
             </Link>
+            <Link href="/settings/risk-controls" className="btn btn-outline btn-sm gap-1">
+              <ShieldCheck className="h-4 w-4" /> Risk Controls
+            </Link>
           </div>
         }
       />
@@ -131,6 +134,19 @@ export default function SettingsPage() {
           </p>
           <Link href="/settings/gl-accounts" className="btn btn-primary btn-sm w-fit gap-1">
             <BookOpen className="h-4 w-4" /> Open GL Accounts
+          </Link>
+        </div>
+      </div>
+
+      <div className="card max-w-xl border border-base-300 bg-base-100 shadow-sm">
+        <div className="card-body gap-2">
+          <h2 className="card-title text-base">Risk Controls</h2>
+          <p className="text-sm opacity-70">
+            Audit who created work orders, approved extra parts, and authorized billing releases
+            (create vs approve vs bill).
+          </p>
+          <Link href="/settings/risk-controls" className="btn btn-primary btn-sm w-fit gap-1">
+            <ShieldCheck className="h-4 w-4" /> Open Risk Controls
           </Link>
         </div>
       </div>

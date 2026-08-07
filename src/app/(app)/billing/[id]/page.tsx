@@ -31,6 +31,7 @@ import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { EmailInvoiceModal, type EmailInvoiceRecipient } from "@/components/EmailInvoiceModal";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
+import { ActivityFeed } from "@/components/ActivityFeed";
 import { InvoicePaymentDialog } from "@/components/InvoicePaymentDialog";
 import {
   InvoicePartsCatalogPicker,
@@ -579,9 +580,10 @@ export default function InvoiceDetailPage() {
     }
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "status_change",
+      action: status === "Sent" ? "billing_release" : "status_change",
       recordType: "invoice",
       recordId: inv.id,
+      previousValue: inv.status,
       newValue: status,
     });
     // Optimistic so the select updates immediately before reload finishes
@@ -1581,6 +1583,8 @@ export default function InvoiceDetailPage() {
           </div>
         ) : null}
       </article>
+
+      <ActivityFeed className="mt-4" recordType="invoice" recordId={inv.id} />
 
       <InvoicePaymentDialog
         open={payOpen}

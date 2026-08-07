@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
+import { ActivityFeed } from "@/components/ActivityFeed";
 import { PageHeader } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
@@ -748,6 +749,7 @@ export default function BatchDetailPage() {
           </DualHorizontalScroll>
         )}
       </section>
+      <ActivityFeed className="mt-4" recordType="accounting_batch" recordId={id} />
     </div>
   );
 }

@@ -743,7 +743,7 @@ export default function PartsPage() {
       action: "purchase_order_approved",
       recordType: "purchase_order",
       recordId: row.id,
-      newValue: row.parts?.part_number ?? row.part_id,
+      newValue: `${row.parts?.part_number ?? row.part_id} × ${row.quantity_requested}`,
     });
     await loadManagerPos();
     setSuccess("Purchase order approved.");

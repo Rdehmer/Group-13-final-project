@@ -67,6 +67,11 @@ export const NAV_ITEMS: NavItem[] = [
             label: "Contract Plans",
             roles: ["administrator"],
           },
+          {
+            href: "/settings/risk-controls",
+            label: "Risk Controls",
+            roles: ["administrator"],
+          },
         ],
       },
     ],
@@ -122,6 +127,11 @@ export const NAV_ITEMS: NavItem[] = [
         /** Staff mailbox linked to customer portal Inbox threads. */
         label: "Inbox",
         roles: ["service_manager", "billing"],
+      },
+      {
+        href: "/settings/risk-controls",
+        label: "Risk Controls",
+        roles: ["service_manager"],
       },
     ],
   },

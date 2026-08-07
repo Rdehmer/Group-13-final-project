@@ -32,7 +32,8 @@ export type PermissionKey =
   | "settings"
   | "settings_gl"
   | "settings_employees"
-  | "settings_contract_plans";
+  | "settings_contract_plans"
+  | "risk_controls";
 
 /** Explicit allow/deny overrides on top of the role template (true/false). */
 export type PermissionOverrides = Partial<Record<PermissionKey, boolean>>;

@@ -591,12 +591,27 @@ export default function JobDetailPage() {
       partsLineId: (inserted as { id?: string } | null)?.id,
       userId: user?.id ?? null,
     });
+    const outsideContractPart =
+      Boolean(wo?.contract_id) &&
+      (Boolean(wo?.outside_contract) || split.billable_amount > 0) &&
+      isOutOfScope(
+        {
+          contract_id: wo?.contract_id,
+          warranty_coverage: wo?.warranty_coverage,
+          outside_contract: wo?.outside_contract,
+          under_expired_contract: wo?.under_expired_contract,
+          work_order_type: wo?.work_order_type,
+        },
+        "part",
+      );
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "part_used",
+      action: outsideContractPart ? "extra_parts_outside_contract" : "part_used",
       recordType: "work_order",
       recordId: id,
-      newValue: part.name,
+      newValue: outsideContractPart
+        ? `${part.name} × ${qty} (outside contract)`
+        : part.name,
     });
     setPartForm({ part_id: "", quantity_used: "1" });
     await load();
@@ -647,6 +662,9 @@ export default function JobDetailPage() {
 
     const warranty = Number(row.warranty_covered_amount) || 0;
     const billable = Number(row.billable_amount);
+    const stockShortageOverride =
+      Boolean(isManager && stock && delta < 0 && stock.quantity_on_hand < -delta);
+    const appliedOverride = Boolean(row.manager_override) || stockShortageOverride;
 
     const { error: updError } = await supabase
       .from("work_order_parts")
@@ -655,7 +673,7 @@ export default function JobDetailPage() {
         customer_price: Number(row.customer_price),
         warranty_covered_amount: warranty,
         billable_amount: billable,
-        manager_override: row.manager_override || (delta < 0 && isManager),
+        manager_override: appliedOverride || (delta < 0 && isManager),
       })
       .eq("id", row.id);
     if (updError) {
@@ -672,13 +690,24 @@ export default function JobDetailPage() {
     }
 
     const { data: { user } } = await supabase.auth.getUser();
-    await logActivity(supabase, {
-      userId: user?.id ?? null,
-      action: "part_updated",
-      recordType: "work_order",
-      recordId: id,
-      newValue: row.parts?.name ?? row.part_id,
-    });
+    const partLabel = row.parts?.name ?? row.part_id;
+    if (stockShortageOverride) {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "extra_parts_approved",
+        recordType: "work_order",
+        recordId: id,
+        newValue: `${partLabel} · stock override qty ${newQty}`,
+      });
+    } else {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "part_updated",
+        recordType: "work_order",
+        recordId: id,
+        newValue: partLabel,
+      });
+    }
     setSavedMsg("Parts row saved");
     await load();
     setSaving(false);
@@ -727,7 +756,8 @@ export default function JobDetailPage() {
       .eq("id", awrId);
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "awr_decision",
+      action:
+        approval_status === "Approved" ? "extra_work_approved" : "extra_work_rejected",
       recordType: "work_order",
       recordId: id,
       newValue: approval_status,
