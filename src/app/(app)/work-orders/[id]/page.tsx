@@ -460,9 +460,10 @@ export default function JobDetailPage() {
     const techId =
       profile.role === "technician"
         ? profile.id
-        : decodeAssignTarget(assignTarget).kind === "tech"
-          ? decodeAssignTarget(assignTarget).id
-          : wo?.assigned_technician_id || profile.id;
+        : (() => {
+            const assign = decodeAssignTarget(assignTarget);
+            return assign.kind === "tech" ? assign.id : wo?.assigned_technician_id || profile.id;
+          })();
     const techProfile =
       technicians.find((t) => t.id === techId) ||
       (techId === profile.id ? profile : null);

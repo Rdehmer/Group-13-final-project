@@ -28,9 +28,24 @@ import {
   updateWorkItemStatus,
 } from "@/lib/vendorPortal";
 
-type AssignedJob = WorkOrder & {
-  customers?: { name?: string | null; phone?: string | null } | null;
+type AssignedJob = {
+  id: string;
+  work_order_number: string;
+  status: string;
+  priority: WorkOrder["priority"];
+  scheduled_date: string | null;
+  dispatch_status?: string | null;
+  problem_description: string | null;
+  requested_service: string | null;
+  vendor_assignment_status?: WorkOrder["vendor_assignment_status"];
+  customers?: { name?: string | null; phone?: string | null } | { name?: string | null; phone?: string | null }[] | null;
 };
+
+function assignedJobCustomer(job: AssignedJob) {
+  const customers = job.customers;
+  if (!customers) return null;
+  return Array.isArray(customers) ? customers[0] ?? null : customers;
+}
 
 export default function VendorPortalPage() {
   const supabase = createClient();
@@ -296,8 +311,9 @@ export default function VendorPortalPage() {
           ) : (
             <ul className="space-y-3">
               {pendingJobs.map((job) => {
-                const customerName = job.customers?.name ?? "Customer";
-                const phone = job.customers?.phone?.trim();
+                const customer = assignedJobCustomer(job);
+                const customerName = customer?.name ?? "Customer";
+                const phone = customer?.phone?.trim();
                 const summary =
                   job.problem_description || job.requested_service || "No description";
                 return (
@@ -342,8 +358,9 @@ export default function VendorPortalPage() {
               })}
 
               {acceptedJobs.map((job) => {
-                const customerName = job.customers?.name ?? "Customer";
-                const phone = job.customers?.phone?.trim();
+                const customer = assignedJobCustomer(job);
+                const customerName = customer?.name ?? "Customer";
+                const phone = customer?.phone?.trim();
                 const summary =
                   job.problem_description || job.requested_service || "No description";
                 const statusLabel = job.dispatch_status || job.status;
