@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   canAcceptPortalPayments,
   getStripePublishableKey,
+  getStripeSetupHint,
   isStripeConfigured,
   isStripeDemoMode,
 } from "@/lib/stripe";
@@ -15,5 +16,6 @@ export async function GET() {
     live: isStripeConfigured(),
     demo: isStripeDemoMode(),
     publishableKey: getStripePublishableKey() || null,
+    setupHint: getStripeSetupHint(),
   });
 }

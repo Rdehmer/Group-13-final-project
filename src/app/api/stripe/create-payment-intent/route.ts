@@ -29,7 +29,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error:
-            "Stripe is not configured. Add STRIPE_SECRET_KEY and NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY to .env.local.",
+            "Stripe is not configured. Add Stripe keys or enable demo checkout.",
         },
         { status: 503 },
       );

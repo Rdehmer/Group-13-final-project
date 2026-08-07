@@ -44,6 +44,8 @@ Password for all demo users: **`DemoPass123!`**
 | billing@equipmentiq-demo.test | Billing Employee | Billing |
 | customer1@equipmentiq-demo.test | Customer | Customer portal (Northwind Cold Storage) |
 
+Customer **Payments** (`/customer/pay`) works without Stripe keys — demo checkout simulates card payments (local and Vercel). Add Stripe test keys only for live Stripe Elements checkout.
+
 Extra technicians: tech2–tech5@equipmentiq-demo.test
 
 ## What to click to test (quick tour)
