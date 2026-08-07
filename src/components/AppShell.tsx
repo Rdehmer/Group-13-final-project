@@ -101,7 +101,7 @@ function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/scheduling" && role === "technician") return "Hours";
   if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
-  if (item.href === "/dashboard" && role === "administrator") return "Admin home";
+  if (item.href === "/dashboard" && role === "administrator") return "Admin Dashboard";
   return item.label;
 }
 

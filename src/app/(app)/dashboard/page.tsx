@@ -6,6 +6,7 @@ import {
   parseISO,
   startOfDay,
   startOfMonth,
+  subDays,
   subMonths,
 } from "date-fns";
 import { createClient } from "@/lib/supabase/server";
@@ -20,14 +21,19 @@ import {
   type InvoiceActivityPoint,
 } from "@/components/DashboardCharts";
 import { ManagerDashboardStudio } from "@/components/ManagerDashboardStudio";
-import {
-  AdminDashboardHome,
-  summarizeStaffProfiles,
-} from "@/components/AdminDashboardHome";
+import { AdminDashboardStudio } from "@/components/AdminDashboardStudio";
+import { summarizeStaffProfiles } from "@/components/AdminDashboardHome";
 import { formatMoney } from "@/lib/calculations";
 import { relatedName } from "@/lib/relations";
 import { fetchManagerUnreadInboxCount } from "@/lib/manager-inbox";
-import type { UserRole } from "@/lib/types";
+import type { UserRole, WorkOrder, TechnicianLabor, WorkOrderPart } from "@/lib/types";
+import { arAgingSummary, jobProfitability, openInvoicesAt, type InvoiceWithCustomer } from "@/lib/reports";
+import { isBatchableInvoiceStatus } from "@/lib/batches";
+import { loadTimeEntries, sumEntries } from "@/lib/timesheets";
+
+/** Always re-read Supabase so admin/manager see the same live ops data. */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function safeNumber(value: unknown): number {
   const n = Number(value);
@@ -76,7 +82,7 @@ function groupPieSlices(
 
 /**
  * Service managers get the live ops widget board.
- * Administrators get a lean control-plane home (users / access first).
+ * Administrators get a customizable company / control-plane dashboard.
  */
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -84,25 +90,8 @@ export default async function DashboardPage() {
   const isAdmin = profile?.role === "administrator";
   const isServiceManager = profile?.role === "service_manager";
   const isManager = isServiceManager;
+  const needsOpsMetrics = isAdmin || isServiceManager;
   const canManageContracts = isServiceManager || isAdmin;
-
-  if (isAdmin) {
-    const { data: staffRows } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, role, is_active")
-      .in("role", ["administrator", "service_manager", "technician", "billing"])
-      .order("full_name");
-    const data = summarizeStaffProfiles(
-      ((staffRows as {
-        id: string;
-        full_name: string | null;
-        email: string;
-        role: UserRole;
-        is_active: boolean;
-      }[] | null) ?? []),
-    );
-    return <AdminDashboardHome data={data} />;
-  }
 
   const [
     { count: customerCount },
@@ -116,6 +105,7 @@ export default async function DashboardPage() {
     { data: allParts },
     openPulseResult,
     timeOffResult,
+    staffResult,
   ] = await Promise.all([
     supabase.from("customers").select("*", { count: "exact", head: true }).eq("status", "Active"),
     supabase
@@ -134,15 +124,25 @@ export default async function DashboardPage() {
       .order("scheduled_date", { ascending: true })
       .limit(8),
     supabase.from("work_orders").select("scheduled_date"),
-    supabase.from("invoices").select("invoice_date, invoice_total, status, remaining_balance"),
-    isManager
-      ? supabase.from("payments").select("payment_date, payment_amount")
-      : Promise.resolve({ data: null as { payment_date: string; payment_amount: number }[] | null, error: null }),
+    supabase
+      .from("invoices")
+      .select(
+        "id, invoice_date, due_date, invoice_total, status, remaining_balance, customer_id, work_order_id, labor_charges, parts_charges, recurring_service_charge, additional_charges, discounts, warranty_deductions, tax",
+      ),
+    needsOpsMetrics
+      ? supabase.from("payments").select("id, payment_date, payment_amount")
+      : Promise.resolve({
+          data: null as { id?: string; payment_date: string; payment_amount: number }[] | null,
+          error: null,
+        }),
     supabase
       .from("service_contracts")
       .select("id, name, status, end_date, contract_price, contract_type, customers(name)"),
-    supabase.from("parts").select("id, name, part_number, quantity_on_hand, reorder_level").eq("is_active", true),
-    isManager
+    supabase
+      .from("parts")
+      .select("id, name, part_number, quantity_on_hand, reorder_level")
+      .eq("is_active", true),
+    needsOpsMetrics
       ? supabase
           .from("work_orders")
           .select("id, scheduled_date, assigned_technician_id, priority, status")
@@ -151,6 +151,13 @@ export default async function DashboardPage() {
     isManager
       ? supabase.from("time_off_requests").select("id, status, start_date, end_date")
       : Promise.resolve({ data: null as TimeOffRow[] | null, error: null }),
+    isAdmin
+      ? supabase
+          .from("profiles")
+          .select("id, full_name, email, role, is_active")
+          .in("role", ["administrator", "service_manager", "technician", "billing"])
+          .order("full_name")
+      : Promise.resolve({ data: null }),
   ]);
 
   const invoices = invoicesResult.data;
@@ -159,7 +166,7 @@ export default async function DashboardPage() {
     : null;
   const payments = paymentsResult.data;
   const paymentError =
-    isManager && "error" in paymentsResult && paymentsResult.error?.message
+    needsOpsMetrics && "error" in paymentsResult && paymentsResult.error?.message
       ? "Invoice activity could not be loaded. Please try again."
       : null;
   const chartError = invoiceError ?? paymentError;
@@ -252,6 +259,7 @@ export default async function DashboardPage() {
 
   const openPulse = (openPulseResult.data as OpenWoPulse[] | null) ?? [];
   const unscheduledOpen = openPulse.filter((wo) => !wo.scheduled_date).length;
+  const unassignedOpen = openPulse.filter((wo) => !wo.assigned_technician_id).length;
 
   const timeOffRows = (timeOffResult.data as TimeOffRow[] | null) ?? [];
   const pendingTimeOff = timeOffRows.filter((r) => r.status === "Pending").length;
@@ -275,46 +283,288 @@ export default async function DashboardPage() {
     }
   }
 
-  const attentionTiles = isManager
-    ? [
-        {
-          label: "Unread inbox messages",
-          value: unreadInboxCount,
-          href: "/inbox",
-          danger: unreadInboxCount > 0,
-        },
-        {
-          label: "Pending contract approvals",
-          value: pendingApprovals,
-          href: "/contracts?status=Pending%20Approval",
-          danger: pendingApprovals > 0,
-        },
-        {
-          label: "Expiring ≤30 days",
-          value: expiringSoonCount,
-          href: "/contracts?status=Active",
-          danger: expiringSoonCount > 0,
-        },
-        {
-          label: "Pending PTO requests",
-          value: pendingTimeOff,
-          href: "/time-off",
-          danger: pendingTimeOff > 0,
-        },
-        {
-          label: "Unscheduled open WOs",
-          value: unscheduledOpen,
-          href: "/technician",
-          danger: unscheduledOpen > 0,
-        },
-        {
-          label: "High / critical open",
-          value: criticalCount ?? 0,
-          href: "/work-orders?filter=urgent",
-          danger: (criticalCount ?? 0) > 0,
-        },
-      ].filter((t) => t.value > 0)
-    : [];
+  const thisMonthKey = format(startOfMonth(new Date()), "yyyy-MM");
+  const lastMonthKey = format(startOfMonth(subMonths(new Date(), 1)), "yyyy-MM");
+  const cashThisMonth = (payments ?? [])
+    .filter((p) => p.payment_date?.startsWith(thisMonthKey))
+    .reduce((sum, p) => sum + safeNumber(p.payment_amount), 0);
+  const cashLastMonth = (payments ?? [])
+    .filter((p) => p.payment_date?.startsWith(lastMonthKey))
+    .reduce((sum, p) => sum + safeNumber(p.payment_amount), 0);
+
+  const openInvoiceCount = (invoices ?? []).filter((i) => {
+    if (["Paid", "Canceled"].includes(i.status)) return false;
+    const remaining =
+      i.remaining_balance != null ? safeNumber(i.remaining_balance) : safeNumber(i.invoice_total);
+    return remaining > 0;
+  }).length;
+
+  const staffSummary = summarizeStaffProfiles(
+    ((staffResult.data as {
+      id: string;
+      full_name: string | null;
+      email: string;
+      role: UserRole;
+      is_active: boolean;
+    }[] | null) ?? []),
+  );
+
+  const lowStockCount = (allParts ?? []).filter(
+    (p) => p.quantity_on_hand <= p.reorder_level,
+  ).length;
+
+  const managerAttentionTiles = [
+    {
+      label: "Unread inbox messages",
+      value: unreadInboxCount,
+      href: "/inbox",
+      danger: unreadInboxCount > 0,
+    },
+    {
+      label: "Pending contract approvals",
+      value: pendingApprovals,
+      href: "/contracts?status=Pending%20Approval",
+      danger: pendingApprovals > 0,
+    },
+    {
+      label: "Expiring ≤30 days",
+      value: expiringSoonCount,
+      href: "/contracts?status=Active",
+      danger: expiringSoonCount > 0,
+    },
+    {
+      label: "Pending PTO requests",
+      value: pendingTimeOff,
+      href: "/time-off",
+      danger: pendingTimeOff > 0,
+    },
+    {
+      label: "Unscheduled open WOs",
+      value: unscheduledOpen,
+      href: "/technician",
+      danger: unscheduledOpen > 0,
+    },
+    {
+      label: "High / critical open",
+      value: criticalCount ?? 0,
+      href: "/work-orders?filter=urgent",
+      danger: (criticalCount ?? 0) > 0,
+    },
+  ].filter((t) => t.value > 0);
+
+  const adminAttentionTiles = [
+    {
+      label: "Pending contract approvals",
+      value: pendingApprovals,
+      href: "/contracts?status=Pending%20Approval",
+      danger: pendingApprovals > 0,
+    },
+    {
+      label: "Expiring ≤30 days",
+      value: expiringSoonCount,
+      href: "/contracts?status=Active",
+      danger: expiringSoonCount > 0,
+    },
+    {
+      label: "Open invoices with balance",
+      value: openInvoiceCount,
+      href: "/billing",
+      danger: openInvoiceCount > 0,
+    },
+    {
+      label: "High / critical open WOs",
+      value: criticalCount ?? 0,
+      href: "/work-orders?filter=urgent",
+      danger: (criticalCount ?? 0) > 0,
+    },
+    {
+      label: "Low stock parts",
+      value: lowStockCount,
+      href: "/parts?filter=low-stock",
+      danger: lowStockCount > 0,
+    },
+    {
+      label: "Inactive staff",
+      value: staffSummary.inactiveStaffCount,
+      href: "/users",
+      danger: staffSummary.inactiveStaffCount > 0,
+    },
+  ].filter((t) => t.value > 0);
+
+  const attentionTiles = isManager ? managerAttentionTiles : isAdmin ? adminAttentionTiles : [];
+
+  if (isAdmin) {
+    const todayIso = format(today, "yyyy-MM-dd");
+    const laborFrom = format(subDays(today, 13), "yyyy-MM-dd");
+    const monthStart = format(startOfMonth(today), "yyyy-MM-dd");
+    const monthEnd = format(today, "yyyy-MM-dd");
+
+    const [
+      timeEntries,
+      { data: marginJobs },
+      { data: marginLabor },
+      { data: marginParts },
+      { data: techProfiles },
+    ] = await Promise.all([
+      loadTimeEntries(supabase, { from: laborFrom, to: todayIso }).catch(() => []),
+      supabase
+        .from("work_orders")
+        .select("*, customers(name)")
+        .order("created_at", { ascending: false })
+        .limit(400),
+      supabase.from("technician_labor").select("*").limit(2000),
+      supabase.from("work_order_parts").select("*").limit(2000),
+      supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("role", "technician")
+        .eq("is_active", true),
+    ]);
+
+    const laborTotals = sumEntries(timeEntries);
+    const exceptionCount = timeEntries.filter(
+      (e) =>
+        !e.voided_at &&
+        ((e.exception_flags && e.exception_flags.length > 0) ||
+          e.approval_status === "pending_correction" ||
+          e.approval_status === "missing_clock_out"),
+    ).length;
+
+    const invRows = (invoices ?? []) as InvoiceWithCustomer[];
+    const openArRows = openInvoicesAt(invRows, new Date());
+    const aging = arAgingSummary(openArRows);
+
+    const unpaidCustomerIds = new Set(
+      openArRows.map((i) => i.customer_id).filter(Boolean) as string[],
+    );
+
+    const jobProf = jobProfitability(
+      invRows,
+      (marginJobs as (WorkOrder & { customers?: { name: string } })[]) ?? [],
+      {
+        labor: (marginLabor as TechnicianLabor[]) ?? [],
+        partsUsed: (marginParts as WorkOrderPart[]) ?? [],
+        jobs: (marginJobs as WorkOrder[]) ?? [],
+      },
+      { start: monthStart, end: monthEnd },
+    );
+
+    const techNameById = new Map(
+      ((techProfiles as { id: string; full_name: string | null; email: string }[] | null) ?? []).map(
+        (p) => [p.id, p.full_name?.trim() || p.email || "Technician"],
+      ),
+    );
+    const loadMap = new Map<string, number>();
+    for (const wo of openPulse) {
+      if (!wo.assigned_technician_id) continue;
+      loadMap.set(wo.assigned_technician_id, (loadMap.get(wo.assigned_technician_id) ?? 0) + 1);
+    }
+    const teamLoadTechs = Array.from(loadMap.entries())
+      .map(([id, openJobs]) => ({
+        id,
+        name: techNameById.get(id) ?? "Technician",
+        openJobs,
+      }))
+      .sort((a, b) => b.openJobs - a.openJobs)
+      .slice(0, 8);
+
+    const batchableInvoiceIds = invRows
+      .filter((i) => isBatchableInvoiceStatus(i.status))
+      .map((i) => i.id)
+      .filter(Boolean);
+    const batchablePaymentIds = ((payments ?? []) as { id?: string }[])
+      .map((p) => p.id)
+      .filter((id): id is string => Boolean(id));
+
+    return (
+      <AdminDashboardStudio
+        data={{
+          ...staffSummary,
+          customerCount: customerCount ?? 0,
+          openWoCount: openWoCount ?? 0,
+          criticalCount: criticalCount ?? 0,
+          activeContracts,
+          pendingApprovals,
+          expiringSoonCount,
+          arBalance,
+          arLabel: formatMoney(arBalance),
+          cashThisMonth,
+          cashLastMonth,
+          openInvoiceCount,
+          attentionTiles,
+          contractStatusSlices,
+          contractValueSlices,
+          workOrderTrend,
+          invoiceActivity,
+          chartError,
+          expiringSoon: expiringSoon.map((c) => ({
+            id: c.id,
+            name: c.name,
+            end_date: c.end_date,
+            contract_price: c.contract_price,
+            contract_type: c.contract_type,
+            customers: c.customers,
+          })),
+          openWorkOrders: (openWorkOrders ?? []).map((wo) => ({
+            id: wo.id,
+            work_order_number: wo.work_order_number,
+            priority: wo.priority,
+            status: wo.status,
+            scheduled_date: wo.scheduled_date,
+            customers: wo.customers,
+          })),
+          lowStockParts: (lowStockParts ?? []).map((p) => ({
+            id: p.id,
+            name: p.name,
+            part_number: p.part_number,
+            quantity_on_hand: p.quantity_on_hand,
+            reorder_level: p.reorder_level,
+          })),
+          hasPartsCatalog: (allParts ?? []).length > 0,
+          laborHealth: {
+            totalHours: laborTotals.totalHours,
+            regularHours: laborTotals.regularHours,
+            overtimeHours: laborTotals.overtimeHours,
+            billableHours: laborTotals.billableHours,
+            pendingApproval: laborTotals.pending,
+            exceptionCount,
+          },
+          arAging: {
+            current: aging.totals.current,
+            d30: aging.totals.d30,
+            d60: aging.totals.d60,
+            d90: aging.totals.d90,
+            gross: aging.gross,
+          },
+          portalPulse: {
+            openJobs: openWoCount ?? 0,
+            unpaidCustomers: unpaidCustomerIds.size,
+            pendingContractRequests: pendingApprovals,
+            openInvoiceCount,
+          },
+          marginSnapshot: {
+            revenue: jobProf.totals.revenue,
+            cogs: jobProf.totals.cogs,
+            profit: jobProf.totals.profit,
+            marginPct:
+              jobProf.totals.revenue > 0
+                ? jobProf.totals.profit / jobProf.totals.revenue
+                : null,
+            jobCount: jobProf.totals.jobCount,
+            jobLossCount: jobProf.totals.lossCount,
+          },
+          teamLoad: {
+            unassignedOpen,
+            techs: teamLoadTechs,
+          },
+          periodCloseSeed: {
+            invoiceIds: batchableInvoiceIds,
+            paymentIds: batchablePaymentIds,
+          },
+        }}
+      />
+    );
+  }
 
   if (isManager) {
     return (

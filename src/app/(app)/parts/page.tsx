@@ -16,6 +16,7 @@ import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
 import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import type { Part, Profile, TechPartOrderRequest, Vendor, WorkOrder } from "@/lib/types";
+import { useLiveReload } from "@/components/LiveDataRefresh";
 
 type PartForm = {
   part_number: string;
@@ -287,6 +288,8 @@ export default function PartsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useLiveReload(load, 40_000);
 
   useEffect(() => {
     if (deepLinkFilter === "low-stock") {

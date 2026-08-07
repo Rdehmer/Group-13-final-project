@@ -31,6 +31,7 @@ import {
   type WidgetSize,
   type WidgetTypeId,
 } from "@/lib/manager-dashboard-widgets";
+import { LiveDataRefresh } from "@/components/LiveDataRefresh";
 
 export type ManagerDashboardData = {
   customerCount: number;
@@ -731,9 +732,10 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
 
   return (
     <div>
+      <LiveDataRefresh />
       <PageHeader
         title="Dashboard"
-        description="Operations overview — add widgets, resize frames, open any tile for details"
+        description="Operations overview — live data shared with admin; add widgets, resize frames, open any tile for details"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
