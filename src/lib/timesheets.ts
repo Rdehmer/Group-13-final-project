@@ -37,6 +37,7 @@ import {
   validateNotFuture,
   CERTIFICATION_TEXT,
 } from "@/lib/time-entry-controls";
+import { resolveLaborBillableStatus, type CoverageJob } from "@/lib/coverage";
 
 export const ACTIVITY_TYPES: {
   value: TimeActivityType;
@@ -1500,7 +1501,7 @@ export async function clockIn(
   const { data: wo, error: woErr } = await supabase
     .from("work_orders")
     .select(
-      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, customers(id, name, service_address, city, state)",
+      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, contract_id, warranty_coverage, outside_contract, under_expired_contract, customers(id, name, service_address, city, state)",
     )
     .eq("id", input.workOrderId)
     .single();
@@ -1515,6 +1516,18 @@ export async function clockIn(
   if (!(wo as { customer_id?: string }).customer_id) {
     throw new Error("Work order must have a valid customer before time can be recorded.");
   }
+
+  const coverageJob = {
+    contract_id: (wo as { contract_id?: string | null }).contract_id ?? null,
+    warranty_coverage: (wo as { warranty_coverage?: string | null }).warranty_coverage ?? "Not Covered",
+    outside_contract: Boolean((wo as { outside_contract?: boolean }).outside_contract),
+    under_expired_contract: Boolean((wo as { under_expired_contract?: boolean }).under_expired_contract),
+    work_order_type: (wo as { work_order_type?: string | null }).work_order_type ?? null,
+  };
+  const billableOnJob = resolveLaborBillableStatus(
+    coverageJob,
+    activityDefaultBillable(activity),
+  );
 
   const assignedId = (wo as { assigned_technician_id?: string | null }).assigned_technician_id ?? null;
   const unassigned = Boolean(assignedId && assignedId !== input.profile.id);
@@ -1561,7 +1574,7 @@ export async function clockIn(
         clock_out_at: null,
         total_minutes: 0,
         activity_type: activity,
-        billable_status: activityDefaultBillable(activity),
+        billable_status: billableOnJob,
         regular_hours: 0,
         overtime_hours: 0,
         hourly_cost_rate: rates.hourly_cost_rate,
@@ -1605,7 +1618,7 @@ export async function clockIn(
     entry_date: todayIso(),
     clock_in_at: now,
     activity_type: activity,
-    billable_status: activityDefaultBillable(activity),
+    billable_status: billableOnJob,
     hourly_cost_rate: rates.hourly_cost_rate,
     overtime_cost_rate: rates.overtime_cost_rate,
     billing_rate: rates.billing_rate,
@@ -2089,11 +2102,12 @@ export async function createManualEntry(
   let serviceLocation: string | null = null;
   let woJoin: TimeEntry["work_orders"] = null;
   let unassigned = false;
+  let coverageJob: CoverageJob | null = null;
   if (input.workOrderId) {
     const { data: wo } = await supabase
       .from("work_orders")
       .select(
-        "id, status, customer_id, equipment_id, assigned_technician_id, work_order_number, work_order_type, problem_description, customers(id, name, service_address, city, state), equipment(id, name, serial_number)",
+        "id, status, customer_id, equipment_id, assigned_technician_id, work_order_number, work_order_type, problem_description, contract_id, warranty_coverage, outside_contract, under_expired_contract, customers(id, name, service_address, city, state), equipment(id, name, serial_number)",
       )
       .eq("id", input.workOrderId)
       .single();
@@ -2117,6 +2131,16 @@ export async function createManualEntry(
     woJoin = wo as unknown as TimeEntry["work_orders"];
     const assigned = (wo as { assigned_technician_id?: string | null }).assigned_technician_id;
     unassigned = !assigned || assigned !== techId;
+    coverageJob = {
+      contract_id: (wo as { contract_id?: string | null }).contract_id ?? null,
+      warranty_coverage:
+        (wo as { warranty_coverage?: string | null }).warranty_coverage ?? "Not Covered",
+      outside_contract: Boolean((wo as { outside_contract?: boolean }).outside_contract),
+      under_expired_contract: Boolean(
+        (wo as { under_expired_contract?: boolean }).under_expired_contract,
+      ),
+      work_order_type: (wo as { work_order_type?: string | null }).work_order_type ?? null,
+    };
   }
 
   const otMult = await loadOtMultiplier(supabase);
@@ -2129,7 +2153,9 @@ export async function createManualEntry(
   const week = weekContaining(input.entryDate);
   const prior = await sumPriorWeekRegular(supabase, techId, week.start, week.end);
   const split = splitWeeklyOt(totalH, prior);
-  const billable = input.billableStatus ?? activityDefaultBillable(input.activityType);
+  const billable =
+    input.billableStatus ??
+    resolveLaborBillableStatus(coverageJob, activityDefaultBillable(input.activityType));
   const moneyPart = computeMoney(
     split.regular_hours,
     split.overtime_hours,

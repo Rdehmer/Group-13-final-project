@@ -25,6 +25,13 @@ import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { formatMoney } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
+import {
+  isOutOfScope,
+  laborBillableLabelForDb,
+  markWorkOrderOutsideContract,
+  resolveLaborBillableStatus,
+  splitPartCharges,
+} from "@/lib/coverage";
 import { workOrderLaborHours, timesheetHref } from "@/lib/timesheets";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
@@ -398,6 +405,18 @@ export default function JobDetailPage() {
       (techId === profile.id ? profile : null);
     const rate = techProfile?.hourly_cost_rate ?? profile.hourly_cost_rate ?? 45;
     const billing = Number(laborForm.billing_rate) || techProfile?.hourly_billing_rate || profile.hourly_billing_rate || 95;
+    const laborBillable = resolveLaborBillableStatus(
+      wo
+        ? {
+            contract_id: wo.contract_id,
+            warranty_coverage: wo.warranty_coverage,
+            outside_contract: wo.outside_contract,
+            under_expired_contract: wo.under_expired_contract,
+            work_order_type: wo.work_order_type,
+          }
+        : null,
+      "billable",
+    );
     const { error: insertError } = await supabase.from("technician_labor").insert({
       work_order_id: id,
       technician_id: techId,
@@ -407,6 +426,7 @@ export default function JobDetailPage() {
       hourly_cost_rate: rate,
       overtime_cost_rate: rate * 1.5,
       customer_billing_rate: billing,
+      billable_status: laborBillableLabelForDb(laborBillable),
       notes: laborForm.notes || null,
       invoiced: false,
     });
@@ -504,21 +524,51 @@ export default function JobDetailPage() {
       setSaving(false);
       return;
     }
-    const billable = part.standard_customer_price * qty;
+    const split = splitPartCharges({
+      quantity: qty,
+      unitPrice: part.standard_customer_price,
+      job: wo
+        ? {
+            contract_id: wo.contract_id,
+            warranty_coverage: wo.warranty_coverage,
+            outside_contract: wo.outside_contract,
+            under_expired_contract: wo.under_expired_contract,
+            work_order_type: wo.work_order_type,
+          }
+        : null,
+    });
     const { error: insertError } = await supabase.from("work_order_parts").insert({
       work_order_id: id,
       part_id: part.id,
       quantity_used: qty,
       unit_cost: part.unit_cost,
       customer_price: part.standard_customer_price,
-      warranty_covered_amount: 0,
-      billable_amount: billable,
+      warranty_covered_amount: split.warranty_covered_amount,
+      billable_amount: split.billable_amount,
       invoiced: false,
     });
     if (insertError) {
       setError(insertError.message);
       setSaving(false);
       return;
+    }
+    // If parts are out-of-scope on a contracted job, mark WO for billing labeling
+    if (
+      wo?.contract_id &&
+      !wo.outside_contract &&
+      split.billable_amount > 0 &&
+      isOutOfScope(
+        {
+          contract_id: wo.contract_id,
+          warranty_coverage: wo.warranty_coverage,
+          outside_contract: wo.outside_contract,
+          under_expired_contract: wo.under_expired_contract,
+          work_order_type: wo.work_order_type,
+        },
+        "part",
+      )
+    ) {
+      await markWorkOrderOutsideContract(supabase, id);
     }
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
     const { data: { user } } = await supabase.auth.getUser();
