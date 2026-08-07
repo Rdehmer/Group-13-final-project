@@ -257,9 +257,8 @@ export default async function DashboardPage() {
       return s + remaining;
     }, 0);
 
-  const openPulse = (openPulseResult.data as OpenWoPulse[] | null) ?? [];
+  const openPulse = (openPulseResult?.data as OpenWoPulse[] | null) ?? [];
   const unscheduledOpen = openPulse.filter((wo) => !wo.scheduled_date).length;
-  const unassignedOpen = openPulse.filter((wo) => !wo.assigned_technician_id).length;
 
   const timeOffRows = (timeOffResult.data as TimeOffRow[] | null) ?? [];
   const pendingTimeOff = timeOffRows.filter((r) => r.status === "Pending").length;
@@ -554,7 +553,7 @@ export default async function DashboardPage() {
             jobLossCount: jobProf.totals.lossCount,
           },
           teamLoad: {
-            unassignedOpen,
+            unassignedOpen: openPulse.filter((wo) => !wo.assigned_technician_id).length,
             techs: teamLoadTechs,
           },
           periodCloseSeed: {
