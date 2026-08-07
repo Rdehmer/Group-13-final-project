@@ -5,7 +5,8 @@
  * Tender method dropdown + chips, balance display, quick amounts, receipt confirmation.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Banknote,
   Building2,
@@ -25,6 +26,7 @@ import {
   STAFF_PAYMENT_TENDERS,
   type StaffPaymentTenderId,
 } from "@/lib/payments";
+import { ensurePageScrollable } from "@/lib/ensurePageScrollable";
 
 export type PaymentDialogInvoice = {
   id: string;
@@ -57,6 +59,9 @@ export type InvoicePaymentDialogProps = {
  */
 export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: InvoicePaymentDialogProps) {
   const supabase = createClient();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const [portalReady, setPortalReady] = useState(false);
   const [tender, setTender] = useState<StaffPaymentTenderId>("card");
   const [amount, setAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -73,6 +78,25 @@ export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: Invoice
     newBalance: number;
     status: string;
   } | null>(null);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      ensurePageScrollable();
+      return;
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onCloseRef.current();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      ensurePageScrollable();
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, busy]);
 
   useEffect(() => {
     if (!open || !invoice) return;
@@ -95,10 +119,19 @@ export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: Invoice
     return Math.max(0, Math.round((balance - payAmount) * 100) / 100);
   }, [balance, payAmount]);
 
-  if (!open || !invoice) return null;
+  const closeDialog = useCallback(() => {
+    ensurePageScrollable();
+    onClose();
+  }, [onClose]);
 
-  const tenderMeta = staffTenderById(tender);
-  const SubmitIcon = TENDER_ICONS[tender];
+  onCloseRef.current = closeDialog;
+
+  async function finish() {
+    closeDialog();
+    await onPaid?.();
+  }
+
+  if (!open || !invoice || !portalReady) return null;
 
   function setQuickAmount(pct: number | "full") {
     if (pct === "full") {
@@ -194,14 +227,19 @@ export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: Invoice
     setBusy(false);
   }
 
-  async function finish() {
-    onClose();
-    await onPaid?.();
-  }
+  const tenderMeta = staffTenderById(tender);
+  const SubmitIcon = TENDER_ICONS[tender];
 
-  return (
-    <dialog className="modal modal-open" open>
-      <div className="modal-box max-h-[min(92dvh,40rem)] w-full max-w-lg overflow-y-auto p-0">
+  return createPortal(
+    <div
+      className="pointer-events-none fixed inset-0 z-[200] overflow-y-auto overscroll-contain p-4 sm:py-8"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="invoice-payment-title"
+    >
+      <div className="pointer-events-none fixed inset-0 bg-black/45" aria-hidden />
+      <div className="relative z-10 mx-auto flex min-h-min w-full max-w-lg items-start justify-center py-2">
+        <div className="pointer-events-auto w-full max-h-[min(92dvh,40rem)] overflow-y-auto rounded-2xl border border-base-300 bg-base-100 shadow-2xl">
         {receipt ? (
           <div className="p-5 sm:p-6">
             <div className="flex flex-col items-center text-center">
@@ -254,7 +292,7 @@ export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: Invoice
                   <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-success">
                     Accept payment
                   </p>
-                  <h3 className="text-lg font-bold leading-tight sm:text-xl">
+                  <h3 id="invoice-payment-title" className="text-lg font-bold leading-tight sm:text-xl">
                     {invoice.customer_name?.trim() || "Customer"}
                   </h3>
                   <p className="mt-0.5 text-sm opacity-70">
@@ -491,7 +529,7 @@ export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: Invoice
             </div>
 
             <div className="flex flex-col-reverse gap-2 border-t border-base-300 bg-base-200/30 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onClose}>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={closeDialog}>
                 Cancel
               </button>
               <button
@@ -511,13 +549,10 @@ export function InvoicePaymentDialog({ open, invoice, onClose, onPaid }: Invoice
             </div>
           </form>
         )}
+        </div>
       </div>
-      <form method="dialog" className="modal-backdrop">
-        <button type="button" disabled={busy} onClick={receipt ? () => void finish() : onClose}>
-          close
-        </button>
-      </form>
-    </dialog>
+    </div>,
+    document.body,
   );
 }
 

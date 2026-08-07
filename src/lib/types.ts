@@ -177,6 +177,8 @@ export type WorkOrder = {
   scheduled_end_time?: string | null;
   problem_description: string | null;
   requested_service: string | null;
+  /** Manager schedule queue: routine_check | one_time_repair | emergency */
+  visit_kind?: "routine_check" | "one_time_repair" | "emergency" | null;
   customer_approval_required: boolean;
   estimated_labor_hours: number | null;
   estimated_parts_cost: number | null;
@@ -264,11 +266,13 @@ export type TruckInventory = {
 /** Technician parts replenishment request (purchase order request row). */
 export type TechPartOrderRequest = {
   id: string;
+  order_type?: "restock" | "field";
   technician_id: string;
   part_id: string;
   quantity_requested: number;
-  status: "pending" | "approved" | "fulfilled";
+  status: "pending" | "approved" | "fulfilled" | "open" | "closed";
   note: string | null;
+  vendor_supply_order_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -444,6 +448,7 @@ export type VendorSupplyOrder = {
   quantity: number;
   status: VendorSupplyOrderStatus;
   notes: string | null;
+  purchase_order_id?: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -533,12 +538,20 @@ export type ServiceVendorRating = {
 
 export type PurchaseOrder = {
   id: string;
-  po_number: string;
+  order_type?: "restock" | "field";
+  po_number: string | null;
   invoice_id: string | null;
   work_order_id: string | null;
   vendor_name: string | null;
   notes: string | null;
   created_by: string | null;
+  /** Restock request fields (technician → warehouse). */
+  technician_id?: string | null;
+  part_id?: string | null;
+  quantity_requested?: number | null;
+  status?: string | null;
+  note?: string | null;
+  vendor_supply_order_id?: string | null;
   created_at: string;
   updated_at: string;
 };

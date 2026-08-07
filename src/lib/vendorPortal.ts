@@ -62,7 +62,7 @@ export async function listSupplyOrdersForVendor(
 ): Promise<{ data: VendorSupplyOrder[]; error: string | null }> {
   const { data, error } = await supabase
     .from("vendor_supply_orders")
-    .select("*")
+    .select("*, purchase_orders(id, quantity_requested, note, technician_id)")
     .eq("vendor_id", vendorId)
     .order("created_at", { ascending: false });
   if (error) return { data: [], error: error.message };

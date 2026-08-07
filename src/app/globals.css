@@ -77,6 +77,15 @@ body {
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* In-page anchors (#section) stay below the sticky top bar and remain scrollable. */
+  scroll-padding-top: calc(4.5rem + env(safe-area-inset-top, 0px));
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 body {

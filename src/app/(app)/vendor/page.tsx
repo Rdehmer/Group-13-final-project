@@ -450,6 +450,11 @@ export default function VendorPortalPage() {
                       {order.notes ? (
                         <p className="mt-1 text-sm opacity-70">{order.notes}</p>
                       ) : null}
+                      {order.purchase_order_id ? (
+                        <p className="mt-1 text-xs text-primary">
+                          Linked to technician restock request
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex flex-col items-end gap-2">
                       <StatusBadge label={order.status} tone={statusTone(order.status)} />

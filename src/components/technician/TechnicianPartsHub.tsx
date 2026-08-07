@@ -20,6 +20,7 @@ import type { Part, Profile, TechPartOrderRequest, WorkOrder } from "@/lib/types
 
 type PurchaseOrderRow = TechPartOrderRequest & {
   parts?: Pick<Part, "id" | "part_number" | "name" | "quantity_on_hand"> | null;
+  vendor_supply_orders?: { id: string; status: string; item_name: string } | null;
 };
 
 type JobOption = Pick<WorkOrder, "id" | "work_order_number" | "problem_description">;
@@ -455,6 +456,14 @@ export function TechnicianPartsHub({
                   <p className="text-sm opacity-70">
                     Qty {request.quantity_requested}
                     {request.note ? ` · ${request.note}` : ""}
+                    {request.vendor_supply_orders ? (
+                      <>
+                        {" "}
+                        · Vendor {request.vendor_supply_orders.status.toLowerCase()}
+                      </>
+                    ) : request.status === "approved" ? (
+                      <> · Waiting on vendor / warehouse</>
+                    ) : null}
                   </p>
                 </div>
                 <StatusBadge

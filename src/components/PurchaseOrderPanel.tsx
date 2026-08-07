@@ -17,6 +17,7 @@ import { FormRow } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { formatMoney } from "@/lib/calculations";
 import {
+  formatPurchaseOrderError,
   getReceiptViewUrl,
   lineTotal,
   loadPurchaseOrders,
@@ -224,6 +225,8 @@ export function PurchaseOrderPanel({
     const { data: po, error: poError } = await supabase
       .from("purchase_orders")
       .insert({
+        order_type: "field",
+        status: "open",
         po_number: poNumber,
         invoice_id: linkedInvoiceId,
         work_order_id: workOrderId || null,
@@ -235,13 +238,7 @@ export function PurchaseOrderPanel({
       .single();
 
     if (poError || !po) {
-      const msg =
-        poError?.message?.includes("purchase_orders") ||
-        poError?.message?.includes("schema cache") ||
-        poError?.code === "42P01"
-          ? `${poError?.message ?? "Error"} — run supabase/migrations/20260805_purchase_orders.sql in Supabase.`
-          : poError?.message ?? "Could not create PO";
-      setError(msg);
+      setError(formatPurchaseOrderError(poError?.message ?? "Could not create PO"));
       setBusy(false);
       return;
     }
@@ -262,7 +259,7 @@ export function PurchaseOrderPanel({
         })),
       );
       if (lineError) {
-        setError(`PO ${poNumber} created, but lines failed: ${lineError.message}`);
+        setError(formatPurchaseOrderError(`PO ${poNumber} created, but lines failed: ${lineError.message}`));
         setBusy(false);
         await refresh();
         return;

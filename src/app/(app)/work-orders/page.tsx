@@ -10,7 +10,7 @@ import { PageHeader, FormRow } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Customer, Equipment, Profile, Vendor, WorkOrder } from "@/lib/types";
-import { WORK_ORDER_TYPES } from "@/lib/work-order-types";
+import { WORK_ORDER_TYPES, scheduleVisitKind } from "@/lib/work-order-types";
 import {
   WO_STATUSES,
   scheduleFieldsForStatusChange,
@@ -380,6 +380,10 @@ export default function WorkOrdersPage() {
       customer_id: form.customer_id,
       equipment_id: form.equipment_id || null,
       work_order_type: form.work_order_type,
+      visit_kind: scheduleVisitKind({
+        work_order_type: form.work_order_type,
+        priority: form.priority,
+      }),
       priority: form.priority,
       ...assignee,
       scheduled_date: form.scheduled_date || null,

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ShoppingCart } from "lucide-react";
 import { FormRow } from "@/components/PageHeader";
 import { logActivity } from "@/lib/activity";
+import { formatPurchaseOrderError } from "@/lib/purchaseOrders";
 import { createClient } from "@/lib/supabase/client";
 import type { Part } from "@/lib/types";
 
@@ -60,6 +61,7 @@ export function PurchaseOrderRequest({
     const { data, error: insertError } = await supabase
       .from("purchase_orders")
       .insert({
+        order_type: "restock",
         technician_id: technicianId,
         part_id: part.id,
         quantity_requested: requestedQuantity,
@@ -70,7 +72,7 @@ export function PurchaseOrderRequest({
       .single();
 
     if (insertError) {
-      setError(insertError.message);
+      setError(formatPurchaseOrderError(insertError.message));
       setSaving(false);
       return;
     }

@@ -31,6 +31,7 @@ import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { EmailInvoiceModal, type EmailInvoiceRecipient } from "@/components/EmailInvoiceModal";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
+import { formatPurchaseOrderError } from "@/lib/purchaseOrders";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { InvoicePaymentDialog } from "@/components/InvoicePaymentDialog";
 import {
@@ -669,10 +670,7 @@ export default function InvoiceDetailPage() {
       .update({ po_number: poNumber || null, updated_at: new Date().toISOString() })
       .eq("id", inv.id);
     if (updError) {
-      const msg = updError.message.includes("po_number")
-        ? `${updError.message} — run supabase/migrations/20260805_purchase_orders.sql in Supabase.`
-        : updError.message;
-      setError(msg);
+      setError(formatPurchaseOrderError(updError.message));
       setSaving(false);
       return;
     }

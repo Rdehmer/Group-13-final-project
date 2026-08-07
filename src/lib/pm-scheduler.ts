@@ -303,6 +303,7 @@ export async function generatePmVisitsForYear(
         contract_id: contract.id,
         equipment_id: null,
         work_order_type: PM_WORK_ORDER_TYPE,
+        visit_kind: "routine_check",
         priority: "Normal",
         status: "Scheduled",
         billing_status: "Unbilled",
@@ -452,13 +453,21 @@ export function nextRoutineVisitMonth(
 
 export function technicianScheduleHrefForWorkOrder(
   workOrderId: string,
-  options: { dayIso?: string | null; suggestDay?: string | null } = {},
+  options: {
+    /** When true, deep-link opens Schedule & assign with suggested day prefilled. */
+    openAssignPanel?: boolean;
+    dayIso?: string | null;
+    suggestDay?: string | null;
+  } = {},
 ): string {
-  const params = new URLSearchParams({ wo: workOrderId, schedule: "1" });
-  const day = options.dayIso || options.suggestDay;
-  if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
-    params.set("day", day);
-    params.set("suggestDay", day);
+  const params = new URLSearchParams({ wo: workOrderId });
+  if (options.openAssignPanel) {
+    params.set("schedule", "1");
+    const day = options.dayIso || options.suggestDay;
+    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      params.set("day", day);
+      params.set("suggestDay", day);
+    }
   }
   return `/technician?${params.toString()}`;
 }
@@ -503,6 +512,7 @@ export async function createRoutineVisitForScheduling(
     await supabase
       .from("work_orders")
       .update({
+        visit_kind: "routine_check",
         manager_notes: `${criteria.summaryText}\n\nSet the customer’s preferred date & time on this schedule, then assign a technician.`,
         updated_at: new Date().toISOString(),
       })
@@ -515,9 +525,7 @@ export async function createRoutineVisitForScheduling(
       reused: true,
       suggestedMonth,
       suggestedDate,
-      scheduleHref: technicianScheduleHrefForWorkOrder(existing.id as string, {
-        suggestDay: suggestedDate,
-      }),
+      scheduleHref: technicianScheduleHrefForWorkOrder(existing.id as string),
       criteriaSummary: criteria.summaryText,
     };
   }
@@ -534,6 +542,7 @@ export async function createRoutineVisitForScheduling(
       contract_id: contract.id,
       equipment_id: null,
       work_order_type: PM_WORK_ORDER_TYPE,
+      visit_kind: "routine_check",
       priority: "Normal",
       status: "Requested",
       billing_status: "Unbilled",
@@ -560,9 +569,7 @@ export async function createRoutineVisitForScheduling(
     reused: false,
     suggestedMonth,
     suggestedDate,
-    scheduleHref: technicianScheduleHrefForWorkOrder(inserted.id as string, {
-      suggestDay: suggestedDate,
-    }),
+    scheduleHref: technicianScheduleHrefForWorkOrder(inserted.id as string),
     criteriaSummary: criteria.summaryText,
   };
 }

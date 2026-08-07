@@ -1,17 +1,28 @@
-/** Smooth-scroll to an element by id (or a live element). */
+import { PAGE_SCROLL_TOP_OFFSET } from "@/lib/ensurePageScrollable";
+
+type ScrollToSectionOptions = {
+  behavior?: ScrollBehavior;
+  /** Extra pixels above the target (defaults to sticky header offset). */
+  offset?: number;
+};
+
+/** Smooth-scroll the page to an element by id (or a live element). */
 export function scrollToSection(
   target: string | Element | null | undefined,
-  options?: ScrollIntoViewOptions,
+  options?: ScrollToSectionOptions,
 ) {
   if (typeof window === "undefined" || target == null) return;
-  const el =
-    typeof target === "string" ? document.getElementById(target) : target;
+  const el = typeof target === "string" ? document.getElementById(target) : target;
   if (!el) return;
-  el.scrollIntoView({
-    behavior: "smooth",
-    block: "start",
-    ...options,
-  });
+
+  const offset = options?.offset ?? PAGE_SCROLL_TOP_OFFSET;
+  const behavior = options?.behavior ?? "smooth";
+  const top =
+    el.getBoundingClientRect().top +
+    (window.scrollY || document.documentElement.scrollTop) -
+    offset;
+
+  window.scrollTo({ top: Math.max(0, top), behavior });
 }
 
 /**

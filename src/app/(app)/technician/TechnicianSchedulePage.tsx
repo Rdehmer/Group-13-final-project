@@ -91,6 +91,11 @@ import {
   technicianOnApprovedTimeOff,
   type TimeOffRange,
 } from "@/lib/time-off";
+import {
+  scheduleVisitKind,
+  scheduleVisitKindBadgeClass,
+  scheduleVisitKindLabel,
+} from "@/lib/work-order-types";
 
 /**
  * Field execution gap risk when technicians lack a single workspace.
@@ -304,6 +309,26 @@ export default function TechnicianSchedulePage() {
 
     const t = window.setTimeout(() => {
       document.getElementById("schedule-assign-panel")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [searchParams, workOrders]);
+
+  /** Routine visit from Contracts: highlight unscheduled WO in the queue (no assign panel jump). */
+  useEffect(() => {
+    const woParam = searchParams.get("wo");
+    if (!woParam || searchParams.get("schedule") === "1") return;
+    if (!workOrders.some((w) => w.id === woParam)) return;
+
+    setSelectedId(woParam);
+
+    const wo = workOrders.find((w) => w.id === woParam);
+    if (!wo || wo.scheduled_date) return;
+
+    const t = window.setTimeout(() => {
+      document.getElementById("unscheduled-queue")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
@@ -1625,11 +1650,22 @@ export default function TechnicianSchedulePage() {
       {searchParams.get("schedule") === "1" && searchParams.get("wo") && isManager ? (
         <div className="alert alert-info text-sm print:hidden">
           <span>
-            Routine visit from Contracts — review the Gold/Silver/Bronze checkup criteria in{" "}
+            Work order selected — review criteria in{" "}
             <a href="#schedule-assign-panel" className="link font-medium">
               Schedule &amp; assign
             </a>
             , set the preferred date/time, then pick a technician.
+          </span>
+        </div>
+      ) : searchParams.get("wo") && isManager && selected && !selected.scheduled_date ? (
+        <div className="alert alert-info text-sm print:hidden">
+          <span>
+            <strong>{scheduleVisitKindLabel(scheduleVisitKind(selected))}</strong> work order{" "}
+            <strong>{selected.work_order_number}</strong> is in{" "}
+            <a href="#unscheduled-queue" className="link font-medium">
+              Unscheduled
+            </a>
+            . Drag it onto the calendar or use Place today, then assign a technician.
           </span>
         </div>
       ) : null}
@@ -1992,49 +2028,48 @@ export default function TechnicianSchedulePage() {
       {(isManager && unscheduledOrders.length > 0) || openPastJobs.length > 0 ? (
         <div className="grid gap-4 lg:grid-cols-2 print:hidden">
           {isManager && unscheduledOrders.length > 0 ? (
-            <section className="card bg-base-100 shadow">
+            <section id="unscheduled-queue" className="card bg-base-100 shadow">
               <div className="card-body p-4">
                 <h2 className="card-title text-base">
                   Unscheduled
                   <span className="badge badge-warning">{unscheduledOrders.length}</span>
                 </h2>
                 <ul className="mt-2 space-y-2">
-                  {unscheduledOrders.slice(0, 8).map((wo) => (
+                  <li className="hidden gap-2 px-2 text-xs font-medium uppercase tracking-wide opacity-50 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto]">
+                    <span>Work order</span>
+                    <span>Customer</span>
+                    <span>Visit type</span>
+                    <span className="text-right">Schedule</span>
+                  </li>
+                  {unscheduledOrders.slice(0, 8).map((wo) => {
+                    const visitKind = scheduleVisitKind(wo);
+                    return (
                     <li
                       key={wo.id}
-                      className={`flex flex-wrap items-center justify-between gap-2 text-sm ${
+                      className={`grid gap-2 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto] sm:items-center ${
                         isManager ? "cursor-grab rounded-lg border border-dashed border-base-300 px-2 py-1.5 active:cursor-grabbing" : ""
-                      }`}
+                      } ${selectedId === wo.id ? "border-primary bg-primary/5" : ""}`}
                       draggable={isManager}
                       onDragStart={(e) => handleDragStart(e, wo)}
                       title={isManager ? "Drag onto the month or day calendar" : undefined}
                     >
-                      {isServiceManager ? (
-                        <Link
-                          href={`/work-orders/${wo.id}`}
-                          className="link link-hover link-primary font-medium"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            selectWorkOrder(wo.id);
-                          }}
-                          draggable={false}
-                        >
-                          {wo.work_order_number}
-                        </Link>
-                      ) : (
-                        <button
-                          type="button"
-                          className="link link-hover link-primary"
-                          onClick={() => selectWorkOrder(wo.id)}
-                          draggable={false}
-                        >
-                          {wo.work_order_number}
-                        </button>
-                      )}
-                      <span className="opacity-70">{customerName(wo)}</span>
                       <button
                         type="button"
-                        className="btn btn-outline btn-xs"
+                        className="truncate text-left font-medium"
+                        onClick={() => selectWorkOrder(wo.id)}
+                        draggable={false}
+                      >
+                        {wo.work_order_number}
+                      </button>
+                      <span className="truncate opacity-70">{customerName(wo)}</span>
+                      <span
+                        className={`badge badge-sm w-fit whitespace-nowrap ${scheduleVisitKindBadgeClass(visitKind)}`}
+                      >
+                        {scheduleVisitKindLabel(visitKind)}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs w-fit justify-self-end sm:justify-self-auto"
                         onClick={() => void placeToday(wo.id)}
                         disabled={busy}
                         draggable={false}
@@ -2042,7 +2077,8 @@ export default function TechnicianSchedulePage() {
                         Place today 9 AM–11 AM
                       </button>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </div>
             </section>

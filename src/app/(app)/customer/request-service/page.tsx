@@ -29,6 +29,7 @@ import {
 } from "@/lib/contract-billing";
 import type { Equipment, Invoice, Profile, WorkOrder } from "@/lib/types";
 import type { WorkOrderType } from "@/lib/work-order-types";
+import { visitKindFromServiceKind } from "@/lib/work-order-types";
 
 type ServiceKind = "repair" | "follow_up" | "routine" | "emergency_repair";
 type Timing = "asap" | "this_week" | "flexible";
@@ -412,6 +413,11 @@ function RequestServicePageInner() {
     const { photoName, photoUrl } = await uploadPhotoIfPresent(profile.customer_id, woNumber);
     const priority = resolvePriority(form);
     const workOrderType = resolveWorkOrderType(form);
+    const visitKind = visitKindFromServiceKind(form.service_kind, {
+      equipmentRunning: form.equipment_running,
+      workOrderType,
+      priority,
+    });
     const requestedService = buildRequestedService(
       form,
       selectedEquipment?.name ?? null,
@@ -430,6 +436,7 @@ function RequestServicePageInner() {
         customer_id: profile.customer_id,
         equipment_id: form.equipment_id || null,
         work_order_type: workOrderType,
+        visit_kind: visitKind,
         priority,
         problem_description: form.details.trim(),
         requested_service: requestedService,

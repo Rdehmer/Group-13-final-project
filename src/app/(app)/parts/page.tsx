@@ -15,6 +15,7 @@ import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
 import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
+import { createVendorSupplyOrderForRestock, formatPurchaseOrderError } from "@/lib/purchaseOrders";
 import type { Part, Profile, TechPartOrderRequest, Vendor, WorkOrder } from "@/lib/types";
 import { useLiveReload } from "@/components/LiveDataRefresh";
 
@@ -56,8 +57,9 @@ type FilterColumn =
   | "status";
 
 type PurchaseOrderRow = TechPartOrderRequest & {
-  parts?: Pick<Part, "id" | "part_number" | "name" | "quantity_on_hand"> | null;
+  parts?: Pick<Part, "id" | "part_number" | "name" | "quantity_on_hand" | "vendor_id"> | null;
   technician?: Pick<Profile, "id" | "full_name" | "email"> | null;
+  vendor_supply_orders?: { id: string; status: string; item_name: string } | null;
 };
 type JobOption = Pick<WorkOrder, "id" | "work_order_number" | "problem_description">;
 
@@ -166,7 +168,10 @@ export default function PartsPage() {
     const [{ data: requests }, { data: assignedJobs }, purchasesResult] = await Promise.all([
       supabase
         .from("purchase_orders")
-        .select("*, parts(part_number, name)")
+        .select(
+          "*, parts(part_number, name, vendor_id), vendor_supply_orders(id, status, item_name)",
+        )
+        .eq("order_type", "restock")
         .eq("technician_id", technicianId)
         .neq("status", "fulfilled")
         .order("created_at", { ascending: false }),
@@ -207,7 +212,10 @@ export default function PartsPage() {
   async function loadManagerPos() {
     const { data } = await supabase
       .from("purchase_orders")
-      .select("*, parts(id, part_number, name, quantity_on_hand)")
+      .select(
+        "*, parts(id, part_number, name, quantity_on_hand, vendor_id), vendor_supply_orders(id, status, item_name)",
+      )
+      .eq("order_type", "restock")
       .in("status", ["pending", "approved"])
       .order("created_at", { ascending: false });
     const rows = (data as PurchaseOrderRow[]) ?? [];
@@ -737,7 +745,7 @@ export default function PartsPage() {
       .update({ status: "approved", updated_at: new Date().toISOString() })
       .eq("id", row.id);
     if (updateError) {
-      setError(updateError.message);
+      setError(formatPurchaseOrderError(updateError.message));
       setPoBusyId(null);
       return;
     }
@@ -748,8 +756,29 @@ export default function PartsPage() {
       recordId: row.id,
       newValue: `${row.parts?.part_number ?? row.part_id} × ${row.quantity_requested}`,
     });
+
+    const vendorId =
+      row.parts?.vendor_id ?? parts.find((p) => p.id === row.part_id)?.vendor_id ?? null;
+    if (vendorId) {
+      const partLabel = `${row.parts?.part_number ?? "Part"} — ${row.parts?.name ?? "Catalog item"}`;
+      const { error: vendorErr } = await createVendorSupplyOrderForRestock(supabase, {
+        purchaseOrderId: row.id,
+        vendorId,
+        itemName: partLabel,
+        quantity: row.quantity_requested,
+        notes: row.note,
+        createdBy: user?.id ?? null,
+      });
+      if (vendorErr) {
+        setError(`Approved, but vendor order failed: ${vendorErr}`);
+      } else {
+        setSuccess("Purchase order approved and sent to the parts vendor portal.");
+      }
+    } else {
+      setSuccess("Purchase order approved (no supplier linked on this part — fulfill from warehouse when ready).");
+    }
+
     await loadManagerPos();
-    setSuccess("Purchase order approved.");
     setPoBusyId(null);
   }
 
@@ -955,6 +984,11 @@ export default function PartsPage() {
                     </p>
                     <p className="text-xs opacity-60">
                       Warehouse on hand: {row.parts?.quantity_on_hand ?? "—"}
+                      {row.vendor_supply_orders
+                        ? ` · Vendor: ${row.vendor_supply_orders.status}`
+                        : row.status === "approved" && row.parts?.vendor_id
+                          ? " · Vendor order pending"
+                          : ""}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

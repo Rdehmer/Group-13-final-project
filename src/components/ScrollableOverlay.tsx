@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ensurePageScrollable } from "@/lib/ensurePageScrollable";
 
 export function ScrollableOverlay({
   title,
@@ -31,6 +32,7 @@ export function ScrollableOverlay({
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = prev;
+      ensurePageScrollable();
       window.removeEventListener("keydown", onKey);
     };
   }, []);

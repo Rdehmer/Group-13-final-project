@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { scrollToSection } from "@/lib/scrollToSection";
 
 const TONE: Record<string, string> = {
   success: "border-transparent bg-[#e6f7f7] text-[#007a7c]",
@@ -124,7 +125,11 @@ export function StatCard({
       >
         {value}
       </div>
-      {hint ? <div className="stat-desc text-[11px] text-[#5c6b7a] sm:text-[12px]">{hint}</div> : null}
+      {hint ? (
+        <div className="stat-desc line-clamp-2 text-[10px] leading-snug text-[#5c6b7a] sm:text-[11px]">
+          {hint}
+        </div>
+      ) : null}
     </>
   );
 
@@ -138,11 +143,7 @@ export function StatCard({
           onClick?.();
           if (!scrollTarget) return;
           const delay = onClick ? 50 : 0;
-          window.setTimeout(() => {
-            document
-              .getElementById(scrollTarget)
-              ?.scrollIntoView({ behavior: "smooth", block: "start" });
-          }, delay);
+          window.setTimeout(() => scrollToSection(scrollTarget), delay);
         }}
       >
         {body}

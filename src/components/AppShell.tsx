@@ -11,6 +11,7 @@ import { topbarConfigForRole, usesStaffInbox, type TopbarConfig } from "@/lib/to
 import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
+import { ensurePageScrollable } from "@/lib/ensurePageScrollable";
 import { EquipmentIQMark } from "@/components/brand/EquipmentIQLogo";
 import { GlobalSearch } from "@/components/GlobalSearch";
 import { countUnreadInboxThreads, CUSTOMER_INBOX_UNREAD_EVENT } from "@/lib/customer-inbox";
@@ -709,6 +710,20 @@ export function AppShell({
       /* ignore */
     }
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    ensurePageScrollable();
+  }, [pathname, search]);
+
+  useEffect(() => {
+    const unlock = () => ensurePageScrollable();
+    window.addEventListener("hashchange", unlock);
+    window.addEventListener("popstate", unlock);
+    return () => {
+      window.removeEventListener("hashchange", unlock);
+      window.removeEventListener("popstate", unlock);
+    };
+  }, []);
 
   useEffect(() => {
     if (!pollStaffInbox && !pollCustomerInbox && !pollVendorInbox) return;
