@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
+import { ActivityFeed } from "@/components/ActivityFeed";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
@@ -945,6 +946,8 @@ export default function EquipmentDetailPage() {
               )}
             </div>
           </section>
+
+          <ActivityFeed className="mt-4 max-w-2xl" recordType="equipment" recordId={id} />
         </>
       ) : null}
     </div>

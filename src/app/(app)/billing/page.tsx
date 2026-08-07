@@ -445,7 +445,11 @@ export default function BillingPage() {
     }
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: patch.status ? "status_change" : "assigned",
+      action: patch.status
+        ? patch.status === "Sent"
+          ? "billing_release"
+          : "status_change"
+        : "assigned",
       recordType: "invoice",
       recordId: invoiceId,
       newValue: patch.status ?? patch.assigned_to ?? "unassigned",
@@ -526,10 +530,13 @@ export default function BillingPage() {
     await linkWorkOrderPosToInvoice(supabase, wo.id, inv.id);
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "created",
+      action: status === "Sent" ? "billing_release" : "created",
       recordType: "invoice",
       recordId: inv.id,
-      newValue: invoiceNumber,
+      newValue:
+        status === "Sent"
+          ? `${invoiceNumber} · released as Sent`
+          : invoiceNumber,
     });
 
     setPreviewWoId(null);

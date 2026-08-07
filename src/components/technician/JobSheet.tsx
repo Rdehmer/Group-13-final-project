@@ -251,7 +251,7 @@ export function JobSheet({
       });
       await logActivity(supabase, {
         userId: profile.id,
-        action: "part_used",
+        action: forceBillable ? "extra_parts_outside_contract" : "part_used",
         recordType: "work_order",
         recordId: job.id,
         newValue: `${part.name} x${quantity}${forceBillable ? " (out of scope)" : " (covered)"}`,
