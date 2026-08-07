@@ -16,7 +16,12 @@ export default function SettingsPage() {
 
   useEffect(() => {
     supabase.from("company_settings").select("*").limit(1).single().then(({ data }) => {
-      setSettings(data as CompanySettings);
+      if (!data) return;
+      const row = data as CompanySettings;
+      setSettings({
+        ...row,
+        contract_service_request_wait_days: row.contract_service_request_wait_days ?? 45,
+      });
     });
   }, []);
 
@@ -31,6 +36,10 @@ export default function SettingsPage() {
       support_email: settings.support_email,
       default_tax_rate: settings.default_tax_rate,
       overtime_multiplier: settings.overtime_multiplier,
+      contract_service_request_wait_days: Math.max(
+        0,
+        Math.floor(Number(settings.contract_service_request_wait_days) || 0),
+      ),
       updated_at: new Date().toISOString(),
     }).eq("id", settings.id);
     if (error) setMessage(error.message);
@@ -76,8 +85,27 @@ export default function SettingsPage() {
           <FormRow label="Tax rate">
             <input type="number" min="0" max="1" step="0.0001" className="input input-bordered w-full" value={settings.default_tax_rate} onChange={(e) => setSettings({ ...settings, default_tax_rate: Number(e.target.value) })} />
           </FormRow>
-          <FormRow label="OT multiplier">
+          <FormRow label="OT Multiplier">
             <input type="number" min="1" step="0.1" className="input input-bordered w-full" value={settings.overtime_multiplier} onChange={(e) => setSettings({ ...settings, overtime_multiplier: Number(e.target.value) })} />
+          </FormRow>
+          <FormRow label="Service Request Wait Days">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className="input input-bordered w-full"
+              value={settings.contract_service_request_wait_days ?? 45}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  contract_service_request_wait_days: Number(e.target.value),
+                })
+              }
+            />
+            <p className="mt-1 text-xs opacity-60">
+              Days after an Active contract starts before included visits are allowed. Set to 0 to
+              disable the lock.
+            </p>
           </FormRow>
           <button type="submit" className="btn btn-primary btn-sm w-fit" disabled={saving}>{saving ? "Saving…" : "Save Settings"}</button>
         </div>

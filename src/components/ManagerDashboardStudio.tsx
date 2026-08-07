@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { differenceInCalendarDays, isBefore, parseISO, startOfDay } from "date-fns";
-import { Grip, Plus, Settings2, Trash2, X } from "lucide-react";
+import { Copy, Grip, Plus, Settings2, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { ClickableStatCard, ClickableSectionCard } from "@/components/ClickableStatCard";
 import {
@@ -104,6 +104,8 @@ function ResizableFrame({
   widget,
   editMode,
   onHeight,
+  onSize,
+  onDuplicate,
   onRemove,
   onDragStart,
   onDragEnd,
@@ -116,6 +118,8 @@ function ResizableFrame({
   widget: WidgetInstance;
   editMode: boolean;
   onHeight: (id: string, h: number) => void;
+  onSize: (id: string, size: WidgetSize) => void;
+  onDuplicate: (id: string) => void;
   onRemove: (id: string) => void;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
@@ -179,7 +183,7 @@ function ResizableFrame({
       }}
     >
       {editMode ? (
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-primary/20 bg-primary/10 px-2 py-1">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-primary/20 bg-primary/10 px-2 py-1">
           <button
             type="button"
             draggable
@@ -192,14 +196,39 @@ function ResizableFrame({
             <span className="truncate">{catalog.name}</span>
             <span className="hidden font-normal normal-case opacity-70 sm:inline">· drop on another box</span>
           </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs text-error"
-            aria-label={`Remove ${catalog.name}`}
-            onClick={() => onRemove(widget.id)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex flex-wrap items-center gap-1">
+            <div className="join join-horizontal" role="group" aria-label={`Width for ${catalog.name}`}>
+              {(["small", "medium", "large"] as WidgetSize[]).map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  className={`btn btn-xs join-item ${widget.size === size ? "btn-primary" : "btn-ghost"}`}
+                  aria-pressed={widget.size === size}
+                  title={size}
+                  onClick={() => onSize(widget.id, size)}
+                >
+                  {size === "small" ? "S" : size === "medium" ? "M" : "L"}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              aria-label={`Duplicate ${catalog.name}`}
+              title="Duplicate"
+              onClick={() => onDuplicate(widget.id)}
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs text-error"
+              aria-label={`Remove ${catalog.name}`}
+              onClick={() => onRemove(widget.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       ) : (
         /* Always show a slim drag handle so reordering does not require Edit for power users */
@@ -327,8 +356,35 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
     );
   }, []);
 
+  const onSize = useCallback((id: string, size: WidgetSize) => {
+    setWidgets((prev) =>
+      prev.map((w) => {
+        if (w.id !== id) return w;
+        return {
+          ...w,
+          size,
+          // Reset custom height so the new width band gets a sensible default height.
+          heightPx: undefined,
+        };
+      }),
+    );
+  }, []);
+
   const removeWidget = useCallback((id: string) => {
     setWidgets((prev) => prev.filter((w) => w.id !== id));
+  }, []);
+
+  const duplicateWidget = useCallback((id: string) => {
+    setWidgets((prev) => {
+      const idx = prev.findIndex((w) => w.id === id);
+      if (idx < 0) return prev;
+      const source = prev[idx];
+      const copy = createWidget(source.type, source.size);
+      if (source.heightPx != null) copy.heightPx = source.heightPx;
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
   }, []);
 
   const addWidget = useCallback((type: WidgetTypeId, size: WidgetSize) => {
@@ -341,6 +397,10 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
 
   const resetLayout = useCallback(() => {
     setWidgets(defaultWidgets());
+  }, []);
+
+  const clearDashboard = useCallback(() => {
+    setWidgets([]);
   }, []);
 
   const handleDragOver = useCallback(
@@ -444,7 +504,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
         return (
           <div className="flex h-full min-h-0 flex-col overflow-hidden p-3">
             <p className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-base-content/50">
-              Needs attention
+              Needs Attention
             </p>
             {data.attentionTiles.length === 0 ? (
               <p className="text-sm text-base-content/55">Nothing urgent right now.</p>
@@ -479,7 +539,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
       case "contract_status_pie":
         return (
           <ContractPieCard
-            title="Contracts by status"
+            title="Contracts by Status"
             description="Portfolio mix across every contract status"
             data={data.contractStatusSlices}
             valueKind="count"
@@ -491,7 +551,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
       case "contract_value_pie":
         return (
           <ContractPieCard
-            title="Active contract value by type"
+            title="Active Contract Value by Type"
             description="Annual/booked price for Active contracts only"
             data={data.contractValueSlices}
             valueKind="money"
@@ -524,7 +584,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
           <div className="flex h-full min-h-0 flex-col overflow-hidden p-2">
             <ClickableSectionCard
               href="/contracts?status=Active"
-              title="Contracts expiring within 30 days"
+              title="Contracts Expiring Within 30 Days"
               ariaLabel="View active contracts"
               fillParent
             >
@@ -666,7 +726,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
         return (
           <div className="flex h-full min-h-0 p-2">
             <StatTile
-              label="Pending leave"
+              label="Pending Leave"
               value={data.pendingTimeOff}
               href="/time-off"
               danger={data.pendingTimeOff > 0}
@@ -678,7 +738,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
         return (
           <div className="flex h-full min-h-0 p-2">
             <StatTile
-              label="High / critical open"
+              label="High / Critical Open"
               value={data.criticalCount}
               href="/work-orders?filter=urgent"
               danger={data.criticalCount > 0}
@@ -689,7 +749,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
         return (
           <div className="flex h-full min-h-0 p-2">
             <StatTile
-              label="Unscheduled open"
+              label="Unscheduled Open"
               value={data.unscheduledOpen}
               href="/technician"
               danger={data.unscheduledOpen > 0}
@@ -705,7 +765,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
               className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden rounded-2xl border-2 border-primary/25 bg-primary/5 px-4 py-5 transition-colors hover:border-primary/50 hover:bg-primary/10"
             >
               <p className="text-sm font-semibold uppercase tracking-wide text-primary/80">
-                Dispatch board
+                Dispatch Board
               </p>
               <p className="mt-1 font-display text-xl font-semibold leading-snug">
                 Review live assignment priorities
@@ -723,7 +783,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
     <div>
       <PageHeader
         title="Dashboard"
-        description="Operations overview — add widgets, resize frames, open any tile for details"
+        description="Customize your operations overview — add, move, resize, and duplicate any widget"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -745,7 +805,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
               aria-pressed={editMode}
             >
               <Settings2 className="h-4 w-4" />
-              {editMode ? "Done" : "Edit"}
+              {editMode ? "Done" : "Edit Dashboard"}
             </button>
           </div>
         }
@@ -754,18 +814,22 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
       {editMode ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/25 bg-primary/5 px-3 py-2 text-sm">
           <p className="text-base-content/80">
-            <strong>Edit home screen</strong> — drag a box (or its grip) onto another box to insert;
-            the target and everything below bump down. Resize from the bottom-right corner. Trash
-            removes a widget.
+            <strong>Edit Dashboard</strong> — drag to reorder, use S/M/L for width, resize from the
+            corner for height, duplicate or remove any widget.
           </p>
-          <button type="button" className="btn btn-ghost btn-xs" onClick={resetLayout}>
-            Reset to default layout
-          </button>
+          <div className="flex flex-wrap gap-1">
+            <button type="button" className="btn btn-ghost btn-xs" onClick={clearDashboard}>
+              Clear Dashboard
+            </button>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={resetLayout}>
+              Reset to Default Layout
+            </button>
+          </div>
         </div>
       ) : (
         <p className="mb-3 text-xs text-base-content/55">
-          Hover a widget and use <strong>Move</strong> to reorder. Turn on <strong>Edit</strong> to
-          resize or remove.
+          Hover a widget and use <strong>Move</strong> to reorder. Turn on{" "}
+          <strong>Edit Dashboard</strong> to change width, height, duplicate, or remove.
         </p>
       )}
 
@@ -776,6 +840,8 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
               widget={widget}
               editMode={editMode}
               onHeight={onHeight}
+              onSize={onSize}
+              onDuplicate={duplicateWidget}
               onRemove={removeWidget}
               onDragStart={(id) => setDraggingId(id || null)}
               onDragEnd={handleDragEnd}
@@ -864,7 +930,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
                       className="font-display text-base font-semibold leading-tight"
                       style={{ color: "#111827" }}
                     >
-                      Needs attention
+                      Needs Attention
                     </h2>
                     <p className="text-xs" style={{ color: "#6b7280" }}>
                       {data.attentionTiles.length} item
@@ -1060,7 +1126,7 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
                 </div>
                 <div>
                   <p className="mb-2 text-center text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                    Widget size
+                    Widget Size
                   </p>
                   <div className="flex flex-wrap justify-center gap-2">
                     {catalogEntry(pickerType).sizes.map((size) => (

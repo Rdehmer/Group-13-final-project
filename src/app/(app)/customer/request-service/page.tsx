@@ -10,8 +10,9 @@ import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import {
-  CONTRACT_START_DATE_BLOCK_MESSAGE,
+  CONTRACT_SERVICE_REQUEST_WAIT_DAYS,
   CONTRACT_START_DATE_ONE_OFF_TITLE,
+  contractStartDateBlockMessage,
   findBlockingContractForServiceRequest,
   isContractStartDateBlockError,
   parseCustomerContracts,
@@ -193,9 +194,10 @@ function RequestServicePageInner() {
   const [appliedPreselect, setAppliedPreselect] = useState(false);
   const [oneOffOutsideContract, setOneOffOutsideContract] = useState(false);
   const [blockingContract, setBlockingContract] = useState<CustomerContract | null>(null);
+  const [waitDays, setWaitDays] = useState(CONTRACT_SERVICE_REQUEST_WAIT_DAYS);
 
   const loadData = useCallback(async (customerId: string) => {
-    const [{ data: eq }, { data: sc }, { data: customer }] = await Promise.all([
+    const [{ data: eq }, { data: sc }, { data: customer }, { data: settings }] = await Promise.all([
       supabase.from("equipment").select("*").eq("customer_id", customerId).order("name"),
       supabase
         .from("service_contracts")
@@ -207,9 +209,20 @@ function RequestServicePageInner() {
         `)
         .eq("customer_id", customerId),
       supabase.from("customers").select("phone").eq("id", customerId).single(),
+      supabase
+        .from("company_settings")
+        .select("contract_service_request_wait_days")
+        .limit(1)
+        .maybeSingle(),
     ]);
     setEquipment((eq as Equipment[]) ?? []);
     setContracts(parseCustomerContracts(sc ?? []));
+    const loadedWait = settings?.contract_service_request_wait_days;
+    setWaitDays(
+      typeof loadedWait === "number" && Number.isFinite(loadedWait)
+        ? Math.max(0, Math.floor(loadedWait))
+        : CONTRACT_SERVICE_REQUEST_WAIT_DAYS,
+    );
     const phone = customer?.phone ?? "";
     setCustomerPhone(phone);
     if (phone) {
@@ -336,10 +349,14 @@ function RequestServicePageInner() {
       return;
     }
 
-    const blocking = findBlockingContractForServiceRequest(contracts, form.equipment_id || null);
+    const blocking = findBlockingContractForServiceRequest(
+      contracts,
+      form.equipment_id || null,
+      waitDays,
+    );
     if (blocking && !useOneOff) {
       setBlockingContract(blocking);
-      setError(CONTRACT_START_DATE_BLOCK_MESSAGE);
+      setError(contractStartDateBlockMessage(waitDays));
       return;
     }
 
@@ -383,8 +400,11 @@ function RequestServicePageInner() {
 
     if (insertError) {
       if (isContractStartDateBlockError(insertError.message) && !useOneOff) {
-        setBlockingContract(blocking ?? findBlockingContractForServiceRequest(contracts, form.equipment_id || null));
-        setError(CONTRACT_START_DATE_BLOCK_MESSAGE);
+        setBlockingContract(
+          blocking ??
+            findBlockingContractForServiceRequest(contracts, form.equipment_id || null, waitDays),
+        );
+        setError(contractStartDateBlockMessage(waitDays));
       } else {
         setError(insertError.message);
       }
@@ -455,7 +475,7 @@ function RequestServicePageInner() {
                       <p className="mt-1 opacity-80">
                         Your contract <span className="font-medium">{blockingContract.name}</span> started on{" "}
                         {blockingContract.start_date}. Included contract visits aren&apos;t available during the first{" "}
-                        45 days.
+                        {waitDays} days.
                       </p>
                     ) : null}
                   </div>

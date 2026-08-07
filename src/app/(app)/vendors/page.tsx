@@ -288,7 +288,7 @@ export default function VendorsPage() {
       <p className="mb-4 text-sm opacity-70">
         Parts &amp; materials AP. For specialty subcontractors, see{" "}
         <Link href="/service-vendors" className="link link-hover font-medium">
-          Service vendors
+          Service Vendors
         </Link>
         .
       </p>

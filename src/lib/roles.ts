@@ -26,7 +26,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     section: true,
     href: "#nav-admin-people",
-    label: "People & access",
+    label: "People & Access",
     roles: ["administrator"],
     children: [
       {
@@ -36,7 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/settings/employees",
-        label: "Employee permissions",
+        label: "Employee Permissions",
         roles: ["administrator"],
       },
     ],
@@ -49,7 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       {
         href: "/dashboard",
-        label: "Admin home",
+        label: "Admin Home",
         roles: ["administrator"],
       },
       {
@@ -74,7 +74,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     section: true,
     href: "#nav-admin-finance",
-    label: "Finance controls",
+    label: "Finance Controls",
     roles: ["administrator"],
     children: [
       {
@@ -219,7 +219,7 @@ export const NAV_ITEMS: NavItem[] = [
           },
           {
             href: "/service-vendors",
-            label: "Service vendors",
+            label: "Service Vendors",
             roles: ["service_manager", "billing"],
           },
         ],

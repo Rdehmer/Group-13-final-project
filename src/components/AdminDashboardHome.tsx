@@ -26,15 +26,15 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Admin home"
+        title="Admin Home"
         description="Manage manager accounts, staff access, and company controls — field operations stay with service managers."
         actions={
           <div className="flex flex-wrap gap-2">
             <Link href="/users" className="btn btn-primary btn-sm">
-              Manage users
+              Manage Users
             </Link>
             <Link href="/settings/employees" className="btn btn-outline btn-sm">
-              Permissions & rates
+              Permissions & Rates
             </Link>
           </div>
         }
@@ -42,7 +42,7 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <ClickableStatCard
-          label="Service managers"
+          label="Service Managers"
           value={String(data.managerCount)}
           href="/users"
           hint="Primary accounts to review"
@@ -53,12 +53,12 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
           href="/users"
         />
         <ClickableStatCard
-          label="Billing staff"
+          label="Billing Staff"
           value={String(data.billingCount)}
           href="/users"
         />
         <ClickableStatCard
-          label="Active staff"
+          label="Active Staff"
           value={String(data.activeStaffCount)}
           href="/users"
           hint={
@@ -73,13 +73,13 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
         <div className="card-body gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="card-title text-base">Service managers</h2>
+              <h2 className="card-title text-base">Service Managers</h2>
               <p className="text-sm opacity-70">
                 These accounts run day-to-day dispatch, schedules, and approvals.
               </p>
             </div>
             <Link href="/users" className="btn btn-ghost btn-sm">
-              Open user directory
+              Open User Directory
             </Link>
           </div>
           {data.managers.length === 0 ? (
@@ -113,7 +113,7 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
           className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm transition hover:border-primary/40"
         >
           <p className="text-xs font-semibold uppercase tracking-wide opacity-60">1</p>
-          <p className="mt-1 font-semibold">Assign manager roles</p>
+          <p className="mt-1 font-semibold">Assign Manager Roles</p>
           <p className="mt-1 text-sm opacity-70">
             Create or update service manager accounts in Users.
           </p>
@@ -123,7 +123,7 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
           className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm transition hover:border-primary/40"
         >
           <p className="text-xs font-semibold uppercase tracking-wide opacity-60">2</p>
-          <p className="mt-1 font-semibold">Tune permissions</p>
+          <p className="mt-1 font-semibold">Tune Permissions</p>
           <p className="mt-1 text-sm opacity-70">
             Set module access and rates per employee without cluttering their ops sidebar.
           </p>
@@ -133,7 +133,7 @@ export function AdminDashboardHome({ data }: { data: AdminDashboardData }) {
           className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm transition hover:border-primary/40"
         >
           <p className="text-xs font-semibold uppercase tracking-wide opacity-60">3</p>
-          <p className="mt-1 font-semibold">Company settings</p>
+          <p className="mt-1 font-semibold">Company Settings</p>
           <p className="mt-1 text-sm opacity-70">
             GL accounts, contract plans, and other system configuration.
           </p>

@@ -57,8 +57,8 @@ function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/scheduling" && role === "technician") return "Hours";
   if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
-  if (item.href === "/dashboard" && role === "administrator") return "Admin home";
-  if (item.href === "/dashboard" && role === "service_manager") return "Operations";
+  if (item.href === "/dashboard" && role === "administrator") return "Admin Home";
+  if (item.href === "/dashboard" && role === "service_manager") return "Dashboard";
   return item.label;
 }
 
@@ -583,7 +583,7 @@ function SidebarNavBody({
 
       <div className="eq-sidebar-foot">
         <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
-        <p className="mt-0.5 text-[10px] text-white/30">Field service ?? Billing ?? Operations</p>
+        <p className="mt-0.5 text-[10px] text-white/30">Field Service · Billing · Operations</p>
       </div>
     </>
   );

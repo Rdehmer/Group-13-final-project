@@ -601,6 +601,8 @@ export type CompanySettings = {
   support_email: string | null;
   default_tax_rate: number;
   overtime_multiplier: number;
+  /** Days after Active contract start before included service requests are allowed. 0 disables. */
+  contract_service_request_wait_days: number;
   created_at: string;
   updated_at: string;
 };

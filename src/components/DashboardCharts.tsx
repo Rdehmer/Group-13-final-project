@@ -411,14 +411,14 @@ export function DashboardCharts({
           }`}
         >
           <ContractPieCard
-            title="Contracts by status"
+            title="Contracts by Status"
             description="Portfolio mix across every contract status"
             data={contractStatusSlices ?? []}
             valueKind="count"
             viewAllHref="/contracts"
           />
           <ContractPieCard
-            title="Active contract value by type"
+            title="Active Contract Value by Type"
             description="Annual/booked price for Active contracts only"
             data={contractValueSlices ?? []}
             valueKind="money"

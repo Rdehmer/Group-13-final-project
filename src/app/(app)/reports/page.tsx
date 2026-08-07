@@ -639,7 +639,7 @@ export default function ReportsPage() {
               Payments
             </Link>
             <Link href="/reports/contracts" className="btn btn-ghost btn-sm">
-              Contract profitability
+              Contract Profitability
             </Link>
           </div>
         }

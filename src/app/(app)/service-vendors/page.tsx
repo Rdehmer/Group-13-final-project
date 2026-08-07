@@ -210,7 +210,7 @@ export default function ServiceVendorsPage() {
   if (!profile || !allowed.has(profile.role)) {
     return (
       <EmptyState
-        title="Service vendors unavailable"
+        title="Service Vendors Unavailable"
         description="Only administrators, service managers, and billing can manage service providers."
       />
     );

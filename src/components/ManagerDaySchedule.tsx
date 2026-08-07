@@ -189,7 +189,7 @@ export function ManagerDaySchedule() {
     <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-3">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="font-display text-base font-semibold leading-tight">Daily schedule</h2>
+          <h2 className="font-display text-base font-semibold leading-tight">Daily Schedule</h2>
           <p className="text-xs text-base-content/55">
             {isToday ? "Today's work orders" : "Work orders for this day"} · opens Technician day calendar
           </p>

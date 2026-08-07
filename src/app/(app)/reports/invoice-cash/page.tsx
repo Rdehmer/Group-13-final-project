@@ -59,7 +59,7 @@ export default function InvoiceCashReportsPage() {
               ← Financial Reports
             </Link>
             <Link href="/reports/contracts" className="btn btn-outline btn-sm">
-              Contract profitability
+              Contract Profitability
             </Link>
           </div>
         }

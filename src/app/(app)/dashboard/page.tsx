@@ -278,13 +278,13 @@ export default async function DashboardPage() {
   const attentionTiles = isManager
     ? [
         {
-          label: "Unread inbox messages",
+          label: "Unread Inbox Messages",
           value: unreadInboxCount,
           href: "/inbox",
           danger: unreadInboxCount > 0,
         },
         {
-          label: "Pending contract approvals",
+          label: "Pending Contract Approvals",
           value: pendingApprovals,
           href: "/contracts?status=Pending%20Approval",
           danger: pendingApprovals > 0,
@@ -296,25 +296,25 @@ export default async function DashboardPage() {
           danger: expiringSoonCount > 0,
         },
         {
-          label: "Pending PTO requests",
+          label: "Pending PTO Requests",
           value: pendingTimeOff,
           href: "/time-off",
           danger: pendingTimeOff > 0,
         },
         {
-          label: "Unscheduled open WOs",
+          label: "Unscheduled Open WOs",
           value: unscheduledOpen,
           href: "/technician",
           danger: unscheduledOpen > 0,
         },
         {
-          label: "High / critical open",
+          label: "High / Critical Open",
           value: criticalCount ?? 0,
           href: "/work-orders?filter=urgent",
           danger: (criticalCount ?? 0) > 0,
         },
         {
-          label: "Timesheet exceptions review",
+          label: "Timesheet Exceptions Review",
           value: 1,
           href: "/timesheets",
           danger: true,

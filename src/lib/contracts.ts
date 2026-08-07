@@ -571,8 +571,15 @@ export function findOverlappingEquipment(
 
 export const CONTRACT_SERVICE_REQUEST_WAIT_DAYS = 45;
 
-export const CONTRACT_START_DATE_BLOCK_MESSAGE =
-  "You cannot make a service request within 45 days of your contract start date.";
+export function contractStartDateBlockMessage(waitDays = CONTRACT_SERVICE_REQUEST_WAIT_DAYS): string {
+  const days = Math.max(0, Math.floor(waitDays));
+  return `You cannot make a service request within ${days} days of your contract start date.`;
+}
+
+/** @deprecated Prefer contractStartDateBlockMessage(waitDays) — kept for fallback matching. */
+export const CONTRACT_START_DATE_BLOCK_MESSAGE = contractStartDateBlockMessage(
+  CONTRACT_SERVICE_REQUEST_WAIT_DAYS,
+);
 
 export const CONTRACT_START_DATE_ONE_OFF_TITLE = "One-Off Call";
 
@@ -583,6 +590,7 @@ export function isContractStartDateBlockError(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
     message.includes(CONTRACT_START_DATE_BLOCK_MESSAGE) ||
+    /within \d+ days of your contract start date/i.test(message) ||
     normalized.includes("within 45 days of your contract start date")
   );
 }
@@ -598,10 +606,13 @@ export function daysSinceContractStart(startDate: string, asOf = new Date()): nu
 
 export function isWithinContractServiceRequestWaitingPeriod(
   startDate: string,
+  waitDays: number = CONTRACT_SERVICE_REQUEST_WAIT_DAYS,
   asOf = new Date(),
 ): boolean {
+  const daysLimit = Math.max(0, Math.floor(waitDays));
+  if (daysLimit <= 0) return false;
   const days = daysSinceContractStart(startDate, asOf);
-  return days !== null && days < CONTRACT_SERVICE_REQUEST_WAIT_DAYS;
+  return days !== null && days < daysLimit;
 }
 
 function isActiveContractStatus(status: string): boolean {
@@ -612,10 +623,11 @@ function isActiveContractStatus(status: string): boolean {
 export function findBlockingContractForServiceRequest(
   contracts: CustomerContract[],
   equipmentId: string | null,
+  waitDays: number = CONTRACT_SERVICE_REQUEST_WAIT_DAYS,
 ): CustomerContract | null {
   for (const contract of contracts) {
     if (!isActiveContractStatus(contract.status)) continue;
-    if (!isWithinContractServiceRequestWaitingPeriod(contract.start_date)) continue;
+    if (!isWithinContractServiceRequestWaitingPeriod(contract.start_date, waitDays)) continue;
     if (equipmentId && !contract.equipment.some((eq) => eq.id === equipmentId)) continue;
     return contract;
   }

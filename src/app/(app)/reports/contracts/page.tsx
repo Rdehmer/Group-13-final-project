@@ -752,7 +752,7 @@ export default function ReportsPage() {
   return (
     <div>
       <PageHeader
-        title="Contract profitability"
+        title="Contract Profitability"
         description="Monthly fee vs planned direct cost (labor @ $42/hr + parts ÷ 12)"
         actions={
           <div className="flex flex-wrap gap-2">
