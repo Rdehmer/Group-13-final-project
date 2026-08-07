@@ -9,6 +9,10 @@ export type PurchaseOrderWithDetails = PurchaseOrder & {
 
 export type PurchaseOrderKind = "restock" | "field";
 
+/** Disambiguate PO ↔ vendor supply order embed after bidirectional FK migration. */
+export const RESTOCK_VENDOR_SUPPLY_ORDER_EMBED =
+  "vendor_supply_orders!purchase_orders_vendor_supply_order_id_fkey(id, status, item_name)";
+
 /** Friendly message for PO UI — avoids raw Postgres / migration hints. */
 export function formatPurchaseOrderError(message: string | null | undefined): string {
   const raw = (message ?? "").trim();

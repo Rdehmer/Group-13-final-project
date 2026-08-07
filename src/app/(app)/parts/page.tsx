@@ -15,7 +15,11 @@ import { EmergencyPurchaseLog } from "@/components/EmergencyPurchaseLog";
 import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
 import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
-import { createVendorSupplyOrderForRestock, formatPurchaseOrderError } from "@/lib/purchaseOrders";
+import {
+  RESTOCK_VENDOR_SUPPLY_ORDER_EMBED,
+  createVendorSupplyOrderForRestock,
+  formatPurchaseOrderError,
+} from "@/lib/purchaseOrders";
 import type { Part, Profile, TechPartOrderRequest, Vendor, WorkOrder } from "@/lib/types";
 import { useLiveReload } from "@/components/LiveDataRefresh";
 
@@ -169,7 +173,7 @@ export default function PartsPage() {
       supabase
         .from("purchase_orders")
         .select(
-          "*, parts(part_number, name, vendor_id), vendor_supply_orders(id, status, item_name)",
+          `*, parts(part_number, name, vendor_id), ${RESTOCK_VENDOR_SUPPLY_ORDER_EMBED}`,
         )
         .eq("order_type", "restock")
         .eq("technician_id", technicianId)
@@ -213,7 +217,7 @@ export default function PartsPage() {
     const { data } = await supabase
       .from("purchase_orders")
       .select(
-        "*, parts(id, part_number, name, quantity_on_hand, vendor_id), vendor_supply_orders(id, status, item_name)",
+        `*, parts(id, part_number, name, quantity_on_hand, vendor_id), ${RESTOCK_VENDOR_SUPPLY_ORDER_EMBED}`,
       )
       .eq("order_type", "restock")
       .in("status", ["pending", "approved"])
