@@ -53,7 +53,7 @@ export const ACCOUNTING_POLICIES = {
   allowance:
     "Allowance for credit losses uses a simplified aging method on open balances: 2% of 1–30 days past due, 10% of 31–60, and 50% of 61+ (CECL proxy). Month-end close can post DR Bad Debt Expense / CR Allowance.",
   cogs:
-    "Cost of services for earned jobs is matched to linked work orders: technician labor at stored cost rates and parts at unit_cost × quantity. Inventory relief journals (DR COGS / CR Inventory) can be posted at close for parts used.",
+    "Cost of services (COGS) for jobs: technician hours hit COGS — Labor Cost at stored hourly cost rates; parts hit COGS — Parts Expense at unit_cost × quantity used. Gross profit = billed service revenue − (direct labor cost + parts COGS). Logging parts posts DR COGS Parts / CR Inventory; clocked labor posts DR COGS Labor / CR Accrued Wages.",
   inventory: "Inventory is measured at FIFO unit_cost × quantity_on_hand for active parts (approximate cost method in app).",
   cash: "Cash is recorded when undeposited funds are cleared to bank (deposit journals). Payment batches first hit Undeposited Funds; deposit clearing moves them to Cash.",
   taxLiability:
@@ -252,7 +252,7 @@ export const REPORT_CATALOG: ReportGroup[] = [
       {
         id: "job_profit",
         name: "Job Profitability",
-        description: "Per work order: billed revenue, actual labor/parts cost, margin.",
+        description: "Per work order: billed revenue − labor COGS − parts COGS = gross profit.",
       },
       {
         id: "contract_profit",
@@ -386,6 +386,46 @@ export function laborCostAmount(row: TechnicianLabor): number {
 
 export function partCostAmount(row: WorkOrderPart): number {
   return Number(row.quantity_used) * Number(row.unit_cost);
+}
+
+/**
+ * Job-level Gross Profit from billed invoices and actual tech-logged costs.
+ * Gross Profit = Billed Revenue − (Direct Labor Cost + Parts COGS).
+ * Never treats billed revenue alone as profitability.
+ */
+export function computeJobGrossProfit(input: {
+  invoices: Invoice[];
+  labor: TechnicianLabor[];
+  parts: WorkOrderPart[];
+}): {
+  billedRevenue: number;
+  laborCogs: number;
+  partsCogs: number;
+  cogs: number;
+  grossProfit: number;
+  margin: number | null;
+  invoiceCount: number;
+} {
+  let billedRevenue = 0;
+  let invoiceCount = 0;
+  for (const inv of input.invoices) {
+    if (!isRecognizedRevenue(inv)) continue;
+    billedRevenue += serviceRevenueAmount(inv);
+    invoiceCount += 1;
+  }
+  const laborCogs = input.labor.reduce((s, row) => s + laborCostAmount(row), 0);
+  const partsCogs = input.parts.reduce((s, row) => s + partCostAmount(row), 0);
+  const cogs = laborCogs + partsCogs;
+  const profit = grossProfit(billedRevenue, cogs);
+  return {
+    billedRevenue,
+    laborCogs,
+    partsCogs,
+    cogs,
+    grossProfit: profit,
+    margin: profitMargin(billedRevenue, profit),
+    invoiceCount,
+  };
 }
 
 export function partBillableAmount(row: WorkOrderPart): number {

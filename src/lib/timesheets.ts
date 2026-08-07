@@ -1686,6 +1686,24 @@ async function insertLaborMirror(
     if (error) {
       await supabase.from("technician_labor").update(base).eq("id", entry.technician_labor_id);
     }
+    try {
+      const { postCogsForLabor } = await import("@/lib/accounting/postings");
+      const amount = laborCostCalc(
+        Number(entry.regular_hours) || 0,
+        Number(entry.overtime_hours) || 0,
+        Number(entry.hourly_cost_rate) || 0,
+        Number(entry.overtime_cost_rate || (entry.hourly_cost_rate || 0) * 1.5),
+      );
+      postCogsForLabor({
+        amount,
+        asOf: entry.entry_date,
+        workOrderId: entry.work_order_id,
+        laborId: entry.technician_labor_id,
+        userId: entry.technician_id,
+      });
+    } catch {
+      // best-effort ledger
+    }
     return entry.technician_labor_id;
   }
   let { data, error } = await supabase.from("technician_labor").insert(withGate).select("id").single();
@@ -1695,7 +1713,26 @@ async function insertLaborMirror(
     error = retry.error;
   }
   if (error || !data) return null;
-  return (data as { id: string }).id;
+  const laborId = (data as { id: string }).id;
+  try {
+    const { postCogsForLabor } = await import("@/lib/accounting/postings");
+    const amount = laborCostCalc(
+      Number(entry.regular_hours) || 0,
+      Number(entry.overtime_hours) || 0,
+      Number(entry.hourly_cost_rate) || 0,
+      Number(entry.overtime_cost_rate || (entry.hourly_cost_rate || 0) * 1.5),
+    );
+    postCogsForLabor({
+      amount,
+      asOf: entry.entry_date,
+      workOrderId: entry.work_order_id,
+      laborId,
+      userId: entry.technician_id,
+    });
+  } catch {
+    // Local ledger postings are best-effort; job cost still lives on technician_labor.
+  }
+  return laborId;
 }
 
 export async function clockOut(

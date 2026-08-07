@@ -1507,15 +1507,28 @@ export default function TechnicianSchedulePage() {
     }
     const qty = Number(partForm.quantity_used);
     const billable = part.standard_customer_price * qty;
-    await supabase.from("work_order_parts").insert({
-      work_order_id: selectedId,
-      part_id: part.id,
-      quantity_used: qty,
-      unit_cost: part.unit_cost,
-      customer_price: part.standard_customer_price,
-      billable_amount: billable,
-    });
+    const unitCost = Number(part.unit_cost) || 0;
+    const { data: inserted } = await supabase
+      .from("work_order_parts")
+      .insert({
+        work_order_id: selectedId,
+        part_id: part.id,
+        quantity_used: qty,
+        unit_cost: part.unit_cost,
+        customer_price: part.standard_customer_price,
+        billable_amount: billable,
+      })
+      .select("id")
+      .single();
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
+    const { postCogsForParts } = await import("@/lib/accounting/postings");
+    postCogsForParts({
+      amount: unitCost * qty,
+      asOf: new Date().toISOString().slice(0, 10),
+      workOrderId: selectedId,
+      partsLineId: (inserted as { id?: string } | null)?.id,
+      userId: profile?.id ?? null,
+    });
     setPartForm({ part_id: "", quantity_used: "1" });
     await loadDetail(selectedId);
     await loadInventory();

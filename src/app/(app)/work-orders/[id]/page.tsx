@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -23,8 +23,9 @@ import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
-import { formatMoney } from "@/lib/calculations";
+import { formatMoney, formatPct } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
+import { computeJobGrossProfit } from "@/lib/reports";
 import { workOrderLaborHours, timesheetHref } from "@/lib/timesheets";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
@@ -111,6 +112,11 @@ export default function JobDetailPage() {
   const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchase[]>([]);
   const [serviceRating, setServiceRating] = useState<WorkOrderServiceRating | null>(null);
   const [timeEntryHours, setTimeEntryHours] = useState({ hours: 0, laborCost: 0, billableAmount: 0 });
+
+  const jobGrossProfit = useMemo(
+    () => computeJobGrossProfit({ invoices, labor, parts }),
+    [invoices, labor, parts],
+  );
 
   async function load() {
     const [{ data }, { data: { user } }, { data: settings }, { data: purchases }] = await Promise.all([
@@ -505,16 +511,21 @@ export default function JobDetailPage() {
       return;
     }
     const billable = part.standard_customer_price * qty;
-    const { error: insertError } = await supabase.from("work_order_parts").insert({
-      work_order_id: id,
-      part_id: part.id,
-      quantity_used: qty,
-      unit_cost: part.unit_cost,
-      customer_price: part.standard_customer_price,
-      warranty_covered_amount: 0,
-      billable_amount: billable,
-      invoiced: false,
-    });
+    const unitCost = Number(part.unit_cost) || 0;
+    const { data: inserted, error: insertError } = await supabase
+      .from("work_order_parts")
+      .insert({
+        work_order_id: id,
+        part_id: part.id,
+        quantity_used: qty,
+        unit_cost: part.unit_cost,
+        customer_price: part.standard_customer_price,
+        warranty_covered_amount: 0,
+        billable_amount: billable,
+        invoiced: false,
+      })
+      .select("id")
+      .single();
     if (insertError) {
       setError(insertError.message);
       setSaving(false);
@@ -522,6 +533,14 @@ export default function JobDetailPage() {
     }
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
     const { data: { user } } = await supabase.auth.getUser();
+    const { postCogsForParts } = await import("@/lib/accounting/postings");
+    postCogsForParts({
+      amount: unitCost * qty,
+      asOf: new Date().toISOString().slice(0, 10),
+      workOrderId: id,
+      partsLineId: (inserted as { id?: string } | null)?.id,
+      userId: user?.id ?? null,
+    });
     await logActivity(supabase, {
       userId: user?.id ?? null,
       action: "part_used",
@@ -1004,6 +1023,60 @@ export default function JobDetailPage() {
         <div className="space-y-4 lg:col-span-2">
           {tab === "overview" ? (
             <>
+              <div className="card bg-base-100 shadow">
+                <div className="card-body gap-3">
+                  <h2 className="card-title text-base">Job Gross Profit</h2>
+                  <p className="text-xs opacity-70">
+                    Gross Profit = Billed Revenue − (Labor COGS + Parts COGS). Billed revenue alone is
+                    not profitability.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Billed Revenue</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.billedRevenue)}
+                      </p>
+                      <p className="text-xs opacity-55">
+                        {jobGrossProfit.invoiceCount} recognized invoice
+                        {jobGrossProfit.invoiceCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Labor COGS</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.laborCogs)}
+                      </p>
+                      <p className="text-xs opacity-55">Hours × cost rates</p>
+                    </div>
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Parts COGS</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.partsCogs)}
+                      </p>
+                      <p className="text-xs opacity-55">Qty × unit cost</p>
+                    </div>
+                    <div
+                      className={`rounded-box border p-3 ${
+                        jobGrossProfit.grossProfit < 0
+                          ? "border-error/40 bg-error/5"
+                          : "border-success/30 bg-success/5"
+                      }`}
+                    >
+                      <p className="text-xs opacity-60">Gross Profit</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.grossProfit)}
+                      </p>
+                      <p className="text-xs opacity-55">
+                        {jobGrossProfit.margin != null
+                          ? `Margin ${formatPct(jobGrossProfit.margin)}`
+                          : jobGrossProfit.billedRevenue <= 0
+                            ? "Bill the job to compute margin"
+                            : "—"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="card bg-base-100 shadow">
                 <div className="card-body space-y-4">
                   <h2 className="card-title text-base gap-2">
