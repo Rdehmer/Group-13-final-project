@@ -11,6 +11,7 @@ type EmailBody = {
   subject?: string;
   message?: string;
   pdfBase64?: string;
+  cc?: string;
 };
 
 const STAFF_ROLES = new Set(["administrator", "service_manager", "billing"]);
@@ -79,15 +80,7 @@ export async function POST(
   }
 
   const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) {
-    return NextResponse.json(
-      {
-        error:
-          "Email is not configured. Add RESEND_API_KEY (and optionally INVOICE_FROM_EMAIL) to .env.local.",
-      },
-      { status: 503 },
-    );
-  }
+  const demoMode = !apiKey;
 
   const { data: invoice, error: invErr } = await supabase
     .from("invoices")
@@ -127,16 +120,37 @@ export async function POST(
   const customer = Array.isArray(customerRaw) ? customerRaw[0] : customerRaw;
   const customerName = customer?.name?.trim() || "Customer";
 
-  const from =
-    process.env.INVOICE_FROM_EMAIL?.trim() || "EquipmentIQ Billing <onboarding@resend.dev>";
   const message =
     (body.message ?? "").trim() ||
     `Please find invoice ${invoice.invoice_number} attached.`;
+
+  // Demo / classroom: no Resend key — accept the send and return a simulated delivery
+  if (demoMode) {
+    return NextResponse.json({
+      ok: true,
+      demo: true,
+      message:
+        "Email accepted in demo mode (RESEND_API_KEY not set). Invoice PDF was prepared; no external mail was sent.",
+      sent: recipients.map((r) => ({ kind: r.kind, to: r.to, id: `demo-${Date.now()}` })),
+      failures: [] as Array<{ kind: RecipientKind; to: string; error: string }>,
+      hints: {
+        customerEmail: customer?.email ?? null,
+        serviceVendorEmail,
+      },
+    });
+  }
+
+  const from =
+    process.env.INVOICE_FROM_EMAIL?.trim() || "EquipmentIQ Billing <onboarding@resend.dev>";
 
   const resend = new Resend(apiKey);
   const filename = `${invoice.invoice_number}.pdf`;
   const sent: Array<{ kind: RecipientKind; to: string; id?: string }> = [];
   const failures: Array<{ kind: RecipientKind; to: string; error: string }> = [];
+  const ccList = (body.cc ?? "")
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => isValidEmail(s));
 
   for (const recipient of recipients) {
     if (recipient.kind === "customer" && !invoice.customer_id) {
@@ -166,7 +180,14 @@ export async function POST(
       <p style="color:#64748b;font-size:12px">Sent by EquipmentIQ billing.</p>
     `;
 
-    const { data, error } = await resend.emails.send({
+    const sendOpts: {
+      from: string;
+      to: string[];
+      cc?: string[];
+      subject: string;
+      html: string;
+      attachments: Array<{ filename: string; content: string }>;
+    } = {
       from,
       to: [recipient.to],
       subject,
@@ -177,7 +198,14 @@ export async function POST(
           content: pdfBase64,
         },
       ],
-    });
+    };
+
+    // CC only on the first recipient to avoid duplicate CC copies
+    if (ccList.length && sent.length + failures.length === 0) {
+      sendOpts.cc = ccList;
+    }
+
+    const { data, error } = await resend.emails.send(sendOpts);
 
     if (error) {
       failures.push({
@@ -202,6 +230,7 @@ export async function POST(
 
   return NextResponse.json({
     ok: true,
+    demo: false,
     sent,
     failures,
     hints: {

@@ -2,16 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { logActivity } from "@/lib/activity";
-import { PageHeader, FormRow } from "@/components/PageHeader";
+import { PageHeader } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatCard, StatusBadge, statusTone } from "@/components/ui";
+import { InvoicePaymentDialog, type PaymentDialogInvoice } from "@/components/InvoicePaymentDialog";
 import { formatMoney } from "@/lib/calculations";
 import { daysPastDue, calendarMonthsForYear, formatMonthLabel, monthKeyFromDate } from "@/lib/billing";
 import { loadPaymentBatchMap, type BatchLookup } from "@/lib/batches";
-import { applyInvoicePayment } from "@/lib/payments";
 import { jumpToSection } from "@/lib/scrollToSection";
 import type { Invoice, Payment } from "@/lib/types";
 
@@ -45,14 +44,14 @@ function agingBucketFor(inv: Invoice, today = new Date()): AgingBucket {
  */
 export default function PaymentsPage() {
   const supabase = createClient();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedInvoice = searchParams.get("invoice");
   const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ invoice_id: "", payment_method: "Check", payment_amount: "", reference_number: "" });
+  const [payInvoice, setPayInvoice] = useState<PaymentDialogInvoice | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [selectedBucket, setSelectedBucket] = useState<AgingBucket | null>(null);
   const [paymentMonth, setPaymentMonth] = useState<string>("all");
   const [paymentBatchMap, setPaymentBatchMap] = useState<Map<string, BatchLookup>>(new Map());
@@ -63,7 +62,8 @@ export default function PaymentsPage() {
         .from("invoices")
         .select("*, customers(name), work_orders(work_order_number)")
         .gt("remaining_balance", 0)
-        .not("status", "eq", "Canceled"),
+        .not("status", "eq", "Canceled")
+        .order("due_date", { ascending: true }),
       supabase
         .from("payments")
         .select("*, customers(name)")
@@ -78,17 +78,54 @@ export default function PaymentsPage() {
     if (preselectedInvoice) {
       const match = openInvoices.find((i) => i.id === preselectedInvoice);
       if (match) {
-        setForm((f) => ({
-          ...f,
-          invoice_id: match.id,
-          payment_amount: String(match.remaining_balance),
-        }));
-        setShowForm(true);
+        openAcceptFor(match);
+      } else {
+        setError("That invoice is not on the open-AR list (paid, zero balance, or canceled).");
       }
     }
   }
 
-  useEffect(() => { load(); }, [preselectedInvoice]);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when deep-link invoice changes
+  }, [preselectedInvoice]);
+
+  function openAcceptFor(inv: OpenInvoice) {
+    setError(null);
+    setPayInvoice({
+      id: inv.id,
+      invoice_number: inv.invoice_number,
+      customer_id: inv.customer_id,
+      customer_name: inv.customers?.name ?? null,
+      invoice_total: Number(inv.invoice_total),
+      amount_paid: Number(inv.amount_paid),
+      remaining_balance: Number(inv.remaining_balance),
+      status: inv.status,
+    });
+    setShowForm(true);
+  }
+
+  function openRecordPayment() {
+    setError(null);
+    if (invoices.length === 0) {
+      setShowForm(true);
+      setPayInvoice(null);
+      return;
+    }
+    if (invoices.length === 1) {
+      openAcceptFor(invoices[0]);
+      return;
+    }
+    // Multi open invoices: show picker modal
+    setPayInvoice(null);
+    setShowForm(true);
+  }
+
+  function closeRecordPayment() {
+    setShowForm(false);
+    setPayInvoice(null);
+    setError(null);
+  }
 
   const { aging, byBucket, today } = useMemo(() => {
     const now = new Date();
@@ -131,64 +168,42 @@ export default function PaymentsPage() {
     });
   }
 
-  async function recordPayment(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setBusy(true);
-    const inv = invoices.find((i) => i.id === form.invoice_id);
-    if (!inv) { setBusy(false); return; }
-    const amount = Number(form.payment_amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setError("Enter a valid payment amount.");
-      setBusy(false);
-      return;
-    }
-    if (amount > Number(inv.remaining_balance) + 0.001) {
-      setError(`Amount cannot exceed the remaining balance (${formatMoney(inv.remaining_balance)}).`);
-      setBusy(false);
-      return;
-    }
-    const { data: { user } } = await supabase.auth.getUser();
-    const result = await applyInvoicePayment(supabase, {
-      invoiceId: inv.id,
-      customerId: inv.customer_id,
-      invoiceTotal: Number(inv.invoice_total),
-      amountPaidSoFar: Number(inv.amount_paid),
-      remaining: Number(inv.remaining_balance),
-      amount,
-      paymentMethod: form.payment_method,
-      referenceNumber: form.reference_number || null,
-      userId: user?.id ?? null,
-    });
-    if (!result.ok) {
-      setError(result.error);
-      setBusy(false);
-      return;
-    }
-
-    await logActivity(supabase, {
-      userId: user?.id ?? null,
-      action: "recorded",
-      recordType: "payment",
-      recordId: inv.id,
-      newValue: result.paymentNumber,
-    });
-    setShowForm(false);
-    setForm({ invoice_id: "", payment_method: "Check", payment_amount: "", reference_number: "" });
-    await load();
-    setBusy(false);
-  }
-
   return (
     <div>
-      <PageHeader title="Payments" description="Record payments and monitor AR aging" actions={
-        <div className="flex flex-wrap gap-2">
-          <Link href="/billing" className="btn btn-outline btn-sm">Invoices</Link>
-          <Link href="/batches" className="btn btn-outline btn-sm">Batches</Link>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)} disabled={invoices.length === 0}>Record Payment</button>
-        </div>
-      } />
+      <PageHeader
+        title="Payments"
+        description="Accept customer payments and monitor AR aging (ServiceTitan-style tendering)"
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => router.push("/billing")}
+            >
+              Invoices
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => router.push("/batches")}
+            >
+              Batches
+            </button>
+            <button type="button" className="btn btn-success btn-sm" onClick={openRecordPayment}>
+              Accept payment
+            </button>
+          </div>
+        }
+      />
 
+      {error ? (
+        <div className="alert alert-error mb-4 py-2 text-sm">
+          <span>{error}</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setError(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Current"
@@ -293,41 +308,80 @@ export default function PaymentsPage() {
         </div>
       ) : null}
 
-      {showForm ? (
-        <dialog className="modal modal-open">
-          <div className="modal-box">
-            <h3 className="text-lg font-bold">Record Payment (Simulated)</h3>
-            {error ? <div className="alert alert-error mt-3 text-sm">{error}</div> : null}
-            <form onSubmit={recordPayment} className="mt-4 space-y-3">
-              <FormRow label="Invoice" required>
-                <select className="select select-bordered w-full" value={form.invoice_id} onChange={(e) => {
-                  const inv = invoices.find((i) => i.id === e.target.value);
-                  setForm({ ...form, invoice_id: e.target.value, payment_amount: inv ? String(inv.remaining_balance) : "" });
-                }} required>
-                  <option value="">Select…</option>
-                  {invoices.map((inv) => (
-                    <option key={inv.id} value={inv.id}>{inv.invoice_number} — {formatMoney(inv.remaining_balance)}</option>
-                  ))}
-                </select>
-              </FormRow>
-              <FormRow label="Method">
-                <select className="select select-bordered w-full" value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
-                  <option>Check</option><option>Credit Card</option><option>ACH</option><option>Bank Transfer</option><option>Other</option>
-                </select>
-              </FormRow>
-              <FormRow label="Amount" required>
-                <input type="number" min="0.01" step="0.01" className="input input-bordered w-full" value={form.payment_amount} onChange={(e) => setForm({ ...form, payment_amount: e.target.value })} required />
-              </FormRow>
-              <FormRow label="Reference"><input className="input input-bordered w-full" value={form.reference_number} onChange={(e) => setForm({ ...form, reference_number: e.target.value })} /></FormRow>
-              <div className="modal-action">
-                <button type="button" className="btn" onClick={() => setShowForm(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={busy}>Save Payment</button>
+      {showForm && !payInvoice ? (
+        <dialog className="modal modal-open" open>
+          <div className="modal-box max-w-md">
+            <h3 className="text-lg font-bold">Accept payment</h3>
+            <p className="mt-1 text-sm opacity-70">Choose an open invoice to tender against.</p>
+            {invoices.length === 0 ? (
+              <div className="mt-4 space-y-4">
+                <p className="text-sm opacity-70">
+                  There are no open invoices with a balance. Create or send an invoice first.
+                </p>
+                <div className="modal-action">
+                  <button type="button" className="btn btn-ghost" onClick={closeRecordPayment}>
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      closeRecordPayment();
+                      router.push("/billing");
+                    }}
+                  >
+                    Go to invoices
+                  </button>
+                </div>
               </div>
-            </form>
+            ) : (
+              <ul className="mt-4 max-h-72 space-y-2 overflow-y-auto">
+                {invoices.map((inv) => (
+                  <li key={inv.id}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 rounded-xl border border-base-300 bg-base-100 px-3 py-2.5 text-left transition hover:border-success/40 hover:bg-success/5"
+                      onClick={() => openAcceptFor(inv)}
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-mono text-sm font-semibold">{inv.invoice_number}</span>
+                        <span className="block truncate text-xs opacity-60">
+                          {inv.customers?.name ?? "Customer"}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-mono text-sm font-bold text-success">
+                        {formatMoney(inv.remaining_balance)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {invoices.length > 0 ? (
+              <div className="modal-action">
+                <button type="button" className="btn btn-ghost" onClick={closeRecordPayment}>
+                  Cancel
+                </button>
+              </div>
+            ) : null}
           </div>
-          <form method="dialog" className="modal-backdrop"><button type="button" onClick={() => setShowForm(false)}>close</button></form>
+          <form method="dialog" className="modal-backdrop">
+            <button type="button" onClick={closeRecordPayment}>
+              close
+            </button>
+          </form>
         </dialog>
       ) : null}
+
+      <InvoicePaymentDialog
+        open={Boolean(payInvoice)}
+        invoice={payInvoice}
+        onClose={closeRecordPayment}
+        onPaid={async () => {
+          closeRecordPayment();
+          await load();
+        }}
+      />
 
       <div className="card bg-base-100 shadow">
         <div className="card-body">

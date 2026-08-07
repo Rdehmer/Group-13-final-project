@@ -5,6 +5,10 @@ import {
   type ServiceHistoryInvoice,
   type ServiceHistoryWorkOrder,
 } from "@/lib/invoices";
+import {
+  isCoveredLine,
+  type BillableLine,
+} from "@/lib/billing";
 
 function customerAddress(customer: InvoicePdfCustomer): string {
   const parts = [customer.city, customer.state].filter(Boolean);
@@ -14,17 +18,39 @@ function customerAddress(customer: InvoicePdfCustomer): string {
 type JsPdfDoc = {
   setFontSize: (n: number) => void;
   setFont: (family: string, style: string) => void;
-  text: (text: string, x: number, y: number) => void;
+  text: (text: string | string[], x: number, y: number, options?: { maxWidth?: number }) => void;
+  splitTextToSize: (text: string, maxWidth: number) => string[];
   save: (filename: string) => void;
   output: (type: "blob") => Blob;
   lastAutoTable?: { finalY: number };
 };
 
+export type InvoicePdfOptions = {
+  /** Detailed billable/covered lines from work order preview when available. */
+  detailLines?: BillableLine[] | null;
+  coverageNotes?: string | null;
+};
+
+function moneyCell(line: BillableLine): string {
+  if (isCoveredLine(line) && Number(line.amount) === 0) {
+    const list = line.listValue != null ? Number(line.listValue) : 0;
+    return list > 0 ? `Included (list ${formatMoney(list)})` : "Included — no charge";
+  }
+  const amt = Number(line.amount);
+  if (amt < 0) return `-${formatMoney(Math.abs(amt))}`;
+  return formatMoney(amt);
+}
+
+function sectionForLine(line: BillableLine): "covered" | "billable" {
+  return isCoveredLine(line) ? "covered" : "billable";
+}
+
 /** Client-only: builds an invoice PDF blob (jspdf loaded on demand). */
 export async function buildInvoicePdfBlob(
-  invoice: ServiceHistoryInvoice,
+  invoice: ServiceHistoryInvoice & { notes?: string | null },
   workOrder: ServiceHistoryWorkOrder,
   customer: InvoicePdfCustomer,
+  options?: InvoicePdfOptions,
 ): Promise<Blob> {
   const [{ jsPDF }, autoTableModule] = await Promise.all([
     import("jspdf"),
@@ -83,55 +109,134 @@ export async function buildInvoicePdfBlob(
   }
   if (workOrder.work_order_type) {
     doc.text(`Service type: ${workOrder.work_order_type}`, margin, y);
+    y += 5;
   }
 
-  const lineItems: [string, string][] = [];
-  const labor = Number(invoice.labor_charges ?? 0);
-  const parts = Number(invoice.parts_charges ?? 0);
-  const recurring = Number(invoice.recurring_service_charge ?? 0);
-  const additional = Number(invoice.additional_charges ?? 0);
-  const warranty = Number(invoice.warranty_deductions ?? 0);
-  const discounts = Number(invoice.discounts ?? 0);
-  const tax = Number(invoice.tax ?? 0);
+  // Coverage legend
+  y += 2;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text(
+    "This invoice separates work covered under PM agreements / warranties from billable out-of-scope repairs.",
+    margin,
+    y,
+    { maxWidth: 180 },
+  );
+  y += 8;
+  doc.setFont("helvetica", "normal");
 
-  if (labor > 0) lineItems.push(["Labor", formatMoney(labor)]);
-  if (parts > 0) lineItems.push(["Parts", formatMoney(parts)]);
-  if (recurring > 0) lineItems.push(["Recurring service", formatMoney(recurring)]);
-  if (additional > 0) lineItems.push(["Additional charges", formatMoney(additional)]);
-  if (warranty > 0) lineItems.push(["Warranty deductions", `-${formatMoney(warranty)}`]);
-  if (discounts > 0) lineItems.push(["Discounts", `-${formatMoney(discounts)}`]);
-  if (tax > 0) lineItems.push(["Tax", formatMoney(tax)]);
+  const detail = options?.detailLines?.filter((l) => l.kind !== "tax") ?? [];
+  const body: [string, string, string][] = [];
 
-  if (lineItems.length === 0) {
-    lineItems.push(["Service charges", formatMoney(invoice.invoice_total)]);
+  if (detail.length > 0) {
+    const covered = detail.filter((l) => sectionForLine(l) === "covered");
+    const billable = detail.filter((l) => sectionForLine(l) === "billable");
+
+    if (covered.length) {
+      body.push(["— COVERED (PM / agreement / warranty — not charged) —", "", ""]);
+      for (const line of covered) {
+        body.push([line.description, line.quantity != null ? String(line.quantity) : "", moneyCell(line)]);
+      }
+    }
+    if (billable.length) {
+      body.push(["— BILLABLE (out of scope / customer charged) —", "", ""]);
+      for (const line of billable) {
+        body.push([line.description, line.quantity != null ? String(line.quantity) : "", moneyCell(line)]);
+      }
+    }
+  } else {
+    // Fallback rollup with explicit labels
+    const labor = Number(invoice.labor_charges ?? 0);
+    const parts = Number(invoice.parts_charges ?? 0);
+    const recurring = Number(invoice.recurring_service_charge ?? 0);
+    const additional = Number(invoice.additional_charges ?? 0);
+    const warranty = Number(invoice.warranty_deductions ?? 0);
+    const discounts = Number(invoice.discounts ?? 0);
+    const tax = Number(invoice.tax ?? 0);
+
+    if (warranty > 0) {
+      body.push([
+        "Covered under warranty / PM (applied as deduction)",
+        "",
+        `-${formatMoney(warranty)}`,
+      ]);
+    }
+    if (labor > 0) body.push(["Billable labor (out of scope / charged)", "", formatMoney(labor)]);
+    if (parts > 0) body.push(["Billable parts (out of scope / charged)", "", formatMoney(parts)]);
+    if (recurring > 0) body.push(["Recurring service / agreement fee", "", formatMoney(recurring)]);
+    if (additional > 0) body.push(["Additional billable charges", "", formatMoney(additional)]);
+    if (discounts > 0) body.push(["Discounts", "", `-${formatMoney(discounts)}`]);
+    if (tax > 0) body.push(["Tax", "", formatMoney(tax)]);
+    if (body.length === 0) {
+      body.push(["Service charges", "", formatMoney(invoice.invoice_total)]);
+    }
   }
 
   autoTable(doc as never, {
-    startY: y + 8,
-    head: [["Description", "Amount"]],
-    body: lineItems,
+    startY: y,
+    head: [["Description", "Qty", "Amount"]],
+    body,
     theme: "striped",
     headStyles: { fillColor: [41, 65, 114] },
     margin: { left: margin, right: margin },
+    columnStyles: {
+      0: { cellWidth: 120 },
+      1: { cellWidth: 18, halign: "right" },
+      2: { cellWidth: 36, halign: "right" },
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (data: any) => {
+      if (data.section !== "body") return;
+      const label = String(data.row?.raw?.[0] ?? data.cell?.text?.[0] ?? "");
+      if (label.startsWith("— COVERED") || label.startsWith("— BILLABLE")) {
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.fillColor = label.startsWith("— COVERED") ? [232, 245, 233] : [255, 243, 224];
+        data.cell.styles.textColor = [30, 42, 54];
+      }
+    },
   });
 
-  const finalY = doc.lastAutoTable?.finalY ?? y + 40;
+  let finalY = doc.lastAutoTable?.finalY ?? y + 40;
+
+  // Tax row if detail path used
+  if (detail.length > 0 && Number(invoice.tax) > 0) {
+    finalY += 6;
+    doc.setFontSize(10);
+    doc.text(`Sales tax: ${formatMoney(invoice.tax)}`, margin, finalY);
+    finalY += 2;
+  }
 
   doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
   doc.text(`Total: ${formatMoney(invoice.invoice_total)}`, margin, finalY + 10);
   doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
   doc.text(`Amount paid: ${formatMoney(invoice.amount_paid)}`, margin, finalY + 16);
   doc.text(`Balance due: ${formatMoney(invoice.remaining_balance)}`, margin, finalY + 22);
+
+  const notes = (options?.coverageNotes || invoice.notes || "").trim();
+  if (notes) {
+    let ny = finalY + 30;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text("Coverage notes", margin, ny);
+    ny += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    const wrapped = doc.splitTextToSize(notes.slice(0, 1800), 180);
+    doc.text(wrapped, margin, ny);
+  }
 
   return doc.output("blob");
 }
 
 export async function downloadInvoicePdf(
-  invoice: ServiceHistoryInvoice,
+  invoice: ServiceHistoryInvoice & { notes?: string | null },
   workOrder: ServiceHistoryWorkOrder,
   customer: InvoicePdfCustomer,
+  options?: InvoicePdfOptions,
 ): Promise<void> {
-  const blob = await buildInvoicePdfBlob(invoice, workOrder, customer);
+  const blob = await buildInvoicePdfBlob(invoice, workOrder, customer, options);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -141,11 +246,12 @@ export async function downloadInvoicePdf(
 }
 
 export async function invoicePdfToBase64(
-  invoice: ServiceHistoryInvoice,
+  invoice: ServiceHistoryInvoice & { notes?: string | null },
   workOrder: ServiceHistoryWorkOrder,
   customer: InvoicePdfCustomer,
+  options?: InvoicePdfOptions,
 ): Promise<string> {
-  const blob = await buildInvoicePdfBlob(invoice, workOrder, customer);
+  const blob = await buildInvoicePdfBlob(invoice, workOrder, customer, options);
   const buffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   let binary = "";

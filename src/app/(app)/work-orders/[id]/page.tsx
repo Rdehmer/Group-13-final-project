@@ -671,53 +671,55 @@ export default function JobDetailPage() {
     if (!wo) return;
     setSaving(true);
     setError(null);
-    const preview = buildWorkOrderPreview(labor, parts as WorkOrderPart[], taxRate);
+    const preview = buildWorkOrderPreview(
+      labor,
+      parts as WorkOrderPart[],
+      taxRate,
+      undefined,
+      {
+        work_order_type: wo.work_order_type,
+        warranty_coverage: wo.warranty_coverage,
+        outside_contract: wo.outside_contract,
+        under_expired_contract: wo.under_expired_contract,
+        contract_id: wo.contract_id,
+      },
+    );
     const due = new Date();
     due.setDate(due.getDate() + 30);
     const { data: { user } } = await supabase.auth.getUser();
     const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
 
+    const basePayload = {
+      invoice_number: invoiceNumber,
+      customer_id: wo.customer_id,
+      work_order_id: wo.id,
+      contract_id: wo.contract_id,
+      equipment_id: wo.equipment_id,
+      due_date: due.toISOString().slice(0, 10),
+      labor_charges: preview.laborCharges,
+      parts_charges: preview.partsCharges,
+      warranty_deductions: preview.warrantyDeductions,
+      tax: preview.tax,
+      invoice_total: preview.total,
+      remaining_balance: preview.total,
+      status: asDraft ? "Draft" : "Sent",
+      notes: preview.coverageNotes || null,
+      created_by: user?.id ?? null,
+    };
+
     const { data: inv, error: insertError } = await supabase
       .from("invoices")
-      .insert({
-        invoice_number: invoiceNumber,
-        customer_id: wo.customer_id,
-        work_order_id: wo.id,
-        contract_id: wo.contract_id,
-        equipment_id: wo.equipment_id,
-        due_date: due.toISOString().slice(0, 10),
-        labor_charges: preview.laborCharges,
-        parts_charges: preview.partsCharges,
-        warranty_deductions: preview.warrantyDeductions,
-        tax: preview.tax,
-        invoice_total: preview.total,
-        remaining_balance: preview.total,
-        status: asDraft ? "Draft" : "Sent",
-        created_by: user?.id ?? null,
-      })
+      .insert(basePayload)
       .select()
       .single();
 
     if (insertError) {
       // Retry without equipment_id if column not migrated yet.
       if (insertError.message.includes("equipment_id")) {
+        const { equipment_id: _eq, ...withoutEq } = basePayload;
         const retry = await supabase
           .from("invoices")
-          .insert({
-            invoice_number: invoiceNumber,
-            customer_id: wo.customer_id,
-            work_order_id: wo.id,
-            contract_id: wo.contract_id,
-            due_date: due.toISOString().slice(0, 10),
-            labor_charges: preview.laborCharges,
-            parts_charges: preview.partsCharges,
-            warranty_deductions: preview.warrantyDeductions,
-            tax: preview.tax,
-            invoice_total: preview.total,
-            remaining_balance: preview.total,
-            status: asDraft ? "Draft" : "Sent",
-            created_by: user?.id ?? null,
-          })
+          .insert(withoutEq)
           .select()
           .single();
         if (retry.error) {

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Download,
   Printer,
@@ -9,6 +10,7 @@ import {
   Search,
   FileSpreadsheet,
   ChevronRight,
+  ChevronDown,
   BookOpen,
   Scale,
 } from "lucide-react";
@@ -81,10 +83,27 @@ type PaymentRow = Payment & { customers?: { name: string } };
  */
 export default function ReportsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const reportParam = searchParams.get("report") as ReportId | null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reportId, setReportId] = useState<ReportId>("executive");
+  const [reportId, setReportId] = useState<ReportId>(() => {
+    if (reportParam && REPORT_NAME[reportParam]) return reportParam;
+    return "executive";
+  });
   const [query, setQuery] = useState("");
+  /** Which catalog sections are open. Active report’s group stays open automatically. */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    const startId =
+      reportParam && REPORT_NAME[reportParam as ReportId]
+        ? (reportParam as ReportId)
+        : ("executive" as ReportId);
+    for (const g of REPORT_CATALOG) {
+      initial[g.title] = g.reports.some((r) => r.id === startId);
+    }
+    return initial;
+  });
   const [range, setRange] = useState<DateRange>(() => defaultYtdRange());
   const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
   const [invoices, setInvoices] = useState<InvoiceWithCustomer[]>([]);
@@ -99,6 +118,41 @@ export default function ReportsPage() {
   const [techFilter, setTechFilter] = useState<string>("");
   /** When viewing timesheet summary, prefer weekly pay periods. */
   const [payPeriodRange, setPayPeriodRange] = useState<DateRange>(() => defaultCurrentPayPeriod());
+
+  useEffect(() => {
+    if (reportParam && REPORT_NAME[reportParam] && reportParam !== reportId) {
+      setReportId(reportParam);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deep-link only
+  }, [reportParam]);
+
+  /** Keep the section that contains the active report expanded. */
+  useEffect(() => {
+    const group = REPORT_CATALOG.find((g) => g.reports.some((r) => r.id === reportId));
+    if (!group) return;
+    setOpenGroups((prev) => (prev[group.title] ? prev : { ...prev, [group.title]: true }));
+  }, [reportId]);
+
+  function selectReport(id: ReportId) {
+    setReportId(id);
+    const group = REPORT_CATALOG.find((g) => g.reports.some((r) => r.id === id));
+    if (group) {
+      setOpenGroups((prev) => ({ ...prev, [group.title]: true }));
+    }
+    // Reveal the report body (sidebar is long on mobile/desktop)
+    window.setTimeout(() => {
+      document.getElementById("report-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 40);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("report", id);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
+
+  function toggleGroup(title: string) {
+    setOpenGroups((prev) => ({ ...prev, [title]: !prev[title] }));
+  }
 
   async function load() {
     setLoading(true);
@@ -629,7 +683,7 @@ export default function ReportsPage() {
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
             </button>
-            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => setReportId("policies")}>
+            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => selectReport("policies")}>
               <Scale className="h-4 w-4" /> Policies
             </button>
             <Link href="/billing" className="btn btn-outline btn-sm">
@@ -662,46 +716,69 @@ export default function ReportsPage() {
             </label>
           </div>
           <nav className="p-2">
-            {filteredCatalog.map((group) => (
-              <div key={group.title} className="mb-3">
-                <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-base-content/45">
-                  {group.title}
-                </p>
-                <ul className="space-y-0.5">
-                  {group.reports.map((r) => {
-                    const active = reportId === r.id;
-                    return (
-                      <li key={r.id}>
-                        <button
-                          type="button"
-                          onClick={() => setReportId(r.id)}
-                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left text-sm transition ${
-                            active
-                              ? "bg-primary/12 font-semibold text-primary"
-                              : "hover:bg-base-200/80"
-                          }`}
-                        >
-                          <FileSpreadsheet className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
-                          <span>
-                            <span className="block leading-tight">{r.name}</span>
-                            <span className="mt-0.5 block text-[11px] font-normal leading-snug opacity-55">
-                              {r.description}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
+            {filteredCatalog.map((group) => {
+              const open = query.trim() ? true : Boolean(openGroups[group.title]);
+              const hasActive = group.reports.some((r) => r.id === reportId);
+              return (
+                <div key={group.title} className="mb-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.title)}
+                    className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider transition hover:bg-base-200/70 ${
+                      hasActive ? "text-primary" : "text-base-content/45"
+                    }`}
+                    aria-expanded={open}
+                  >
+                    {open ? (
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    )}
+                    <span className="flex-1">{group.title}</span>
+                    <span className="badge badge-ghost badge-xs font-normal normal-case tracking-normal opacity-60">
+                      {group.reports.length}
+                    </span>
+                  </button>
+                  {open ? (
+                    <ul className="mt-0.5 space-y-0.5 border-l border-base-200 ml-2 pl-1">
+                      {group.reports.map((r) => {
+                        const active = reportId === r.id;
+                        return (
+                          <li key={r.id}>
+                            <button
+                              type="button"
+                              onClick={() => selectReport(r.id)}
+                              className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+                                active
+                                  ? "bg-primary/12 font-semibold text-primary"
+                                  : "hover:bg-base-200/80"
+                              }`}
+                            >
+                              <FileSpreadsheet className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
+                              <span className="min-w-0">
+                                <span className="block leading-tight">{r.name}</span>
+                                {active ? (
+                                  <span className="mt-0.5 block text-[11px] font-normal leading-snug opacity-55">
+                                    {r.description}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })}
             {filteredCatalog.length === 0 ? (
               <p className="p-3 text-sm opacity-60">No reports match.</p>
             ) : null}
           </nav>
         </aside>
 
-        <div className="min-w-0 space-y-4">
+        <div id="report-panel" className="min-w-0 scroll-mt-20 space-y-4">
           <div className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm print:border-0 print:shadow-none">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -882,7 +959,7 @@ export default function ReportsPage() {
           ) : (
             <div className="report-body rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-6 print:border-0 print:p-0 print:shadow-none">
               {reportId === "executive" ? (
-                <ExecutiveReport data={executive} onOpen={(id) => setReportId(id)} />
+                <ExecutiveReport data={executive} onOpen={(id) => selectReport(id)} />
               ) : null}
               {reportId === "pnl" ? <PnLReport pnl={pnl} /> : null}
               {reportId === "pnl_compare" ? <PnlCompareReport data={pnlCmp} /> : null}
