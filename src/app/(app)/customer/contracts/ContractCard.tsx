@@ -113,7 +113,7 @@ export function ContractCard({
           </Link>
           {isActive ? (
             <Link href="/customer/request-service" className="btn btn-outline btn-sm">
-              Request service
+              Request Service
             </Link>
           ) : null}
           {standing.id === "payment_due" || standing.id === "past_due" ? (

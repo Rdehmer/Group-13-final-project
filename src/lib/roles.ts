@@ -208,27 +208,29 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["service_manager", "technician", "billing"],
       },
       {
-        href: "/vendors",
-        label: "Vendors",
-        roles: ["service_manager", "billing"],
-        children: [
-          {
-            href: "/vendors",
-            label: "Suppliers",
-            roles: ["service_manager", "billing"],
-          },
-          {
-            href: "/service-vendors",
-            label: "Service vendors",
-            roles: ["service_manager", "billing"],
-          },
-        ],
-      },
-      {
         href: "/emergency-purchases",
         /** Manager inbox for technician “I bought a part” emergency buys. */
         label: "Reimbursements",
         roles: ["service_manager"],
+      },
+    ],
+  },
+  // ── Manager / billing: Vendors ─────────────────────────────────────
+  {
+    section: true,
+    href: "#nav-vendors",
+    label: "Vendors",
+    roles: ["service_manager", "billing"],
+    children: [
+      {
+        href: "/vendors",
+        label: "Product Vendors",
+        roles: ["service_manager", "billing"],
+      },
+      {
+        href: "/service-vendors",
+        label: "Service Vendors",
+        roles: ["service_manager", "billing"],
       },
     ],
   },
