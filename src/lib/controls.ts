@@ -30,6 +30,10 @@
  *
  * This business faces weak audit evidence.
  * Our app reduces the risk by writing activity_logs for important create/status/payment actions.
+ *
+ * This business faces weak segregation of duties between create, approve, and bill.
+ * Our app reduces the risk with a Risk Controls view (/settings/risk-controls) that
+ * filters activity_logs into work order creation, parts approvals, and billing releases.
  */
 
 export const CONTROLS_DOCUMENTED = true;

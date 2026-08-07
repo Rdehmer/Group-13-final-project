@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
+import { ActivityFeed } from "@/components/ActivityFeed";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { formatMoney, formatPct } from "@/lib/calculations";
@@ -911,6 +912,8 @@ export default function ContractDetailPage() {
           ) : null}
         </div>
       </form>
+
+      <ActivityFeed className="mt-4 max-w-3xl" recordType="contract" recordId={id} />
     </div>
   );
 }

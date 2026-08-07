@@ -13,7 +13,6 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-  AlertTriangle,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
@@ -27,7 +26,6 @@ import {
   deleteGlAccount,
   ensureGlSeed,
   formatGlAccountLabel,
-  isUsingLocalGlStore,
   listGlAccounts,
   listGlPostingDefaults,
   setPostingDefaultAccount,
@@ -41,7 +39,6 @@ export default function GlAccountsSettingsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [localMode, setLocalMode] = useState(false);
 
   const [accounts, setAccounts] = useState<GlAccount[]>([]);
   const [defaults, setDefaults] = useState<GlPostingDefault[]>([]);
@@ -62,7 +59,6 @@ export default function GlAccountsSettingsPage() {
     setError(null);
     await ensureGlSeed(supabase);
     const [a, d] = await Promise.all([listGlAccounts(supabase), listGlPostingDefaults(supabase)]);
-    setLocalMode(a.local || isUsingLocalGlStore());
     if (a.error) setError(a.error);
     else if (d.error) setError(d.error);
     setAccounts(a.data);
@@ -217,20 +213,6 @@ export default function GlAccountsSettingsPage() {
         }
       />
 
-      {localMode ? (
-        <div className="alert alert-warning text-sm">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <div>
-            <p className="font-semibold">Browser storage mode</p>
-            <p className="opacity-80">
-              Supabase GL tables are not installed. Accounts save in this browser until you run{" "}
-              <code className="text-xs">supabase/migrations/20260806_gl_accounts.sql</code> in the SQL
-              Editor.
-            </p>
-          </div>
-        </div>
-      ) : null}
-
       {error ? (
         <div className="alert alert-error text-sm">
           <span>{error}</span>
@@ -356,7 +338,7 @@ export default function GlAccountsSettingsPage() {
                 checked={showInactive}
                 onChange={(e) => setShowInactive(e.target.checked)}
               />
-              Show inactive
+              Show Inactive
             </label>
           </div>
         </div>
@@ -446,7 +428,7 @@ export default function GlAccountsSettingsPage() {
                 <tr>
                   <th>Purpose</th>
                   <th>Description</th>
-                  <th>GL account</th>
+                  <th>GL Account</th>
                 </tr>
               </thead>
               <tbody>

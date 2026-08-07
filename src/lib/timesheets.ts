@@ -37,6 +37,7 @@ import {
   validateNotFuture,
   CERTIFICATION_TEXT,
 } from "@/lib/time-entry-controls";
+import { resolveLaborBillableStatus, type CoverageJob } from "@/lib/coverage";
 
 export const ACTIVITY_TYPES: {
   value: TimeActivityType;
@@ -1500,7 +1501,7 @@ export async function clockIn(
   const { data: wo, error: woErr } = await supabase
     .from("work_orders")
     .select(
-      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, customers(id, name, service_address, city, state)",
+      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, assigned_vendor_id, contract_id, warranty_coverage, outside_contract, under_expired_contract, customers(id, name, service_address, city, state)",
     )
     .eq("id", input.workOrderId)
     .single();
@@ -1516,10 +1517,29 @@ export async function clockIn(
     throw new Error("Work order must have a valid customer before time can be recorded.");
   }
 
-  const assignedId = (wo as { assigned_technician_id?: string | null }).assigned_technician_id ?? null;
-  const unassigned = Boolean(assignedId && assignedId !== input.profile.id);
-  // if no assignment, allow but flag manager override
-  const needsOverride = !assignedId || unassigned;
+  const coverageJob = {
+    contract_id: (wo as { contract_id?: string | null }).contract_id ?? null,
+    warranty_coverage: (wo as { warranty_coverage?: string | null }).warranty_coverage ?? "Not Covered",
+    outside_contract: Boolean((wo as { outside_contract?: boolean }).outside_contract),
+    under_expired_contract: Boolean((wo as { under_expired_contract?: boolean }).under_expired_contract),
+    work_order_type: (wo as { work_order_type?: string | null }).work_order_type ?? null,
+  };
+  const billableOnJob = resolveLaborBillableStatus(
+    coverageJob,
+    activityDefaultBillable(activity),
+  );
+
+  const assignedTechId =
+    (wo as { assigned_technician_id?: string | null }).assigned_technician_id ?? null;
+  const assignedVendorId =
+    (wo as { assigned_vendor_id?: string | null }).assigned_vendor_id ?? null;
+  const selfAssigned =
+    assignedTechId === input.profile.id ||
+    (input.profile.role === "vendor" &&
+      !!input.profile.vendor_id &&
+      assignedVendorId === input.profile.vendor_id);
+  // Unassigned or assigned to someone else → flag manager override (still allow punch).
+  const needsOverride = !selfAssigned;
 
   const loc = locationFromJob(
     wo as {
@@ -1561,7 +1581,7 @@ export async function clockIn(
         clock_out_at: null,
         total_minutes: 0,
         activity_type: activity,
-        billable_status: activityDefaultBillable(activity),
+        billable_status: billableOnJob,
         regular_hours: 0,
         overtime_hours: 0,
         hourly_cost_rate: rates.hourly_cost_rate,
@@ -1605,7 +1625,7 @@ export async function clockIn(
     entry_date: todayIso(),
     clock_in_at: now,
     activity_type: activity,
-    billable_status: activityDefaultBillable(activity),
+    billable_status: billableOnJob,
     hourly_cost_rate: rates.hourly_cost_rate,
     overtime_cost_rate: rates.overtime_cost_rate,
     billing_rate: rates.billing_rate,
@@ -1686,6 +1706,24 @@ async function insertLaborMirror(
     if (error) {
       await supabase.from("technician_labor").update(base).eq("id", entry.technician_labor_id);
     }
+    try {
+      const { postCogsForLabor } = await import("@/lib/accounting/postings");
+      const amount = laborCostCalc(
+        Number(entry.regular_hours) || 0,
+        Number(entry.overtime_hours) || 0,
+        Number(entry.hourly_cost_rate) || 0,
+        Number(entry.overtime_cost_rate || (entry.hourly_cost_rate || 0) * 1.5),
+      );
+      postCogsForLabor({
+        amount,
+        asOf: entry.entry_date,
+        workOrderId: entry.work_order_id,
+        laborId: entry.technician_labor_id,
+        userId: entry.technician_id,
+      });
+    } catch {
+      // best-effort ledger
+    }
     return entry.technician_labor_id;
   }
   let { data, error } = await supabase.from("technician_labor").insert(withGate).select("id").single();
@@ -1695,7 +1733,26 @@ async function insertLaborMirror(
     error = retry.error;
   }
   if (error || !data) return null;
-  return (data as { id: string }).id;
+  const laborId = (data as { id: string }).id;
+  try {
+    const { postCogsForLabor } = await import("@/lib/accounting/postings");
+    const amount = laborCostCalc(
+      Number(entry.regular_hours) || 0,
+      Number(entry.overtime_hours) || 0,
+      Number(entry.hourly_cost_rate) || 0,
+      Number(entry.overtime_cost_rate || (entry.hourly_cost_rate || 0) * 1.5),
+    );
+    postCogsForLabor({
+      amount,
+      asOf: entry.entry_date,
+      workOrderId: entry.work_order_id,
+      laborId,
+      userId: entry.technician_id,
+    });
+  } catch {
+    // Local ledger postings are best-effort; job cost still lives on technician_labor.
+  }
+  return laborId;
 }
 
 export async function clockOut(
@@ -1887,33 +1944,37 @@ export async function applyDispatchStatusTransition(
     workOrderId: string;
     workOrderNumber?: string;
     nextStatus: DispatchFlowStatus;
+    /** When true, advance status without opening/closing timesheet punches. */
+    skipTimePunches?: boolean;
   },
 ): Promise<{ dispatchStatus: string; message: string | null }> {
   // Close any open punch first (best-effort — never block status advance).
-  try {
-    await clockOutIfActive(supabase, {
-      profile: input.profile,
-      notes: `Dispatch → ${input.nextStatus}`,
-      skipWorkOrderDispatchUpdate: true,
-    });
-  } catch (err) {
-    // Force-close stuck DB active clocks so En Route can proceed.
-    const active = await getActiveClock(supabase, input.profile.id);
-    if (active && !active.id.startsWith("active-wo-") && !active.id.startsWith("labor-")) {
-      const nowIso = new Date().toISOString();
-      await supabase
-        .from("time_entries")
-        .update({
-          clock_out_at: nowIso,
-          approval_status: "complete",
-          notes: active.notes ?? `Force-closed for dispatch → ${input.nextStatus}`,
-          updated_at: nowIso,
-          updated_by: input.profile.id,
-        })
-        .eq("id", active.id)
-        .eq("approval_status", "active");
-    } else {
-      throw err instanceof Error ? err : new Error(String(err));
+  if (!input.skipTimePunches) {
+    try {
+      await clockOutIfActive(supabase, {
+        profile: input.profile,
+        notes: `Dispatch → ${input.nextStatus}`,
+        skipWorkOrderDispatchUpdate: true,
+      });
+    } catch (err) {
+      // Force-close stuck DB active clocks so En Route can proceed.
+      const active = await getActiveClock(supabase, input.profile.id);
+      if (active && !active.id.startsWith("active-wo-") && !active.id.startsWith("labor-")) {
+        const nowIso = new Date().toISOString();
+        await supabase
+          .from("time_entries")
+          .update({
+            clock_out_at: nowIso,
+            approval_status: "complete",
+            notes: active.notes ?? `Force-closed for dispatch → ${input.nextStatus}`,
+            updated_at: nowIso,
+            updated_by: input.profile.id,
+          })
+          .eq("id", active.id)
+          .eq("approval_status", "active");
+      } else {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     }
   }
 
@@ -1955,7 +2016,7 @@ export async function applyDispatchStatusTransition(
 
   const activity = activityForDispatchStatus(input.nextStatus);
   let timeWarning: string | null = null;
-  if (activity) {
+  if (activity && !input.skipTimePunches) {
     try {
       await clockIn(supabase, {
         profile: input.profile,
@@ -2089,11 +2150,12 @@ export async function createManualEntry(
   let serviceLocation: string | null = null;
   let woJoin: TimeEntry["work_orders"] = null;
   let unassigned = false;
+  let coverageJob: CoverageJob | null = null;
   if (input.workOrderId) {
     const { data: wo } = await supabase
       .from("work_orders")
       .select(
-        "id, status, customer_id, equipment_id, assigned_technician_id, work_order_number, work_order_type, problem_description, customers(id, name, service_address, city, state), equipment(id, name, serial_number)",
+        "id, status, customer_id, equipment_id, assigned_technician_id, work_order_number, work_order_type, problem_description, contract_id, warranty_coverage, outside_contract, under_expired_contract, customers(id, name, service_address, city, state), equipment(id, name, serial_number)",
       )
       .eq("id", input.workOrderId)
       .single();
@@ -2117,6 +2179,16 @@ export async function createManualEntry(
     woJoin = wo as unknown as TimeEntry["work_orders"];
     const assigned = (wo as { assigned_technician_id?: string | null }).assigned_technician_id;
     unassigned = !assigned || assigned !== techId;
+    coverageJob = {
+      contract_id: (wo as { contract_id?: string | null }).contract_id ?? null,
+      warranty_coverage:
+        (wo as { warranty_coverage?: string | null }).warranty_coverage ?? "Not Covered",
+      outside_contract: Boolean((wo as { outside_contract?: boolean }).outside_contract),
+      under_expired_contract: Boolean(
+        (wo as { under_expired_contract?: boolean }).under_expired_contract,
+      ),
+      work_order_type: (wo as { work_order_type?: string | null }).work_order_type ?? null,
+    };
   }
 
   const otMult = await loadOtMultiplier(supabase);
@@ -2129,7 +2201,9 @@ export async function createManualEntry(
   const week = weekContaining(input.entryDate);
   const prior = await sumPriorWeekRegular(supabase, techId, week.start, week.end);
   const split = splitWeeklyOt(totalH, prior);
-  const billable = input.billableStatus ?? activityDefaultBillable(input.activityType);
+  const billable =
+    input.billableStatus ??
+    resolveLaborBillableStatus(coverageJob, activityDefaultBillable(input.activityType));
   const moneyPart = computeMoney(
     split.regular_hours,
     split.overtime_hours,

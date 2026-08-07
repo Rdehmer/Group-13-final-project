@@ -4,6 +4,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { remainingBalance } from "@/lib/calculations";
+import { suggestInvoiceStatus } from "@/lib/billing";
 
 export type ApplyPaymentInput = {
   invoiceId: string;
@@ -41,11 +42,16 @@ export async function applyInvoicePayment(
       .eq("reference_number", input.referenceNumber)
       .maybeSingle();
     if (existing) {
+      const status = suggestInvoiceStatus({
+        status: "Sent",
+        amount_paid: Number(input.amountPaidSoFar),
+        remaining_balance: Number(input.remaining),
+      });
       return {
         ok: true,
         paymentNumber: existing.payment_number,
         newBalance: Number(input.remaining),
-        status: Number(input.remaining) <= 0.005 ? "Paid" : "Partially Paid",
+        status,
       };
     }
   }
@@ -76,7 +82,18 @@ export async function applyInvoicePayment(
 
   const newPaid = Number(input.amountPaidSoFar) + amount;
   const newBalance = remainingBalance(Number(input.invoiceTotal), newPaid);
-  const status = newBalance <= 0.005 ? "Paid" : "Partially Paid";
+
+  // Keep workflow statuses (e.g. Canceled) when appropriate; otherwise AR from amounts
+  const { data: currentInv } = await supabase
+    .from("invoices")
+    .select("status")
+    .eq("id", input.invoiceId)
+    .maybeSingle();
+  const status = suggestInvoiceStatus({
+    status: (currentInv as { status?: string } | null)?.status ?? "Sent",
+    amount_paid: newPaid,
+    remaining_balance: newBalance,
+  });
 
   const { error: invError } = await supabase
     .from("invoices")
@@ -93,12 +110,119 @@ export async function applyInvoicePayment(
   return { ok: true, paymentNumber, newBalance, status };
 }
 
+/** Staff Accept/Record Payment tenders (stored on payments.payment_method). */
+export type StaffPaymentTenderId = "cash" | "check" | "card" | "ach" | "other";
+
+export type StaffPaymentTender = {
+  id: StaffPaymentTenderId;
+  /** Short chip label */
+  label: string;
+  /** Value written to payments.payment_method */
+  method: string;
+  /** Full select option label */
+  selectLabel: string;
+  hint: string;
+};
+
+/** Canonical tender list for Accept Payment (ServiceTitan / Jobber style). */
+export const STAFF_PAYMENT_TENDERS: readonly StaffPaymentTender[] = [
+  { id: "cash", label: "Cash", method: "Cash", selectLabel: "Cash", hint: "Counter or field cash" },
+  { id: "check", label: "Check", method: "Check", selectLabel: "Check", hint: "Paper check — number required" },
+  {
+    id: "card",
+    label: "Card",
+    method: "Credit Card",
+    selectLabel: "Credit Card",
+    hint: "Keyed, swipe, or terminal card",
+  },
+  {
+    id: "ach",
+    label: "ACH",
+    method: "ACH",
+    selectLabel: "ACH / Bank Transfer",
+    hint: "ACH or bank transfer",
+  },
+  { id: "other", label: "Other", method: "Other", selectLabel: "Other", hint: "Wire, money order, credit memo, etc." },
+] as const;
+
+export function staffTenderById(id: StaffPaymentTenderId): StaffPaymentTender {
+  return STAFF_PAYMENT_TENDERS.find((t) => t.id === id) ?? STAFF_PAYMENT_TENDERS[0];
+}
+
 export type PayMethodKind = "card" | "bank" | "check";
 
 export function formatPaymentMethodLabel(kind: PayMethodKind, last4?: string): string {
-  if (kind === "card") return last4 ? `Credit card ···· ${last4}` : "Credit card";
-  if (kind === "bank") return last4 ? `Bank account ···· ${last4}` : "Bank transfer (ACH)";
+  if (kind === "card") return last4 ? `Credit Card ···· ${last4}` : "Credit Card";
+  if (kind === "bank") return last4 ? `Bank account ···· ${last4}` : "ACH / Bank Transfer";
   return "Check";
+}
+
+/** Values allowed by payments_payment_method_check in Postgres. */
+export const ALLOWED_PAYMENT_METHODS = [
+  "Check",
+  "Credit Card",
+  "ACH",
+  "Bank Transfer",
+  "Other",
+] as const;
+
+export type AllowedPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
+
+export function normalizePaymentMethod(raw: string): AllowedPaymentMethod {
+  const trimmed = raw.trim();
+  if ((ALLOWED_PAYMENT_METHODS as readonly string[]).includes(trimmed)) {
+    return trimmed as AllowedPaymentMethod;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("card")) return "Credit Card";
+  if (lower.includes("ach")) return "ACH";
+  if (lower.includes("bank")) return "Bank Transfer";
+  if (lower.includes("check")) return "Check";
+  return "Other";
+}
+
+type StripePaymentMethodShape = {
+  type?: string | null;
+  card?: { last4?: string | null } | null;
+  us_bank_account?: { last4?: string | null } | null;
+};
+
+/** Map Stripe PaymentMethod to DB-safe tender + customer-facing label. */
+export function stripePortalPaymentMethod(
+  pm: StripePaymentMethodShape | null | string | undefined,
+): { method: AllowedPaymentMethod; display: string } {
+  if (!pm || typeof pm === "string") {
+    return { method: "Credit Card", display: "Credit Card" };
+  }
+  if (pm.card) {
+    const last4 = pm.card.last4;
+    return {
+      method: "Credit Card",
+      display: last4 ? `Credit Card ···· ${last4}` : "Credit Card",
+    };
+  }
+  if (pm.us_bank_account) {
+    const last4 = pm.us_bank_account.last4;
+    return {
+      method: "ACH",
+      display: last4 ? `ACH ···· ${last4}` : "ACH",
+    };
+  }
+  const type = pm.type ?? "";
+  if (type === "card") return { method: "Credit Card", display: "Credit Card" };
+  if (type === "us_bank_account") return { method: "ACH", display: "ACH" };
+  return { method: "Other", display: type ? `Stripe ${type}` : "Stripe" };
+}
+
+export function portalPaymentNotes(
+  detail: string,
+  memo?: string | null,
+  reference?: string | null,
+): string {
+  const parts = [detail.trim()];
+  if (memo?.trim()) parts.push(memo.trim());
+  if (reference?.trim()) parts.push(reference.trim());
+  return parts.join(" · ").slice(0, 500);
 }
 
 export type AllocatableInvoice = {

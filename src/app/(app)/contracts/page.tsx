@@ -28,17 +28,16 @@ import {
   type ServiceLevelId,
 } from "@/lib/contract-plans";
 import { loadCompanyCatalog } from "@/lib/company-catalog";
-import {
-  currentBillingPeriodKey,
-  formatStandingDetail,
-  generateMonthlyInvoicesForPeriod,
-  getContractPaymentStanding,
+import { generateMonthlyInvoicesForPeriod, getContractPaymentStanding,
   monthlyFromAnnual,
   resolveMoneyFromContractNotes,
   resolvedDeductible,
   resolvedMonthlyAmount,
   standingBadgeClass,
+  currentBillingPeriodKey,
+  formatStandingDetail,
 } from "@/lib/contract-billing";
+import { createRoutineVisitForScheduling } from "@/lib/pm-scheduler";
 import {
   contractEconomicsInRange,
   currentMonthRange,
@@ -148,6 +147,7 @@ export default function ContractsPage() {
   const [standingInvoices, setStandingInvoices] = useState<Invoice[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [genBusy, setGenBusy] = useState(false);
+  const [routineBusyId, setRoutineBusyId] = useState<string | null>(null);
   const [genMessage, setGenMessage] = useState<string | null>(null);
 
   const isManager =
@@ -636,6 +636,33 @@ export default function ContractsPage() {
     await load();
   }
 
+  async function scheduleRoutineVisit(contract: ContractRow) {
+    if (!isManager) return;
+    setRoutineBusyId(contract.id);
+    setGenMessage(null);
+    setError(null);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const result = await createRoutineVisitForScheduling(supabase, contract, {
+      userId: user?.id ?? null,
+    });
+    if (!result.ok) {
+      setRoutineBusyId(null);
+      setError(result.error);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: user?.id ?? null,
+      action: result.reused ? "routine_visit_reopened" : "routine_visit_created",
+      recordType: "work_order",
+      recordId: result.workOrderId,
+      newValue: `${result.workOrderNumber} · ${contract.name}`,
+    });
+    // Hard navigate so Technician Schedule always mounts with wo + schedule deep-link.
+    window.location.assign(result.scheduleHref);
+  }
+
   async function rejectContract(contract: ContractRow) {
     setError(null);
     setActionBusyId(contract.id);
@@ -689,14 +716,19 @@ export default function ContractsPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             {isManager ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                disabled={genBusy}
-                onClick={() => void generateMonthlyFees()}
-              >
-                {genBusy ? "Generating…" : "Generate monthly fees"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={genBusy}
+                  onClick={() => void generateMonthlyFees()}
+                >
+                  {genBusy ? "Generating…" : "Generate monthly fees"}
+                </button>
+                <Link href="/reports?report=deferred_revenue" className="btn btn-ghost btn-sm">
+                  Deferred revenue
+                </Link>
+              </>
             ) : null}
             <button type="button" className="btn btn-primary btn-sm" onClick={openAddForm}>
               New Contract
@@ -1152,6 +1184,7 @@ export default function ContractsPage() {
                     <th>Fee status</th>
                     <th>Status</th>
                     <th>End</th>
+                    {isManager ? <th className="text-right">Routine visit</th> : null}
                   </tr>
                   {isManager ? (
                     <tr className="bg-base-200/50">
@@ -1209,13 +1242,14 @@ export default function ContractsPage() {
                           ) : null}
                         </div>
                       </th>
+                      <th />
                     </tr>
                   ) : null}
                 </thead>
                 <tbody>
                   {filteredContracts.length === 0 ? (
                     <tr>
-                      <td colSpan={isManager ? 11 : 9} className="p-6">
+                        <td colSpan={isManager ? 12 : 9} className="p-6">
                         <EmptyState
                           title="No matching contracts"
                           description="Try clearing one or more column filters."
@@ -1355,6 +1389,23 @@ export default function ContractsPage() {
                           )}
                         </td>
                         <td className="align-top">{c.end_date}</td>
+                        {isManager ? (
+                          <td className="align-top text-right">
+                            {["Active", "Renewed"].includes(c.status) ? (
+                              <button
+                                type="button"
+                                className="btn btn-outline btn-xs whitespace-nowrap"
+                                disabled={routineBusyId === c.id}
+                                title="Creates a PM work order from Gold/Silver/Bronze checkup rules and opens Technician Schedule"
+                                onClick={() => void scheduleRoutineVisit(c)}
+                              >
+                                {routineBusyId === c.id ? "Opening schedule…" : "Schedule routine visit"}
+                              </button>
+                            ) : (
+                              <span className="text-xs opacity-40">—</span>
+                            )}
+                          </td>
+                        ) : null}
                       </tr>
                       );
                     })

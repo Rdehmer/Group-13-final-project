@@ -21,6 +21,7 @@ export function LoginCard({ mode, onModeChange, showBrand = true, embedded = fal
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [businessName, setBusinessName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -47,7 +48,12 @@ export function LoginCard({ mode, onModeChange, showBrand = true, embedded = fal
         const { error: authError } = await supabase.auth.signUp({
           email,
           password,
-          options: { data: { full_name: fullName } },
+          options: {
+            data: {
+              full_name: fullName,
+              business_name: businessName,
+            },
+          },
         });
         if (authError) {
           setError(authError.message);
@@ -107,15 +113,27 @@ export function LoginCard({ mode, onModeChange, showBrand = true, embedded = fal
         </h2>
 
         {mode === "signup" ? (
-          <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">
-            <span className="label-text font-medium">Full name</span>
-            <input
-              className="input input-bordered w-full"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              required
-            />
-          </label>
+          <>
+            <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">
+              <span className="label-text font-medium">Business name</span>
+              <input
+                className="input input-bordered w-full"
+                value={businessName}
+                onChange={(e) => setBusinessName(e.target.value)}
+                placeholder="Your company"
+                required
+              />
+            </label>
+            <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">
+              <span className="label-text font-medium">Full Name</span>
+              <input
+                className="input input-bordered w-full"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                required
+              />
+            </label>
+          </>
         ) : null}
 
         <label className="form-control grid grid-cols-[7rem_1fr] items-center gap-3">

@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
-import { applyInvoicePayment, type AllocatableInvoice } from "@/lib/payments";
 import { logActivity } from "@/lib/activity";
+import { portalPaymentNotes, stripePortalPaymentMethod } from "@/lib/payments";
 import {
   decodeAllocations,
-  getDemoPaymentIntent,
   getStripe,
   isDemoPaymentIntentId,
   isStripeConfigured,
   isStripeDemoMode,
-  markDemoPaymentSucceeded,
+  verifyDemoPaymentIntent,
 } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -17,6 +17,42 @@ export const runtime = "nodejs";
 type Body = {
   paymentIntentId?: string;
 };
+
+type PortalPaymentRpcResult = {
+  ok: boolean;
+  error?: string;
+  payment_number?: string;
+};
+
+async function applyPortalPayment(
+  supabase: SupabaseClient,
+  input: {
+    invoiceId: string;
+    amount: number;
+    paymentMethod: string;
+    referenceNumber: string;
+    notes: string | null;
+  },
+): Promise<{ ok: true; paymentNumber: string } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc("apply_my_portal_payment", {
+    p_invoice_id: input.invoiceId,
+    p_amount: input.amount,
+    p_payment_method: input.paymentMethod,
+    p_reference_number: input.referenceNumber,
+    p_notes: input.notes,
+  });
+
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+
+  const result = data as PortalPaymentRpcResult | null;
+  if (!result?.ok || !result.payment_number) {
+    return { ok: false, error: result?.error ?? "Could not apply payment." };
+  }
+
+  return { ok: true, paymentNumber: result.payment_number };
+}
 
 /**
  * POST /api/stripe/complete-payment
@@ -57,20 +93,18 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Demo payments are disabled." }, { status: 503 });
       }
 
-      const demo = getDemoPaymentIntent(paymentIntentId);
+      const demo = verifyDemoPaymentIntent(paymentIntentId, user.id, profile.customer_id);
       if (!demo) {
         return NextResponse.json(
-          { error: "Demo payment expired. Start checkout again." },
+          { error: "Demo payment expired or invalid. Start checkout again." },
           { status: 400 },
         );
       }
-      if (demo.userId !== user.id || demo.customerId !== profile.customer_id) {
-        return NextResponse.json({ error: "Payment does not belong to this user." }, { status: 403 });
-      }
 
-      markDemoPaymentSucceeded(paymentIntentId);
-
-      const methodLabel = "Demo card ···· 4242";
+      const { method: paymentMethod, display: methodDisplay } = stripePortalPaymentMethod({
+        type: "card",
+        card: { last4: "4242" },
+      });
       const reference = demo.id;
       const memo = demo.memo;
       const paymentNumbers: string[] = [];
@@ -80,9 +114,7 @@ export async function POST(req: Request) {
       for (const alloc of demo.allocations) {
         const { data: inv, error: invErr } = await supabase
           .from("invoices")
-          .select(
-            "id, invoice_number, remaining_balance, amount_paid, invoice_total, due_date, customer_id, status",
-          )
+          .select("id, invoice_number")
           .eq("id", alloc.invoiceId)
           .eq("customer_id", profile.customer_id)
           .maybeSingle();
@@ -94,18 +126,12 @@ export async function POST(req: Request) {
           );
         }
 
-        const invRow = inv as AllocatableInvoice;
-        const result = await applyInvoicePayment(supabase, {
-          invoiceId: invRow.id,
-          customerId: profile.customer_id,
-          invoiceTotal: Number(invRow.invoice_total),
-          amountPaidSoFar: Number(invRow.amount_paid),
-          remaining: Number(invRow.remaining_balance),
+        const result = await applyPortalPayment(supabase, {
+          invoiceId: inv.id,
           amount: alloc.amount,
-          paymentMethod: methodLabel,
+          paymentMethod,
           referenceNumber: reference,
-          notes: memo || `Demo portal payment ${demo.id}`,
-          userId: user.id,
+          notes: portalPaymentNotes("Demo Stripe checkout", memo, demo.id),
         });
 
         if (!result.ok) {
@@ -113,14 +139,14 @@ export async function POST(req: Request) {
         }
 
         paymentNumbers.push(result.paymentNumber);
-        invoiceLabels.push(invRow.invoice_number);
+        invoiceLabels.push(inv.invoice_number);
         totalPaid += alloc.amount;
 
         await logActivity(supabase, {
           userId: user.id,
           action: "demo_stripe_payment",
           recordType: "payment",
-          recordId: invRow.id,
+          recordId: inv.id,
           newValue: `${result.paymentNumber}|${demo.id}`,
         });
       }
@@ -132,7 +158,7 @@ export async function POST(req: Request) {
         paymentNumbers,
         invoiceLabels,
         totalPaid: Math.round(totalPaid * 100) / 100,
-        method: methodLabel,
+        method: methodDisplay,
         paidAt: new Date().toISOString(),
       });
     }
@@ -142,7 +168,7 @@ export async function POST(req: Request) {
     }
 
     const stripe = getStripe();
-    const intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+    let intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
       expand: ["payment_method"],
     });
 
@@ -153,7 +179,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Payment does not belong to this account." }, { status: 403 });
     }
 
-    if (intent.status !== "succeeded") {
+    for (let attempt = 0; attempt < 6 && intent.status === "processing"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ["payment_method"],
+      });
+    }
+
+    if (intent.status !== "succeeded" && intent.status !== "processing") {
       return NextResponse.json(
         { error: `Payment not completed (status: ${intent.status}).` },
         { status: 400 },
@@ -165,18 +198,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No invoice allocations on payment." }, { status: 400 });
     }
 
-    // Method label from Stripe
-    let methodLabel = "Stripe";
     const pm = intent.payment_method;
-    if (pm && typeof pm !== "string") {
-      if (pm.card) {
-        methodLabel = `Stripe card ···· ${pm.card.last4}`;
-      } else if (pm.us_bank_account) {
-        methodLabel = `Stripe bank ···· ${pm.us_bank_account.last4}`;
-      } else if (pm.type) {
-        methodLabel = `Stripe ${pm.type}`;
-      }
-    }
+    const { method: paymentMethod, display: methodDisplay } = stripePortalPaymentMethod(
+      pm && typeof pm !== "string" ? pm : null,
+    );
 
     const reference = intent.id;
     const memo = intent.metadata.memo || null;
@@ -187,9 +212,7 @@ export async function POST(req: Request) {
     for (const alloc of allocations) {
       const { data: inv, error: invErr } = await supabase
         .from("invoices")
-        .select(
-          "id, invoice_number, remaining_balance, amount_paid, invoice_total, due_date, customer_id, status",
-        )
+        .select("id, invoice_number")
         .eq("id", alloc.invoiceId)
         .eq("customer_id", profile.customer_id)
         .maybeSingle();
@@ -201,18 +224,12 @@ export async function POST(req: Request) {
         );
       }
 
-      const invRow = inv as AllocatableInvoice;
-      const result = await applyInvoicePayment(supabase, {
-        invoiceId: invRow.id,
-        customerId: profile.customer_id,
-        invoiceTotal: Number(invRow.invoice_total),
-        amountPaidSoFar: Number(invRow.amount_paid),
-        remaining: Number(invRow.remaining_balance),
+      const result = await applyPortalPayment(supabase, {
+        invoiceId: inv.id,
         amount: alloc.amount,
-        paymentMethod: methodLabel,
+        paymentMethod,
         referenceNumber: reference,
-        notes: memo || `Stripe portal payment ${intent.id}`,
-        userId: user.id,
+        notes: portalPaymentNotes(methodDisplay, memo, intent.id),
       });
 
       if (!result.ok) {
@@ -220,14 +237,14 @@ export async function POST(req: Request) {
       }
 
       paymentNumbers.push(result.paymentNumber);
-      invoiceLabels.push(invRow.invoice_number);
+      invoiceLabels.push(inv.invoice_number);
       totalPaid += alloc.amount;
 
       await logActivity(supabase, {
         userId: user.id,
         action: "stripe_payment",
         recordType: "payment",
-        recordId: invRow.id,
+        recordId: inv.id,
         newValue: `${result.paymentNumber}|${intent.id}`,
       });
     }
@@ -239,7 +256,7 @@ export async function POST(req: Request) {
       paymentNumbers,
       invoiceLabels,
       totalPaid: Math.round(totalPaid * 100) / 100,
-      method: methodLabel,
+      method: methodDisplay,
       paidAt: new Date().toISOString(),
     });
   } catch (err) {

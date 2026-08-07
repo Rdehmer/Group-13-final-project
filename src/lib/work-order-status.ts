@@ -42,9 +42,14 @@ export function statusAfterPlacingOnSchedule(
 export function statusForNewWorkOrder(opts: {
   scheduled_date?: string | null;
   assigned_technician_id?: string | null;
+  assigned_vendor_id?: string | null;
+  vendor_assignment_status?: string | null;
 }): string {
+  if (opts.assigned_vendor_id && opts.vendor_assignment_status === "Pending") {
+    return "Requested";
+  }
   if (opts.scheduled_date) return "Scheduled";
-  if (opts.assigned_technician_id) return "Assigned";
+  if (opts.assigned_technician_id || opts.assigned_vendor_id) return "Assigned";
   return "Requested";
 }
 

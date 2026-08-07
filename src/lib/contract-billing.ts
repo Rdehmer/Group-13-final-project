@@ -237,6 +237,115 @@ export function formatStandingDetail(standing: ContractPaymentStanding): string 
   return fee ?? "—";
 }
 
+/** Default: lock as soon as a monthly fee invoice is past due. */
+export const DEFAULT_DELINQUENCY_GRACE_DAYS = 0;
+
+export type DelinquencyLockPolicy = {
+  enabled: boolean;
+  graceDays: number;
+};
+
+export type DelinquentMonthlyInvoice = {
+  invoiceId: string;
+  invoiceNumber: string;
+  contractId: string;
+  contractName: string | null;
+  dueDate: string;
+  daysPastDue: number;
+  remainingBalance: number;
+};
+
+export const CUSTOMER_DELINQUENCY_LOCK_MESSAGE =
+  "Service requests are locked because your monthly contract payment is past due. Please pay your outstanding balance, then try again.";
+
+export const STAFF_DELINQUENCY_LOCK_MESSAGE =
+  "Service requests are locked because this customer has a past-due monthly contract payment. Collect payment or adjust delinquency settings before filing a new request.";
+
+export function isDelinquencyLockError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("past-due monthly contract payment") ||
+    normalized.includes("monthly contract payment is past due") ||
+    normalized.includes("service requests are locked because")
+  );
+}
+
+export function delinquencyLockMessageForRole(role: string | null | undefined): string {
+  return role === "customer" ? CUSTOMER_DELINQUENCY_LOCK_MESSAGE : STAFF_DELINQUENCY_LOCK_MESSAGE;
+}
+
+/**
+ * True when a monthly standing invoice is past due beyond grace days
+ * (matches DB customer_has_delinquent_monthly_contract).
+ */
+export function isMonthlyInvoiceDelinquent(
+  inv: Pick<
+    Invoice,
+    | "work_order_id"
+    | "recurring_service_charge"
+    | "contract_id"
+    | "status"
+    | "remaining_balance"
+    | "invoice_total"
+    | "amount_paid"
+    | "due_date"
+  >,
+  graceDays = DEFAULT_DELINQUENCY_GRACE_DAYS,
+  today = new Date(),
+): boolean {
+  if (!isMonthlyStandingInvoice(inv)) return false;
+  if (openBalance(inv) <= 0.005) return false;
+  if (!inv.due_date) return false;
+  const past = daysPastDue(inv as Invoice, today);
+  return past > Math.max(0, Math.floor(graceDays));
+}
+
+export function findDelinquentMonthlyInvoices(
+  contracts: Pick<ServiceContract, "id" | "name" | "status" | "billing_method" | "customer_id">[],
+  invoices: Invoice[],
+  graceDays = DEFAULT_DELINQUENCY_GRACE_DAYS,
+  today = new Date(),
+): DelinquentMonthlyInvoice[] {
+  const liveMrc = new Map(
+    contracts
+      .filter((c) => {
+        const status = (c.status || "").toLowerCase();
+        return (
+          (status === "active" || status === "renewed") &&
+          isMonthlyRecurringBilling(c.billing_method)
+        );
+      })
+      .map((c) => [c.id, c]),
+  );
+
+  const out: DelinquentMonthlyInvoice[] = [];
+  for (const inv of invoices) {
+    if (!inv.contract_id || !liveMrc.has(inv.contract_id)) continue;
+    if (!isMonthlyInvoiceDelinquent(inv, graceDays, today)) continue;
+    const contract = liveMrc.get(inv.contract_id)!;
+    out.push({
+      invoiceId: inv.id,
+      invoiceNumber: inv.invoice_number,
+      contractId: contract.id,
+      contractName: contract.name,
+      dueDate: inv.due_date,
+      daysPastDue: daysPastDue(inv, today),
+      remainingBalance: openBalance(inv),
+    });
+  }
+  return out.sort((a, b) => b.daysPastDue - a.daysPastDue);
+}
+
+export function customerIsDelinquencyLocked(
+  contracts: Pick<ServiceContract, "id" | "name" | "status" | "billing_method" | "customer_id">[],
+  invoices: Invoice[],
+  policy: DelinquencyLockPolicy,
+  today = new Date(),
+): boolean {
+  if (!policy.enabled) return false;
+  return findDelinquentMonthlyInvoices(contracts, invoices, policy.graceDays, today).length > 0;
+}
+
 function formatUsd(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }

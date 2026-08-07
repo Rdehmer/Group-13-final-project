@@ -474,7 +474,7 @@ export default function ServiceVendorDetailPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="card bg-base-100 shadow lg:col-span-1">
           <div className="card-body space-y-3">
-            <h2 className="card-title text-base">Provider profile</h2>
+            <h2 className="card-title text-base">Provider Profile</h2>
             {canEditMaster ? (
               <form onSubmit={onSave} className="space-y-3">
                 <FormRow label="Name" required>

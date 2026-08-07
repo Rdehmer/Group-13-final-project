@@ -26,7 +26,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     section: true,
     href: "#nav-admin-people",
-    label: "People & access",
+    label: "People & Access",
     roles: ["administrator"],
     children: [
       {
@@ -36,7 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/settings/employees",
-        label: "Employee permissions",
+        label: "Employee Permissions",
         roles: ["administrator"],
       },
     ],
@@ -67,6 +67,16 @@ export const NAV_ITEMS: NavItem[] = [
             label: "Contract Plans",
             roles: ["administrator"],
           },
+          {
+            href: "/settings/vendor-matrix",
+            label: "Vendor Matrix",
+            roles: ["administrator"],
+          },
+          {
+            href: "/settings/risk-controls",
+            label: "Risk Controls",
+            roles: ["administrator"],
+          },
         ],
       },
     ],
@@ -74,7 +84,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     section: true,
     href: "#nav-admin-finance",
-    label: "Finance controls",
+    label: "Finance Controls",
     roles: ["administrator"],
     children: [
       {
@@ -122,6 +132,11 @@ export const NAV_ITEMS: NavItem[] = [
         /** Staff mailbox linked to customer portal Inbox threads. */
         label: "Inbox",
         roles: ["service_manager", "billing"],
+      },
+      {
+        href: "/settings/risk-controls",
+        label: "Risk Controls",
+        roles: ["service_manager"],
       },
     ],
   },
@@ -213,13 +228,18 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["service_manager", "billing"],
         children: [
           {
+            href: "/vendors?view=matrix",
+            label: "Vendor Matrix",
+            roles: ["service_manager", "billing"],
+          },
+          {
             href: "/vendors",
-            label: "Suppliers",
+            label: "Vendor Suppliers",
             roles: ["service_manager", "billing"],
           },
           {
             href: "/service-vendors",
-            label: "Service vendors",
+            label: "Vendor Services",
             roles: ["service_manager", "billing"],
           },
         ],
@@ -229,6 +249,25 @@ export const NAV_ITEMS: NavItem[] = [
         /** Manager inbox for technician “I bought a part” emergency buys. */
         label: "Reimbursements",
         roles: ["service_manager"],
+      },
+    ],
+  },
+  // ── Manager / billing: Vendors ─────────────────────────────────────
+  {
+    section: true,
+    href: "#nav-vendors",
+    label: "Vendors",
+    roles: ["service_manager", "billing"],
+    children: [
+      {
+        href: "/vendors",
+        label: "Product Vendors",
+        roles: ["service_manager", "billing"],
+      },
+      {
+        href: "/service-vendors",
+        label: "Service Vendors",
+        roles: ["service_manager", "billing"],
       },
     ],
   },
@@ -275,6 +314,11 @@ export const NAV_ITEMS: NavItem[] = [
   {
     href: "/vendor",
     label: "Vendor Home",
+    roles: ["vendor"],
+  },
+  {
+    href: "/vendor/jobs",
+    label: "Jobs",
     roles: ["vendor"],
   },
   {

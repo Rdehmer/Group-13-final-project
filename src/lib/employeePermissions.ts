@@ -40,6 +40,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   settings_gl: "GL Accounts",
   settings_employees: "Employee Data",
   settings_contract_plans: "Contract Plans",
+  settings_vendor_matrix: "Vendor Matrix",
+  risk_controls: "Risk Controls",
 };
 
 export const PERMISSION_GROUPS: PermissionGroup[] = [
@@ -69,7 +71,15 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
   {
     id: "admin",
     label: "Administration",
-    keys: ["users", "settings", "settings_gl", "settings_employees", "settings_contract_plans"],
+    keys: [
+      "users",
+      "settings",
+      "settings_gl",
+      "settings_employees",
+      "settings_contract_plans",
+      "settings_vendor_matrix",
+      "risk_controls",
+    ],
   },
 ];
 
@@ -77,9 +87,11 @@ export const ALL_PERMISSION_KEYS = Object.keys(PERMISSION_LABELS) as PermissionK
 
 /** Primary path prefix → permission key */
 const HREF_PERMISSION: { prefix: string; key: PermissionKey }[] = [
+  { prefix: "/settings/risk-controls", key: "risk_controls" },
   { prefix: "/settings/gl-accounts", key: "settings_gl" },
   { prefix: "/settings/employees", key: "settings_employees" },
   { prefix: "/settings/contract-plans", key: "settings_contract_plans" },
+  { prefix: "/settings/vendor-matrix", key: "settings_vendor_matrix" },
   { prefix: "/settings", key: "settings" },
   { prefix: "/reports/invoice-cash", key: "invoice_cash" },
   { prefix: "/reports", key: "reports" },
@@ -125,6 +137,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, PermissionKey[]> = {
     "inbox",
     "reports",
     "invoice_cash",
+    "risk_controls",
   ],
   technician: ["technician", "time_off", "timesheets", "dispatch", "parts"],
   billing: [

@@ -1542,7 +1542,7 @@ function EquipmentPageInner() {
                               />
                             )}
                             {isManager && attention ? (
-                              <span className="sr-only">Needs attention</span>
+                              <span className="sr-only">Needs Attention</span>
                             ) : null}
                           </td>
                           {isManager ? (

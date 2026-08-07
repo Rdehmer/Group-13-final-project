@@ -32,7 +32,9 @@ export type PermissionKey =
   | "settings"
   | "settings_gl"
   | "settings_employees"
-  | "settings_contract_plans";
+  | "settings_contract_plans"
+  | "settings_vendor_matrix"
+  | "risk_controls";
 
 /** Explicit allow/deny overrides on top of the role template (true/false). */
 export type PermissionOverrides = Partial<Record<PermissionKey, boolean>>;
@@ -163,6 +165,10 @@ export type WorkOrder = {
   work_order_type: string;
   priority: "Low" | "Normal" | "High" | "Critical";
   assigned_technician_id: string | null;
+  /** Portal vendor (vendors.id) assigned instead of an in-house technician. */
+  assigned_vendor_id?: string | null;
+  /** Pending until vendor accepts; Accepted jobs can be worked in the portal. */
+  vendor_assignment_status?: "Pending" | "Accepted" | "Rejected" | null;
   /** External service provider assigned to this job (Ecotrak-style). */
   service_vendor_id?: string | null;
   scheduled_date: string | null;
@@ -389,11 +395,28 @@ export type Vendor = {
   specialty?: string | null;
   is_active: boolean;
   approval_status: VendorApprovalStatus;
+  /** Preferred materials / supply partner shortlist. */
+  is_preferred?: boolean;
+  preferred_rank?: number | null;
+  /** Average lead / response hours (product matrix KPI). */
+  avg_response_hours?: number | null;
+  /** Average order cost fallback (product matrix KPI). */
+  avg_order_cost?: number | null;
   requested_by: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** Staff ratings for AP / product suppliers (matrix stars KPI). */
+export type VendorRating = {
+  id: string;
+  vendor_id: string;
+  rating: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
 };
 
 export type VendorSpecialty = "HVAC" | "Plumbing" | "Electrical" | "Parts" | "Other";
@@ -469,6 +492,12 @@ export type ServiceVendor = {
   notes: string | null;
   is_active: boolean;
   approval_status: VendorApprovalStatus;
+  /** technician | materials | both */
+  vendor_category?: "technician" | "materials" | "both";
+  is_preferred?: boolean;
+  preferred_rank?: number | null;
+  avg_response_hours?: number | null;
+  avg_repair_cost?: number | null;
   requested_by: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
@@ -601,6 +630,29 @@ export type CompanySettings = {
   support_email: string | null;
   default_tax_rate: number;
   overtime_multiplier: number;
+  /** Days after Active contract start before included service requests are allowed. 0 disables. */
+  contract_service_request_wait_days: number;
+  /**
+   * Days after a monthly recurring contract invoice due_date before service requests are blocked.
+   * 0 = lock as soon as past due.
+   */
+  delinquency_service_request_grace_days: number;
+  /** When true, past-due monthly contract fees block new work orders / service requests. */
+  delinquency_service_request_lock_enabled: boolean;
+  /** Vendor matrix: relative weight for avg repair cost (0–100). */
+  vendor_matrix_weight_cost?: number;
+  /** Vendor matrix: relative weight for response speed (0–100). */
+  vendor_matrix_weight_speed?: number;
+  /** Vendor matrix: relative weight for star ratings (0–100). */
+  vendor_matrix_weight_rating?: number;
+  /** Flag vendors below this average star rating. */
+  vendor_matrix_min_star_rating?: number;
+  /** Optional max avg repair cost before prune flag. */
+  vendor_matrix_max_avg_repair_cost?: number | null;
+  /** Optional max avg response hours before prune flag. */
+  vendor_matrix_max_response_hours?: number | null;
+  /** Hide prune-flagged vendors from the matrix list. */
+  vendor_matrix_hide_pruned?: boolean;
   created_at: string;
   updated_at: string;
 };

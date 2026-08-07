@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Download,
   Printer,
@@ -9,6 +10,7 @@ import {
   Search,
   FileSpreadsheet,
   ChevronRight,
+  ChevronDown,
   BookOpen,
   Scale,
 } from "lucide-react";
@@ -58,6 +60,7 @@ import {
   type TechProfile,
   type TimesheetSummaryReport,
 } from "@/lib/reports";
+import { pmObligationStatsForContracts, type PmObligationStats } from "@/lib/pm-scheduler";
 import { contractAssetRollforward } from "@/lib/accounting/earned-revenue";
 import { trialBalance } from "@/lib/accounting/ledger-local";
 import type {
@@ -81,10 +84,27 @@ type PaymentRow = Payment & { customers?: { name: string } };
  */
 export default function ReportsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const reportParam = searchParams.get("report") as ReportId | null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reportId, setReportId] = useState<ReportId>("executive");
+  const [reportId, setReportId] = useState<ReportId>(() => {
+    if (reportParam && REPORT_NAME[reportParam]) return reportParam;
+    return "executive";
+  });
   const [query, setQuery] = useState("");
+  /** Which catalog sections are open. Active report’s group stays open automatically. */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    const startId =
+      reportParam && REPORT_NAME[reportParam as ReportId]
+        ? (reportParam as ReportId)
+        : ("executive" as ReportId);
+    for (const g of REPORT_CATALOG) {
+      initial[g.title] = g.reports.some((r) => r.id === startId);
+    }
+    return initial;
+  });
   const [range, setRange] = useState<DateRange>(() => defaultYtdRange());
   const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
   const [invoices, setInvoices] = useState<InvoiceWithCustomer[]>([]);
@@ -99,6 +119,41 @@ export default function ReportsPage() {
   const [techFilter, setTechFilter] = useState<string>("");
   /** When viewing timesheet summary, prefer weekly pay periods. */
   const [payPeriodRange, setPayPeriodRange] = useState<DateRange>(() => defaultCurrentPayPeriod());
+
+  useEffect(() => {
+    if (reportParam && REPORT_NAME[reportParam] && reportParam !== reportId) {
+      setReportId(reportParam);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deep-link only
+  }, [reportParam]);
+
+  /** Keep the section that contains the active report expanded. */
+  useEffect(() => {
+    const group = REPORT_CATALOG.find((g) => g.reports.some((r) => r.id === reportId));
+    if (!group) return;
+    setOpenGroups((prev) => (prev[group.title] ? prev : { ...prev, [group.title]: true }));
+  }, [reportId]);
+
+  function selectReport(id: ReportId) {
+    setReportId(id);
+    const group = REPORT_CATALOG.find((g) => g.reports.some((r) => r.id === id));
+    if (group) {
+      setOpenGroups((prev) => ({ ...prev, [group.title]: true }));
+    }
+    // Reveal the report body (sidebar is long on mobile/desktop)
+    window.setTimeout(() => {
+      document.getElementById("report-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 40);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("report", id);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
+
+  function toggleGroup(title: string) {
+    setOpenGroups((prev) => ({ ...prev, [title]: !prev[title] }));
+  }
 
   async function load() {
     setLoading(true);
@@ -187,6 +242,10 @@ export default function ReportsPage() {
   const unbilled = useMemo(() => unbilledJobs(jobs, costs), [jobs, costs]);
   const invList = useMemo(() => invoicesInRange(invoices, range), [invoices, range]);
   const deferredRev = useMemo(() => deferredRevenueSchedule(contracts, asOf), [contracts, asOf]);
+  const pmStatsByContract = useMemo(
+    () => pmObligationStatsForContracts(contracts, jobs, asOf.slice(0, 7)),
+    [contracts, jobs, asOf],
+  );
   const contractAsset = useMemo(() => contractAssetRollforward(jobs, invoices, asOf), [jobs, invoices, asOf]);
   const glTrial = useMemo(() => trialBalance(asOf), [asOf, invoices, contracts]); // refresh with data loads
   const executive = useMemo(
@@ -280,8 +339,8 @@ export default function ReportsPage() {
           ["Warranty deductions (contra)", -pnl.warranty],
           ["Service revenue (ex-tax)", pnl.serviceRevenue],
           ["Sales tax (liability; not revenue)", pnl.salesTax],
-          ["COGS — direct labor (actual)", pnl.cogsLabor],
-          ["COGS — parts at cost (actual)", pnl.cogsParts],
+          ["COGS — Labor Cost (actual)", pnl.cogsLabor],
+          ["COGS — Parts Expense (actual)", pnl.cogsParts],
           ["Total cost of services", pnl.cogs],
           ["Gross profit", pnl.gross],
           ["Gross margin", pnl.margin != null ? (pnl.margin * 100).toFixed(1) + "%" : "N/A"],
@@ -457,7 +516,7 @@ export default function ReportsPage() {
       case "job_profit":
         exportCsv(
           name,
-          ["Job", "Customer", "Revenue", "Labor cost", "Parts cost", "COGS", "Profit", "Margin", "Hours"],
+          ["Job", "Customer", "Billed Revenue", "Labor COGS", "Parts COGS", "COGS", "Gross Profit", "Margin", "Hours"],
           jobProfit.rows.map((r) => [
             r.workOrderNumber,
             r.customerName,
@@ -629,7 +688,7 @@ export default function ReportsPage() {
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
             </button>
-            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => setReportId("policies")}>
+            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => selectReport("policies")}>
               <Scale className="h-4 w-4" /> Policies
             </button>
             <Link href="/billing" className="btn btn-outline btn-sm">
@@ -639,7 +698,7 @@ export default function ReportsPage() {
               Payments
             </Link>
             <Link href="/reports/contracts" className="btn btn-ghost btn-sm">
-              Contract profitability
+              Contract Profitability
             </Link>
           </div>
         }
@@ -662,46 +721,69 @@ export default function ReportsPage() {
             </label>
           </div>
           <nav className="p-2">
-            {filteredCatalog.map((group) => (
-              <div key={group.title} className="mb-3">
-                <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-base-content/45">
-                  {group.title}
-                </p>
-                <ul className="space-y-0.5">
-                  {group.reports.map((r) => {
-                    const active = reportId === r.id;
-                    return (
-                      <li key={r.id}>
-                        <button
-                          type="button"
-                          onClick={() => setReportId(r.id)}
-                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left text-sm transition ${
-                            active
-                              ? "bg-primary/12 font-semibold text-primary"
-                              : "hover:bg-base-200/80"
-                          }`}
-                        >
-                          <FileSpreadsheet className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
-                          <span>
-                            <span className="block leading-tight">{r.name}</span>
-                            <span className="mt-0.5 block text-[11px] font-normal leading-snug opacity-55">
-                              {r.description}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
+            {filteredCatalog.map((group) => {
+              const open = query.trim() ? true : Boolean(openGroups[group.title]);
+              const hasActive = group.reports.some((r) => r.id === reportId);
+              return (
+                <div key={group.title} className="mb-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.title)}
+                    className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider transition hover:bg-base-200/70 ${
+                      hasActive ? "text-primary" : "text-base-content/45"
+                    }`}
+                    aria-expanded={open}
+                  >
+                    {open ? (
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    )}
+                    <span className="flex-1">{group.title}</span>
+                    <span className="badge badge-ghost badge-xs font-normal normal-case tracking-normal opacity-60">
+                      {group.reports.length}
+                    </span>
+                  </button>
+                  {open ? (
+                    <ul className="mt-0.5 space-y-0.5 border-l border-base-200 ml-2 pl-1">
+                      {group.reports.map((r) => {
+                        const active = reportId === r.id;
+                        return (
+                          <li key={r.id}>
+                            <button
+                              type="button"
+                              onClick={() => selectReport(r.id)}
+                              className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+                                active
+                                  ? "bg-primary/12 font-semibold text-primary"
+                                  : "hover:bg-base-200/80"
+                              }`}
+                            >
+                              <FileSpreadsheet className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
+                              <span className="min-w-0">
+                                <span className="block leading-tight">{r.name}</span>
+                                {active ? (
+                                  <span className="mt-0.5 block text-[11px] font-normal leading-snug opacity-55">
+                                    {r.description}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })}
             {filteredCatalog.length === 0 ? (
               <p className="p-3 text-sm opacity-60">No reports match.</p>
             ) : null}
           </nav>
         </aside>
 
-        <div className="min-w-0 space-y-4">
+        <div id="report-panel" className="min-w-0 scroll-mt-20 space-y-4">
           <div className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm print:border-0 print:shadow-none">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -884,7 +966,7 @@ export default function ReportsPage() {
               {reportId === "executive" ? (
                 <ExecutiveReport
                   data={executive}
-                  onOpen={(id) => setReportId(id)}
+                  onOpen={(id) => selectReport(id)}
                   greenfield={
                     invoices.length === 0 && payments.length === 0 && contracts.length === 0
                   }
@@ -909,7 +991,9 @@ export default function ReportsPage() {
               {reportId === "tech_labor" ? <TechLaborReport data={techLabor} /> : null}
               {reportId === "inventory" ? <InventoryReport data={inventory} /> : null}
               {reportId === "invoice_list" ? <InvoiceListReport rows={invList} /> : null}
-              {reportId === "deferred_revenue" ? <DeferredRevenueReport data={deferredRev} /> : null}
+              {reportId === "deferred_revenue" ? (
+                <DeferredRevenueReport data={deferredRev} pmStats={pmStatsByContract} />
+              ) : null}
               {reportId === "contract_asset" ? <ContractAssetReport data={contractAsset} asOf={asOf} /> : null}
               {reportId === "trial_balance" ? <TrialBalanceReport data={glTrial} asOf={asOf} /> : null}
               {reportId === "policies" ? <PoliciesReport /> : null}
@@ -1269,19 +1353,31 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   if (data.rows.length === 0) {
     return (
       <EmptyState
-        title="No billed jobs in range"
-        description="Job profitability requires recognized invoices linked to work orders."
+        title="No Billed Jobs in Range"
+        description="Job profitability requires recognized invoices linked to work orders. Gross profit is never billed revenue alone."
       />
     );
   }
+  const laborTotal = data.rows.reduce((s, r) => s + r.laborCost, 0);
+  const partsTotal = data.rows.reduce((s, r) => s + r.partsCost, 0);
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="rounded-box border border-base-300 bg-base-200/40 px-3 py-2 text-sm">
+        <p className="font-medium">
+          Gross Profit = Billed Revenue − (Direct Labor Cost + Parts COGS)
+        </p>
+        <p className="mt-0.5 text-xs opacity-70">
+          Labor uses technician cost rates; parts use unit cost × quantity logged on the job — not
+          customer sell prices.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <ReportStat label="Jobs" value={data.totals.jobCount} />
-        <ReportStat label="Revenue" value={formatReportMoney(data.totals.revenue)} />
-        <ReportStat label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
+        <ReportStat label="Billed Revenue" value={formatReportMoney(data.totals.revenue)} />
+        <ReportStat label="Labor COGS" value={formatReportMoney(laborTotal)} />
+        <ReportStat label="Parts COGS" value={formatReportMoney(partsTotal)} />
         <ReportStat
-          label="Gross profit"
+          label="Gross Profit"
           value={formatReportMoney(data.totals.profit)}
           hint={formatReportPct(data.totals.margin)}
           danger={data.totals.lossCount > 0}
@@ -1291,12 +1387,22 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
         <div className="alert alert-warning text-sm">
           <span>
             <strong>{data.totals.lossCount}</strong> job{data.totals.lossCount === 1 ? "" : "s"} with negative
-            gross profit — review labor rates or parts cost vs price.
+            gross profit — review labor cost rates or parts cost vs billed price.
           </span>
         </div>
       ) : null}
       <div id="report-detail" className="scroll-mt-4"><ReportTable
-        headers={["Job", "Customer", "Type", "Revenue", "Labor", "Parts", "Profit", "Margin", "Hrs"]}
+        headers={[
+          "Job",
+          "Customer",
+          "Type",
+          "Billed Revenue",
+          "Labor COGS",
+          "Parts COGS",
+          "Gross Profit",
+          "Margin",
+          "Hrs",
+        ]}
       >
         {data.rows.map((r) => (
           <tr key={r.jobId} className={r.profit < 0 ? "bg-error/5" : ""}>
@@ -1326,15 +1432,17 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
         <tr className="border-t-2 font-bold">
           <td colSpan={3}>Total</td>
           <MoneyCell n={data.totals.revenue} bold />
-          <td colSpan={2} />
+          <MoneyCell n={laborTotal} bold />
+          <MoneyCell n={partsTotal} bold />
           <MoneyCell n={data.totals.profit} bold />
           <td className="text-right tabular-nums">{formatReportPct(data.totals.margin)}</td>
           <td className="text-right tabular-nums">{data.totals.laborHours.toFixed(1)}</td>
         </tr>
       </ReportTable></div>
       <PolicyNote>
-        Revenue is recognized service revenue (ex-tax) on linked invoices. COGS is actual technician cost rates
-        and parts unit costs on that work order.
+        Billed revenue is recognized service revenue (ex-tax) on linked invoices. Labor COGS is hours ×
+        technician cost rates. Parts COGS is quantity used × parts unit cost. Gross profit is never the
+        billed total alone.
       </PolicyNote>
     </div>
   );
@@ -1713,13 +1821,13 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
         <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
-              Direct labor at cost rates
+              COGS — Labor Cost
               {pnl.laborHours > 0 ? ` (${pnl.laborHours.toFixed(1)} hrs on matched jobs)` : ""}
             </td>
             <MoneyCell n={pnl.cogsLabor} />
           </tr>
           <tr>
-            <td className="pl-4">Parts consumed at unit cost</td>
+            <td className="pl-4">COGS — Parts Expense</td>
             <MoneyCell n={pnl.cogsParts} />
           </tr>
           <tr className="border-t-2 border-base-content/15 font-semibold">
@@ -2469,7 +2577,13 @@ function TrialBalanceReport({
   );
 }
 
-function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredRevenueSchedule> }) {
+function DeferredRevenueReport({
+  data,
+  pmStats,
+}: {
+  data: ReturnType<typeof deferredRevenueSchedule>;
+  pmStats: Map<string, PmObligationStats>;
+}) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (data.contractCount === 0) {
@@ -2483,6 +2597,14 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
 
   return (
     <div className="space-y-6">
+      <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
+        <p className="font-medium">GAAP recognition + PM obligations</p>
+        <p className="mt-1 opacity-70">
+          Prepaid contracts recognize deferred revenue straight-line by month. Expand a row to see the
+          recognition schedule beside contractual PM visit status (scheduled / completed) from the PM
+          scheduler.
+        </p>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <ReportStat
           label="Deferred revenue"
@@ -2515,76 +2637,117 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
             "Monthly",
             "Earned to date",
             "Deferred",
+            "PM visits",
             "Current",
             "Noncurrent",
           ]}
         >
-          {data.rows.map((r) => (
-            <Fragment key={r.id}>
-              <tr
-                className="cursor-pointer hover:bg-base-200/60"
-                onClick={() => setExpandedId((id) => (id === r.id ? null : r.id))}
-              >
-                <td>
-                  <span className="font-medium">{r.name}</span>
-                  <span className="mt-0.5 block text-[11px] opacity-60">
-                    {r.billingMethod} · {r.status}
-                    {expandedId === r.id ? " · hide schedule" : " · view schedule"}
-                  </span>
-                </td>
-                <td>{r.customerName}</td>
-                <td className="whitespace-nowrap text-xs">
-                  {r.startDate} → {r.endDate}
-                  <span className="mt-0.5 block opacity-60">
-                    {r.monthsElapsed}/{r.monthsTotal} mo
-                  </span>
-                </td>
-                <MoneyCell n={r.contractPrice} />
-                <MoneyCell n={r.monthlyRecognition} />
-                <MoneyCell n={r.recognizedToDate} />
-                <MoneyCell n={r.deferredBalance} />
-                <MoneyCell n={r.currentPortion} />
-                <MoneyCell n={r.noncurrentPortion} />
-              </tr>
-              {expandedId === r.id ? (
-                <tr>
-                  <td colSpan={9} className="bg-base-200/40 p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-70">
-                      Recognition schedule
-                    </p>
-                    <div className="max-h-64 overflow-auto">
-                      <table className="table table-xs">
-                        <thead>
-                          <tr>
-                            <th>Month</th>
-                            <th className="text-right">Beginning</th>
-                            <th className="text-right">Recognized</th>
-                            <th className="text-right">Ending</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {r.schedule.map((m) => (
-                            <tr key={m.month}>
-                              <td>{monthLabel(m.month)}</td>
-                              <td className="text-right tabular-nums">{formatReportMoney(m.beginningBalance)}</td>
-                              <td className="text-right tabular-nums">{formatReportMoney(m.recognized)}</td>
-                              <td className="text-right tabular-nums">{formatReportMoney(m.endingBalance)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+          {data.rows.map((r) => {
+            const pm = pmStats.get(r.id);
+            return (
+              <Fragment key={r.id}>
+                <tr
+                  className="cursor-pointer hover:bg-base-200/60"
+                  onClick={() => setExpandedId((id) => (id === r.id ? null : r.id))}
+                >
+                  <td>
+                    <span className="font-medium">{r.name}</span>
+                    <span className="mt-0.5 block text-[11px] opacity-60">
+                      {r.billingMethod} · {r.status}
+                      {expandedId === r.id ? " · hide schedule" : " · view schedule"}
+                    </span>
                   </td>
+                  <td>{r.customerName}</td>
+                  <td className="whitespace-nowrap text-xs">
+                    {r.startDate} → {r.endDate}
+                    <span className="mt-0.5 block opacity-60">
+                      {r.monthsElapsed}/{r.monthsTotal} mo
+                    </span>
+                  </td>
+                  <MoneyCell n={r.contractPrice} />
+                  <MoneyCell n={r.monthlyRecognition} />
+                  <MoneyCell n={r.recognizedToDate} />
+                  <MoneyCell n={r.deferredBalance} />
+                  <td className="text-xs tabular-nums">
+                    {pm && pm.planned > 0
+                      ? `${pm.completed}/${pm.planned} done`
+                      : "—"}
+                    {pm && pm.scheduledOpen > 0 ? (
+                      <span className="mt-0.5 block opacity-60">{pm.scheduledOpen} open</span>
+                    ) : null}
+                  </td>
+                  <MoneyCell n={r.currentPortion} />
+                  <MoneyCell n={r.noncurrentPortion} />
                 </tr>
-              ) : null}
-            </Fragment>
-          ))}
+                {expandedId === r.id ? (
+                  <tr>
+                    <td colSpan={10} className="bg-base-200/40 p-3">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-70">
+                        Recognition schedule & PM obligations
+                      </p>
+                      <div className="max-h-64 overflow-auto">
+                        <table className="table table-xs">
+                          <thead>
+                            <tr>
+                              <th>Month</th>
+                              <th className="text-right">Beginning</th>
+                              <th className="text-right">Recognized</th>
+                              <th className="text-right">Ending</th>
+                              <th>PM visit</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {r.schedule.map((m) => {
+                              const visit = pm?.months[m.month];
+                              const visitLabel = !visit?.planned && !visit
+                                ? "—"
+                                : visit?.status === "completed"
+                                  ? "Completed"
+                                  : visit?.status === "open"
+                                    ? "Scheduled"
+                                    : visit?.status === "canceled"
+                                      ? "Canceled"
+                                      : visit?.planned
+                                        ? "Due"
+                                        : "—";
+                              return (
+                                <tr key={m.month}>
+                                  <td>{monthLabel(m.month)}</td>
+                                  <td className="text-right tabular-nums">{formatReportMoney(m.beginningBalance)}</td>
+                                  <td className="text-right tabular-nums">{formatReportMoney(m.recognized)}</td>
+                                  <td className="text-right tabular-nums">{formatReportMoney(m.endingBalance)}</td>
+                                  <td>
+                                    <span
+                                      className={
+                                        visit?.status === "completed"
+                                          ? "text-success"
+                                          : visit?.status === "open"
+                                            ? "text-warning"
+                                            : "opacity-60"
+                                      }
+                                    >
+                                      {visitLabel}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
+            );
+          })}
           <tr className="border-t-2 font-bold">
             <td colSpan={3}>Total</td>
             <MoneyCell n={data.totalContractPrice} bold />
             <td />
             <MoneyCell n={data.totalRecognized} bold />
             <MoneyCell n={data.totalDeferred} bold />
+            <td />
             <MoneyCell n={data.totalCurrent} bold />
             <MoneyCell n={data.totalNoncurrent} bold />
           </tr>
@@ -2593,7 +2756,7 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
-          Consolidated monthly rollforward
+          Consolidated rollforward
         </h3>
         <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
           {data.consolidated.map((m) => (

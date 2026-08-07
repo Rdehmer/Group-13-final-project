@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -23,8 +23,16 @@ import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
-import { formatMoney } from "@/lib/calculations";
+import { formatMoney, formatPct } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
+import {
+  isOutOfScope,
+  laborBillableLabelForDb,
+  markWorkOrderOutsideContract,
+  resolveLaborBillableStatus,
+  splitPartCharges,
+} from "@/lib/coverage";
+import { computeJobGrossProfit } from "@/lib/reports";
 import { workOrderLaborHours, timesheetHref } from "@/lib/timesheets";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
@@ -45,6 +53,9 @@ import {
   WO_STATUSES,
   scheduleFieldsForStatusChange,
 } from "@/lib/work-order-status";
+import {
+  isAwrPending,
+} from "@/lib/additional-work";
 import type {
   AdditionalWorkRequest,
   EmergencyPurchase,
@@ -53,10 +64,17 @@ import type {
   Profile,
   ServiceVendor,
   TechnicianLabor,
+  Vendor,
   WorkOrder,
   WorkOrderPart,
   WorkOrderServiceRating,
 } from "@/lib/types";
+import {
+  assignTargetFromWorkOrder,
+  assignmentPatchFromTarget,
+  decodeAssignTarget,
+  encodeAssignTarget,
+} from "@/lib/work-order-assign";
 
 const PRIORITIES: WorkOrder["priority"][] = ["Low", "Normal", "High", "Critical"];
 
@@ -81,6 +99,7 @@ export default function JobDetailPage() {
   const [wo, setWo] = useState<JobDetail | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
+  const [portalVendors, setPortalVendors] = useState<Vendor[]>([]);
   const [serviceVendors, setServiceVendors] = useState<ServiceVendor[]>([]);
   const [techName, setTechName] = useState<string>("—");
   const [labor, setLabor] = useState<TechnicianLabor[]>([]);
@@ -94,7 +113,7 @@ export default function JobDetailPage() {
   const [managerNotes, setManagerNotes] = useState("");
   const [workPerformed, setWorkPerformed] = useState("");
   const [techNotes, setTechNotes] = useState("");
-  const [assignTech, setAssignTech] = useState("");
+  const [assignTarget, setAssignTarget] = useState("");
   const [assignServiceVendor, setAssignServiceVendor] = useState("");
   const [scheduleDate, setScheduleDate] = useState("");
   const [problemDescription, setProblemDescription] = useState("");
@@ -112,6 +131,11 @@ export default function JobDetailPage() {
   const [serviceRating, setServiceRating] = useState<WorkOrderServiceRating | null>(null);
   const [timeEntryHours, setTimeEntryHours] = useState({ hours: 0, laborCost: 0, billableAmount: 0 });
   const [loading, setLoading] = useState(true);
+
+  const jobGrossProfit = useMemo(
+    () => computeJobGrossProfit({ invoices, labor, parts }),
+    [invoices, labor, parts],
+  );
 
   async function load() {
     setLoading(true);
@@ -139,7 +163,7 @@ export default function JobDetailPage() {
       setManagerNotes(w.manager_notes ?? "");
       setWorkPerformed(w.work_performed ?? "");
       setTechNotes(w.technician_notes ?? "");
-      setAssignTech(w.assigned_technician_id ?? "");
+      setAssignTarget(encodeAssignTarget(assignTargetFromWorkOrder(w)));
       setAssignServiceVendor(w.service_vendor_id ?? "");
       setScheduleDate(w.scheduled_date ?? "");
       setProblemDescription(w.problem_description ?? "");
@@ -154,7 +178,7 @@ export default function JobDetailPage() {
       setProfile(p as Profile);
     }
 
-    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }, { data: sv }] =
+    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }, { data: sv }, { data: pv }] =
       await Promise.all([
         supabase.from("profiles").select("*").eq("role", "technician").eq("is_active", true),
         supabase.from("technician_labor").select("*").eq("work_order_id", id).order("work_date", { ascending: false }),
@@ -173,10 +197,17 @@ export default function JobDetailPage() {
           .eq("is_active", true)
           .eq("approval_status", "Approved")
           .order("name"),
+        supabase
+          .from("vendors")
+          .select("id, name, approval_status, is_active")
+          .eq("is_active", true)
+          .eq("approval_status", "Approved")
+          .order("name"),
       ]);
 
     const techs = (tech as Profile[]) ?? [];
     setTechnicians(techs);
+    setPortalVendors((pv as Vendor[]) ?? []);
     setServiceVendors((sv as ServiceVendor[]) ?? []);
     setLabor((lab as TechnicianLabor[]) ?? []);
     setParts((pts as typeof parts) ?? []);
@@ -204,7 +235,18 @@ export default function JobDetailPage() {
       setCustomerEquipment([]);
     }
 
-    if (w?.assigned_technician_id) {
+    if (w?.assigned_vendor_id) {
+      const found = ((pv as Vendor[]) ?? []).find((v) => v.id === w.assigned_vendor_id);
+      if (found) setTechName(`Vendor · ${found.name}`);
+      else {
+        const { data: named } = await supabase
+          .from("vendors")
+          .select("name")
+          .eq("id", w.assigned_vendor_id)
+          .maybeSingle();
+        setTechName(named?.name ? `Vendor · ${named.name}` : "Vendor");
+      }
+    } else if (w?.assigned_technician_id) {
       const found = techs.find((t) => t.id === w.assigned_technician_id);
       if (found) setTechName(found.full_name || found.email);
       else {
@@ -269,41 +311,58 @@ export default function JobDetailPage() {
   }
 
   async function saveJobDetails() {
+    const target = decodeAssignTarget(assignTarget);
+    const assignee = assignmentPatchFromTarget(target, wo ?? undefined);
+    const vendorPending = target.kind === "vendor" && assignee.vendor_assignment_status === "Pending";
+    const fullyAssigned =
+      target.kind === "tech" ||
+      (target.kind === "vendor" && assignee.vendor_assignment_status === "Accepted");
     await patchJob(
       {
         problem_description: problemDescription || null,
         requested_service: requestedService || null,
         work_order_type: workOrderType,
         priority,
-        assigned_technician_id: assignTech || null,
+        ...assignee,
         service_vendor_id: assignServiceVendor || null,
         scheduled_date: scheduleDate || null,
         status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
           ? wo?.status
-          : assignTech && scheduleDate
-            ? "Scheduled"
-            : assignTech
-              ? "Assigned"
-              : wo?.status ?? "Requested",
+          : vendorPending
+            ? "Requested"
+            : fullyAssigned && scheduleDate
+              ? "Scheduled"
+              : fullyAssigned
+                ? "Assigned"
+                : wo?.status ?? "Requested",
       },
       "job_details_saved",
-      workOrderType,
+      target.kind === "vendor" && vendorPending ? "Offered to vendor" : workOrderType,
     );
-    setSavedMsg("Job details saved");
+    setSavedMsg(
+      vendorPending ? "Job offered to vendor — waiting for accept/reject" : "Job details saved",
+    );
   }
 
   async function saveAssignment() {
-    const status =
-      assignTech && scheduleDate
+    const target = decodeAssignTarget(assignTarget);
+    const assignee = assignmentPatchFromTarget(target, wo ?? undefined);
+    const vendorPending = target.kind === "vendor" && assignee.vendor_assignment_status === "Pending";
+    const fullyAssigned =
+      target.kind === "tech" ||
+      (target.kind === "vendor" && assignee.vendor_assignment_status === "Accepted");
+    const status = vendorPending
+      ? "Requested"
+      : fullyAssigned && scheduleDate
         ? "Scheduled"
-        : assignTech
+        : fullyAssigned
           ? "Assigned"
           : wo?.status === "Requested"
             ? "Requested"
             : wo?.status ?? "Requested";
     await patchJob(
       {
-        assigned_technician_id: assignTech || null,
+        ...assignee,
         service_vendor_id: assignServiceVendor || null,
         scheduled_date: scheduleDate || null,
         status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
@@ -311,7 +370,13 @@ export default function JobDetailPage() {
           : status,
       },
       "dispatch_update",
-      assignTech ? "Assigned/Scheduled" : "Unassigned",
+      target.kind === "vendor"
+        ? vendorPending
+          ? "Offered to vendor (pending)"
+          : "Vendor accepted"
+        : fullyAssigned
+          ? "Assigned/Scheduled"
+          : "Unassigned",
     );
   }
 
@@ -395,12 +460,26 @@ export default function JobDetailPage() {
     const techId =
       profile.role === "technician"
         ? profile.id
-        : assignTech || wo?.assigned_technician_id || profile.id;
+        : decodeAssignTarget(assignTarget).kind === "tech"
+          ? decodeAssignTarget(assignTarget).id
+          : wo?.assigned_technician_id || profile.id;
     const techProfile =
       technicians.find((t) => t.id === techId) ||
       (techId === profile.id ? profile : null);
     const rate = techProfile?.hourly_cost_rate ?? profile.hourly_cost_rate ?? 45;
     const billing = Number(laborForm.billing_rate) || techProfile?.hourly_billing_rate || profile.hourly_billing_rate || 95;
+    const laborBillable = resolveLaborBillableStatus(
+      wo
+        ? {
+            contract_id: wo.contract_id,
+            warranty_coverage: wo.warranty_coverage,
+            outside_contract: wo.outside_contract,
+            under_expired_contract: wo.under_expired_contract,
+            work_order_type: wo.work_order_type,
+          }
+        : null,
+      "billable",
+    );
     const { error: insertError } = await supabase.from("technician_labor").insert({
       work_order_id: id,
       technician_id: techId,
@@ -410,6 +489,7 @@ export default function JobDetailPage() {
       hourly_cost_rate: rate,
       overtime_cost_rate: rate * 1.5,
       customer_billing_rate: billing,
+      billable_status: laborBillableLabelForDb(laborBillable),
       notes: laborForm.notes || null,
       invoiced: false,
     });
@@ -507,30 +587,88 @@ export default function JobDetailPage() {
       setSaving(false);
       return;
     }
-    const billable = part.standard_customer_price * qty;
-    const { error: insertError } = await supabase.from("work_order_parts").insert({
-      work_order_id: id,
-      part_id: part.id,
-      quantity_used: qty,
-      unit_cost: part.unit_cost,
-      customer_price: part.standard_customer_price,
-      warranty_covered_amount: 0,
-      billable_amount: billable,
-      invoiced: false,
+    const split = splitPartCharges({
+      quantity: qty,
+      unitPrice: part.standard_customer_price,
+      job: wo
+        ? {
+            contract_id: wo.contract_id,
+            warranty_coverage: wo.warranty_coverage,
+            outside_contract: wo.outside_contract,
+            under_expired_contract: wo.under_expired_contract,
+            work_order_type: wo.work_order_type,
+          }
+        : null,
     });
+    const unitCost = Number(part.unit_cost) || 0;
+    const { data: inserted, error: insertError } = await supabase
+      .from("work_order_parts")
+      .insert({
+        work_order_id: id,
+        part_id: part.id,
+        quantity_used: qty,
+        unit_cost: part.unit_cost,
+        customer_price: part.standard_customer_price,
+        warranty_covered_amount: split.warranty_covered_amount,
+        billable_amount: split.billable_amount,
+        invoiced: false,
+      })
+      .select("id")
+      .single();
     if (insertError) {
       setError(insertError.message);
       setSaving(false);
       return;
     }
+    // If parts are out-of-scope on a contracted job, mark WO for billing labeling
+    if (
+      wo?.contract_id &&
+      !wo.outside_contract &&
+      split.billable_amount > 0 &&
+      isOutOfScope(
+        {
+          contract_id: wo.contract_id,
+          warranty_coverage: wo.warranty_coverage,
+          outside_contract: wo.outside_contract,
+          under_expired_contract: wo.under_expired_contract,
+          work_order_type: wo.work_order_type,
+        },
+        "part",
+      )
+    ) {
+      await markWorkOrderOutsideContract(supabase, id);
+    }
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
     const { data: { user } } = await supabase.auth.getUser();
+    const { postCogsForParts } = await import("@/lib/accounting/postings");
+    postCogsForParts({
+      amount: unitCost * qty,
+      asOf: new Date().toISOString().slice(0, 10),
+      workOrderId: id,
+      partsLineId: (inserted as { id?: string } | null)?.id,
+      userId: user?.id ?? null,
+    });
+    const outsideContractPart =
+      Boolean(wo?.contract_id) &&
+      (Boolean(wo?.outside_contract) || split.billable_amount > 0) &&
+      isOutOfScope(
+        {
+          contract_id: wo?.contract_id,
+          warranty_coverage: wo?.warranty_coverage,
+          outside_contract: wo?.outside_contract,
+          under_expired_contract: wo?.under_expired_contract,
+          work_order_type: wo?.work_order_type,
+        },
+        "part",
+      );
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "part_used",
+      action: outsideContractPart ? "extra_parts_outside_contract" : "part_used",
       recordType: "work_order",
       recordId: id,
-      newValue: part.name,
+      newValue: outsideContractPart
+        ? `${part.name} × ${qty} (outside contract)`
+        : part.name,
     });
     setPartForm({ part_id: "", quantity_used: "1" });
     await load();
@@ -581,6 +719,9 @@ export default function JobDetailPage() {
 
     const warranty = Number(row.warranty_covered_amount) || 0;
     const billable = Number(row.billable_amount);
+    const stockShortageOverride =
+      Boolean(isManager && stock && delta < 0 && stock.quantity_on_hand < -delta);
+    const appliedOverride = Boolean(row.manager_override) || stockShortageOverride;
 
     const { error: updError } = await supabase
       .from("work_order_parts")
@@ -589,7 +730,7 @@ export default function JobDetailPage() {
         customer_price: Number(row.customer_price),
         warranty_covered_amount: warranty,
         billable_amount: billable,
-        manager_override: row.manager_override || (delta < 0 && isManager),
+        manager_override: appliedOverride || (delta < 0 && isManager),
       })
       .eq("id", row.id);
     if (updError) {
@@ -606,13 +747,24 @@ export default function JobDetailPage() {
     }
 
     const { data: { user } } = await supabase.auth.getUser();
-    await logActivity(supabase, {
-      userId: user?.id ?? null,
-      action: "part_updated",
-      recordType: "work_order",
-      recordId: id,
-      newValue: row.parts?.name ?? row.part_id,
-    });
+    const partLabel = row.parts?.name ?? row.part_id;
+    if (stockShortageOverride) {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "extra_parts_approved",
+        recordType: "work_order",
+        recordId: id,
+        newValue: `${partLabel} · stock override qty ${newQty}`,
+      });
+    } else {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "part_updated",
+        recordType: "work_order",
+        recordId: id,
+        newValue: partLabel,
+      });
+    }
     setSavedMsg("Parts row saved");
     await load();
     setSaving(false);
@@ -661,7 +813,8 @@ export default function JobDetailPage() {
       .eq("id", awrId);
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "awr_decision",
+      action:
+        approval_status === "Approved" ? "extra_work_approved" : "extra_work_rejected",
       recordType: "work_order",
       recordId: id,
       newValue: approval_status,
@@ -672,55 +825,64 @@ export default function JobDetailPage() {
 
   async function createInvoiceFromJob(asDraft: boolean) {
     if (!wo) return;
+    const pendingAwrs = additional.filter((a) => isAwrPending(a.approval_status));
+    if (pendingAwrs.length > 0) {
+      setError(
+        `Approve or reject ${pendingAwrs.length} pending scope-change request${pendingAwrs.length === 1 ? "" : "s"} before invoicing.`,
+      );
+      return;
+    }
     setSaving(true);
     setError(null);
-    const preview = buildWorkOrderPreview(labor, parts as WorkOrderPart[], taxRate);
+    const preview = buildWorkOrderPreview(
+      labor,
+      parts as WorkOrderPart[],
+      taxRate,
+      undefined,
+      {
+        work_order_type: wo.work_order_type,
+        warranty_coverage: wo.warranty_coverage,
+        outside_contract: wo.outside_contract,
+        under_expired_contract: wo.under_expired_contract,
+        contract_id: wo.contract_id,
+      },
+    );
     const due = new Date();
     due.setDate(due.getDate() + 30);
     const { data: { user } } = await supabase.auth.getUser();
     const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
 
+    const basePayload = {
+      invoice_number: invoiceNumber,
+      customer_id: wo.customer_id,
+      work_order_id: wo.id,
+      contract_id: wo.contract_id,
+      equipment_id: wo.equipment_id,
+      due_date: due.toISOString().slice(0, 10),
+      labor_charges: preview.laborCharges,
+      parts_charges: preview.partsCharges,
+      warranty_deductions: preview.warrantyDeductions,
+      tax: preview.tax,
+      invoice_total: preview.total,
+      remaining_balance: preview.total,
+      status: asDraft ? "Draft" : "Sent",
+      notes: preview.coverageNotes || null,
+      created_by: user?.id ?? null,
+    };
+
     const { data: inv, error: insertError } = await supabase
       .from("invoices")
-      .insert({
-        invoice_number: invoiceNumber,
-        customer_id: wo.customer_id,
-        work_order_id: wo.id,
-        contract_id: wo.contract_id,
-        equipment_id: wo.equipment_id,
-        due_date: due.toISOString().slice(0, 10),
-        labor_charges: preview.laborCharges,
-        parts_charges: preview.partsCharges,
-        warranty_deductions: preview.warrantyDeductions,
-        tax: preview.tax,
-        invoice_total: preview.total,
-        remaining_balance: preview.total,
-        status: asDraft ? "Draft" : "Sent",
-        created_by: user?.id ?? null,
-      })
+      .insert(basePayload)
       .select()
       .single();
 
     if (insertError) {
       // Retry without equipment_id if column not migrated yet.
       if (insertError.message.includes("equipment_id")) {
+        const { equipment_id: _eq, ...withoutEq } = basePayload;
         const retry = await supabase
           .from("invoices")
-          .insert({
-            invoice_number: invoiceNumber,
-            customer_id: wo.customer_id,
-            work_order_id: wo.id,
-            contract_id: wo.contract_id,
-            due_date: due.toISOString().slice(0, 10),
-            labor_charges: preview.laborCharges,
-            parts_charges: preview.partsCharges,
-            warranty_deductions: preview.warrantyDeductions,
-            tax: preview.tax,
-            invoice_total: preview.total,
-            remaining_balance: preview.total,
-            status: asDraft ? "Draft" : "Sent",
-            created_by: user?.id ?? null,
-          })
+          .insert(withoutEq)
           .select()
           .single();
         if (retry.error) {
@@ -925,7 +1087,7 @@ export default function JobDetailPage() {
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm sm:min-w-[16rem]">
             <div className="rounded-box bg-base-200/60 p-3">
-              <p className="opacity-60">Technician</p>
+              <p className="opacity-60">Assigned to</p>
               {wo.assigned_technician_id && profile?.role !== "customer" ? (
                 <div className="space-y-1">
                   <p className="font-medium">{techName}</p>
@@ -939,6 +1101,17 @@ export default function JobDetailPage() {
                   >
                     View timesheet
                   </Link>
+                </div>
+              ) : wo.assigned_vendor_id && profile?.role !== "customer" ? (
+                <div className="space-y-1">
+                  <p className="font-medium">{techName}</p>
+                  <p className="text-xs opacity-60">
+                    {wo.vendor_assignment_status === "Pending"
+                      ? "Awaiting vendor accept/reject"
+                      : wo.vendor_assignment_status === "Accepted"
+                        ? "Vendor accepted — visible in Vendor → Jobs"
+                        : "Visible in Vendor → Jobs"}
+                  </p>
                 </div>
               ) : (
                 <p className="font-medium">{techName}</p>
@@ -1025,6 +1198,60 @@ export default function JobDetailPage() {
         <div className="space-y-4 lg:col-span-2">
           {tab === "overview" ? (
             <>
+              <div className="card bg-base-100 shadow">
+                <div className="card-body gap-3">
+                  <h2 className="card-title text-base">Job Gross Profit</h2>
+                  <p className="text-xs opacity-70">
+                    Gross Profit = Billed Revenue − (Labor COGS + Parts COGS). Billed revenue alone is
+                    not profitability.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Billed Revenue</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.billedRevenue)}
+                      </p>
+                      <p className="text-xs opacity-55">
+                        {jobGrossProfit.invoiceCount} recognized invoice
+                        {jobGrossProfit.invoiceCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Labor COGS</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.laborCogs)}
+                      </p>
+                      <p className="text-xs opacity-55">Hours × cost rates</p>
+                    </div>
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Parts COGS</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.partsCogs)}
+                      </p>
+                      <p className="text-xs opacity-55">Qty × unit cost</p>
+                    </div>
+                    <div
+                      className={`rounded-box border p-3 ${
+                        jobGrossProfit.grossProfit < 0
+                          ? "border-error/40 bg-error/5"
+                          : "border-success/30 bg-success/5"
+                      }`}
+                    >
+                      <p className="text-xs opacity-60">Gross Profit</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.grossProfit)}
+                      </p>
+                      <p className="text-xs opacity-55">
+                        {jobGrossProfit.margin != null
+                          ? `Margin ${formatPct(jobGrossProfit.margin)}`
+                          : jobGrossProfit.billedRevenue <= 0
+                            ? "Bill the job to compute margin"
+                            : "—"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="card bg-base-100 shadow">
                 <div className="card-body space-y-4">
                   <h2 className="card-title text-base gap-2">
@@ -1137,20 +1364,35 @@ export default function JobDetailPage() {
                           <option value="Critical">Critical</option>
                         </select>
                       </FormRow>
-                      <FormRow label="Technician">
+                      <FormRow label="Assigned to">
                         <select
                           className="select select-bordered w-full"
-                          value={assignTech}
-                          onChange={(e) => setAssignTech(e.target.value)}
+                          value={assignTarget}
+                          onChange={(e) => setAssignTarget(e.target.value)}
                           disabled={wo.status === "Closed"}
                         >
                           <option value="">Unassigned</option>
-                          {technicians.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.full_name ?? t.email}
-                            </option>
-                          ))}
+                          <optgroup label="Technicians">
+                            {technicians.map((t) => (
+                              <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                                {t.full_name ?? t.email}
+                              </option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Vendors (portal)">
+                            {portalVendors.map((v) => (
+                              <option
+                                key={v.id}
+                                value={encodeAssignTarget({ kind: "vendor", id: v.id })}
+                              >
+                                {v.name}
+                              </option>
+                            ))}
+                          </optgroup>
                         </select>
+                        <p className="mt-1 text-xs opacity-50">
+                          Choose a technician or offer the job to a vendor (they must accept).
+                        </p>
                       </FormRow>
                       <FormRow label="Service vendor">
                         <select
@@ -1751,12 +1993,13 @@ export default function JobDetailPage() {
                   <CheckCircle2 className="h-4 w-4" /> Additional work
                 </h2>
                 <p className="text-sm opacity-70">
-                  Unapproved extra work is blocked from casual billing until a manager decides.
+                  Unapproved extra work is blocked from billing until a manager decides. Technicians
+                  submit from My Day (Job Sheet) when repairs exceed contract scope.
                 </p>
                 {additional.length === 0 ? (
                   <EmptyState
                     title="No additional work requests"
-                    description="Technicians submit AWR from the field schedule when extra repairs are found."
+                    description="Technicians submit scope-change requests from the field Job Sheet when extra repairs are found."
                   />
                 ) : (
                   <ul className="space-y-3">
@@ -1765,13 +2008,22 @@ export default function JobDetailPage() {
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
                             <p className="font-medium">{a.description}</p>
+                            {a.recommended_repair ? (
+                              <p className="text-sm opacity-70">Repair: {a.recommended_repair}</p>
+                            ) : null}
                             <p className="text-sm opacity-70">
-                              Est. charge {formatMoney(a.estimated_additional_charge)}
+                              Est. charge {formatMoney(a.estimated_additional_charge ?? 0)}
+                              {a.estimated_labor_hours != null
+                                ? ` · ${a.estimated_labor_hours} hr labor`
+                                : ""}
                             </p>
+                            {a.supporting_notes ? (
+                              <p className="mt-1 text-xs opacity-60">{a.supporting_notes}</p>
+                            ) : null}
                           </div>
                           <StatusBadge label={a.approval_status} tone={statusTone(a.approval_status)} />
                         </div>
-                        {isManager && a.approval_status === "Pending" ? (
+                        {isManager && isAwrPending(a.approval_status) ? (
                           <div className="mt-3 flex gap-2">
                             <button
                               type="button"
@@ -1822,6 +2074,11 @@ export default function JobDetailPage() {
 
                 {wo.status === "Completed" && wo.billing_status === "Unbilled" && isBilling ? (
                   <div className="flex flex-wrap gap-2">
+                    {additional.some((a) => isAwrPending(a.approval_status)) ? (
+                      <p className="w-full text-sm text-warning">
+                        Resolve pending scope-change requests on the Approvals tab before invoicing.
+                      </p>
+                    ) : null}
                     <button type="button" className="btn btn-outline btn-sm" disabled={saving} onClick={() => createInvoiceFromJob(true)}>
                       Save draft invoice
                     </button>
@@ -1939,19 +2196,34 @@ export default function JobDetailPage() {
               </h2>
               {canEditJobDetails && openForField ? (
                 <>
-                  <FormRow label="Technician">
+                  <FormRow label="Assigned to">
                     <select
                       className="select select-bordered w-full"
-                      value={assignTech}
-                      onChange={(e) => setAssignTech(e.target.value)}
+                      value={assignTarget}
+                      onChange={(e) => setAssignTarget(e.target.value)}
                     >
                       <option value="">Unassigned</option>
-                      {technicians.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.full_name ?? t.email}
-                        </option>
-                      ))}
+                      <optgroup label="Technicians">
+                        {technicians.map((t) => (
+                          <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                            {t.full_name ?? t.email}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Vendors (portal)">
+                        {portalVendors.map((v) => (
+                          <option
+                            key={v.id}
+                            value={encodeAssignTarget({ kind: "vendor", id: v.id })}
+                          >
+                            {v.name}
+                          </option>
+                        ))}
+                      </optgroup>
                     </select>
+                    <p className="mt-1 text-xs opacity-50">
+                      Vendor offers appear under Vendor Home for accept/reject first.
+                    </p>
                   </FormRow>
                   <FormRow label="Schedule date">
                     <input
@@ -1968,7 +2240,7 @@ export default function JobDetailPage() {
               ) : (
                 <div className="text-sm">
                   <p>
-                    <span className="opacity-60">Tech:</span> {techName}
+                    <span className="opacity-60">Assigned:</span> {techName}
                   </p>
                   <p>
                     <span className="opacity-60">Date:</span> {wo.scheduled_date ?? "—"}
