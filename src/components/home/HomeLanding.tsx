@@ -69,10 +69,10 @@ export function HomeLanding() {
 
   return (
     <div className="home-landing flex min-h-screen flex-col bg-base-200">
-      <header className="home-landing-header sticky top-0 z-30 border-b border-white/10">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <EquipmentIQLogo variant="header" onDark />
-          <div className="flex items-center gap-2 sm:gap-3">
+      <header className="home-landing-header sticky top-0 z-30 w-full border-b border-white/10">
+        <div className="flex w-full items-center justify-between py-3 pl-4 pr-4 sm:pl-6 sm:pr-6 lg:pl-8 lg:pr-8">
+          <EquipmentIQLogo variant="header" onDark className="shrink-0" />
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <button
               type="button"
               className="btn btn-sm min-h-10 border-2 border-white/70 bg-transparent text-white hover:border-white hover:bg-white/10 sm:btn-md"
