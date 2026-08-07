@@ -25,6 +25,10 @@ import {
   type InvoicePreview,
   type InvoiceQueueFilter,
 } from "@/lib/billing";
+import {
+  fetchWorkOrderInvoiceGate,
+  isDuplicateInvoiceError,
+} from "@/lib/billing-controls";
 import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { equipmentLabel } from "@/lib/equipment";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
@@ -93,6 +97,7 @@ export default function BillingPage() {
   const [poByWorkOrder, setPoByWorkOrder] = useState<Record<string, PoBadge>>({});
   const [invoiceBatchMap, setInvoiceBatchMap] = useState<Map<string, BatchLookup>>(new Map());
   const [payInvoice, setPayInvoice] = useState<InvoiceRow | null>(null);
+  const [previewAwrPending, setPreviewAwrPending] = useState(0);
 
   async function loadPoBadges(invoiceList: InvoiceRow[], readyWo: WoRow[]) {
     const invIds = invoiceList.map((i) => i.id);
@@ -177,6 +182,15 @@ export default function BillingPage() {
     setPreviewWoId(woId);
     setSelectedId(null);
     const wo = completedWo.find((w) => w.id === woId);
+    const gate = await fetchWorkOrderInvoiceGate(supabase, woId);
+    if (!gate.ok) {
+      setPreviewAwrPending(gate.pendingAwrCount ?? 0);
+      setError(gate.message);
+      setWoPreview(null);
+      setPreviewBusy(false);
+      return;
+    }
+    setPreviewAwrPending(0);
     const [{ data: labor }, { data: parts }] = await Promise.all([
       supabase.from("technician_labor").select("*").eq("work_order_id", woId),
       supabase.from("work_order_parts").select("*").eq("work_order_id", woId),
@@ -186,7 +200,7 @@ export default function BillingPage() {
         (labor as TechnicianLabor[]) ?? [],
         (parts as WorkOrderPart[]) ?? [],
         rate,
-        undefined,
+        { additional: gate.approvedAwrTotal },
         wo
           ? {
               work_order_type: wo.work_order_type,
@@ -470,6 +484,13 @@ export default function BillingPage() {
     setError(null);
     setBusy(true);
 
+    const gate = await fetchWorkOrderInvoiceGate(supabase, previewWoId);
+    if (!gate.ok) {
+      setError(gate.message);
+      setBusy(false);
+      return;
+    }
+
     const due = new Date();
     due.setDate(due.getDate() + 30);
     const { data: { user } } = await supabase.auth.getUser();
@@ -484,6 +505,7 @@ export default function BillingPage() {
       due_date: due.toISOString().slice(0, 10),
       labor_charges: woPreview.laborCharges,
       parts_charges: woPreview.partsCharges,
+      additional_charges: woPreview.additional > 0 ? woPreview.additional : 0,
       warranty_deductions: woPreview.warrantyDeductions,
       tax: woPreview.tax,
       invoice_total: woPreview.total,
@@ -508,7 +530,11 @@ export default function BillingPage() {
     }
 
     if (insertError || !inv) {
-      setError(insertError?.message ?? "Could not create invoice");
+      setError(
+        insertError?.message && isDuplicateInvoiceError(insertError.message)
+          ? "This job already has an invoice — duplicate billing is blocked."
+          : (insertError?.message ?? "Could not create invoice"),
+      );
       setBusy(false);
       return;
     }
@@ -905,6 +931,7 @@ export default function BillingPage() {
                 preview={woPreview}
                 busy={previewBusy || busy}
                 error={error}
+                pendingAwrCount={previewAwrPending}
                 taxRate={taxRate}
                 poInfo={poByWorkOrder[previewWoId]}
                 onCancel={() => {
@@ -1184,6 +1211,7 @@ function WorkOrderInvoicePreview({
   preview,
   busy,
   error,
+  pendingAwrCount = 0,
   taxRate,
   poInfo,
   onCancel,
@@ -1195,6 +1223,7 @@ function WorkOrderInvoicePreview({
   preview: InvoicePreview | null;
   busy: boolean;
   error: string | null;
+  pendingAwrCount?: number;
   taxRate: number;
   poInfo?: PoBadge;
   onCancel: () => void;
@@ -1257,6 +1286,19 @@ function WorkOrderInvoicePreview({
           Open job detail
         </Link>
       </div>
+
+      {pendingAwrCount > 0 ? (
+        <div className="alert alert-warning text-sm">
+          <span>
+            <strong>{pendingAwrCount} pending scope-change request{pendingAwrCount === 1 ? "" : "s"}.</strong>{" "}
+            A manager must approve or reject out-of-scope charges on the{" "}
+            <Link href={`/work-orders/${wo.id}`} className="link font-medium">
+              work order
+            </Link>{" "}
+            before invoicing.
+          </span>
+        </div>
+      ) : null}
 
       {error ? <div className="alert alert-error text-sm">{error}</div> : null}
 

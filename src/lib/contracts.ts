@@ -615,9 +615,14 @@ export function isWithinContractServiceRequestWaitingPeriod(
   return days !== null && days < daysLimit;
 }
 
-function isActiveContractStatus(status: string): boolean {
-  const s = status.toLowerCase();
+/** Active agreements eligible for dispatch, PM scheduling, and covered service. */
+export function isDispatchableContractStatus(status: string | null | undefined): boolean {
+  const s = (status ?? "").trim().toLowerCase();
   return s === "active" || s === "renewed";
+}
+
+function isActiveContractStatus(status: string): boolean {
+  return isDispatchableContractStatus(status);
 }
 
 export function findBlockingContractForServiceRequest(

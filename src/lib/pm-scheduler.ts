@@ -17,6 +17,12 @@ import {
   max as maxDate,
 } from "date-fns";
 import type { ServiceContract, WorkOrder } from "@/lib/types";
+import { isDispatchableContractStatus } from "@/lib/contracts";
+import {
+  contractDispatchBlockMessage,
+  isContractDispatchBlockedError,
+  notifyContractDispatchBlocked,
+} from "@/lib/contract-dispatch";
 import {
   parsePlanSnapshotFromNotes,
   resolvePackIdFromSnapshot,
@@ -317,6 +323,16 @@ export async function generatePmVisitsForYear(
       });
 
       if (insertError) {
+        if (isContractDispatchBlockedError(insertError.message)) {
+          await notifyContractDispatchBlocked(supabase, {
+            customerId: contract.customer_id,
+            contractId: contract.id,
+            contractName: contract.name,
+            contractStatus: contract.status,
+            workOrderNumber: woNumber,
+            actorUserId: options.userId ?? null,
+          });
+        }
         errors.push(`${contract.name} (${ym}): ${insertError.message}`);
         continue;
       }
@@ -483,8 +499,11 @@ export async function createRoutineVisitForScheduling(
   options: { userId?: string | null } = {},
 ): Promise<CreateRoutineVisitResult> {
   const status = (contract.status ?? "").trim();
-  if (!["Active", "Renewed"].includes(status)) {
-    return { ok: false, error: "Only Active or Renewed contracts can schedule a routine visit." };
+  if (!isDispatchableContractStatus(status)) {
+    return {
+      ok: false,
+      error: contractDispatchBlockMessage(status, contract.name),
+    };
   }
 
   const criteria = routineVisitCriteriaFromContract(contract);
@@ -559,7 +578,18 @@ export async function createRoutineVisitForScheduling(
     .single();
 
   if (insertError || !inserted) {
-    return { ok: false, error: insertError?.message ?? "Could not create routine visit work order." };
+    const msg = insertError?.message ?? "Could not create routine visit work order.";
+    if (insertError && isContractDispatchBlockedError(insertError.message)) {
+      await notifyContractDispatchBlocked(supabase, {
+        customerId: contract.customer_id,
+        contractId: contract.id,
+        contractName: contract.name,
+        contractStatus: contract.status,
+        workOrderNumber: woNumber,
+        actorUserId: options.userId ?? null,
+      });
+    }
+    return { ok: false, error: msg };
   }
 
   return {

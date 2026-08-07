@@ -56,6 +56,10 @@ import {
 import {
   isAwrPending,
 } from "@/lib/additional-work";
+import {
+  fetchWorkOrderInvoiceGate,
+  isDuplicateInvoiceError,
+} from "@/lib/billing-controls";
 import type {
   AdditionalWorkRequest,
   EmergencyPurchase,
@@ -826,20 +830,21 @@ export default function JobDetailPage() {
 
   async function createInvoiceFromJob(asDraft: boolean) {
     if (!wo) return;
-    const pendingAwrs = additional.filter((a) => isAwrPending(a.approval_status));
-    if (pendingAwrs.length > 0) {
-      setError(
-        `Approve or reject ${pendingAwrs.length} pending scope-change request${pendingAwrs.length === 1 ? "" : "s"} before invoicing.`,
-      );
-      return;
-    }
     setSaving(true);
     setError(null);
+
+    const gate = await fetchWorkOrderInvoiceGate(supabase, wo.id);
+    if (!gate.ok) {
+      setError(gate.message);
+      setSaving(false);
+      return;
+    }
+
     const preview = buildWorkOrderPreview(
       labor,
       parts as WorkOrderPart[],
       taxRate,
-      undefined,
+      { additional: gate.approvedAwrTotal },
       {
         work_order_type: wo.work_order_type,
         warranty_coverage: wo.warranty_coverage,
@@ -862,6 +867,7 @@ export default function JobDetailPage() {
       due_date: due.toISOString().slice(0, 10),
       labor_charges: preview.laborCharges,
       parts_charges: preview.partsCharges,
+      additional_charges: preview.additional,
       warranty_deductions: preview.warrantyDeductions,
       tax: preview.tax,
       invoice_total: preview.total,
@@ -878,6 +884,11 @@ export default function JobDetailPage() {
       .single();
 
     if (insertError) {
+      if (isDuplicateInvoiceError(insertError.message)) {
+        setError("This job already has an invoice — duplicate billing is blocked.");
+        setSaving(false);
+        return;
+      }
       // Retry without equipment_id if column not migrated yet.
       if (insertError.message.includes("equipment_id")) {
         const { equipment_id: _eq, ...withoutEq } = basePayload;
@@ -1242,6 +1253,11 @@ export default function JobDetailPage() {
                       <p className="font-display text-lg font-semibold tabular-nums">
                         {formatMoney(jobGrossProfit.grossProfit)}
                       </p>
+                      {jobGrossProfit.grossProfit < 0 ? (
+                        <p className="mt-1 text-xs font-medium text-error">
+                          Negative margin — direct labor + parts COGS exceed billed revenue.
+                        </p>
+                      ) : null}
                       <p className="text-xs opacity-55">
                         {jobGrossProfit.margin != null
                           ? `Margin ${formatPct(jobGrossProfit.margin)}`
