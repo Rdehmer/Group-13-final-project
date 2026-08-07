@@ -75,10 +75,10 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-[#dce3ea] bg-white px-8 py-12 text-center shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)]">
+    <div className="rounded-xl border border-[#dce3ea] bg-white px-5 py-10 text-center shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)] sm:px-8 sm:py-12">
       <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[#00a3a6]" aria-hidden />
       <h3 className="text-base font-semibold text-[#1e2a36]">{title}</h3>
-      <p className="mx-auto mt-2 max-w-md text-[13.5px] leading-relaxed text-[#5c6b7a]">
+      <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-[#5c6b7a] sm:text-[13.5px]">
         {description}
       </p>
       {action ? <div className="mt-5">{action}</div> : null}
@@ -106,7 +106,7 @@ export function StatCard({
 }) {
   const interactive = Boolean(onClick || scrollTarget);
   const className = [
-    "stat w-full rounded-xl border border-[#dce3ea] bg-white text-left shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)]",
+    "stat w-full min-w-0 rounded-xl border border-[#dce3ea] bg-white text-left shadow-[0_1px_2px_rgba(30,42,54,0.04),0_8px_24px_rgba(30,42,54,0.06)]",
     danger ? "border-[#f3c4c0] bg-[#fef3f2]" : "",
     active ? "ring-2 ring-[#00a3a6]/35 border-[#00a3a6]" : "",
     interactive ? "cursor-pointer transition-all hover:-translate-y-px hover:shadow-md" : "",
@@ -116,15 +116,15 @@ export function StatCard({
 
   const body = (
     <>
-      <div className="stat-title text-[12px] font-semibold text-[#5c6b7a]">{label}</div>
+      <div className="stat-title text-[11px] font-semibold text-[#5c6b7a] sm:text-[12px]">{label}</div>
       <div
-        className={`stat-value text-[1.35rem] font-semibold tracking-tight ${
+        className={`stat-value text-[1.15rem] font-semibold tracking-tight sm:text-[1.35rem] ${
           danger ? "text-[#d64545]" : "text-[#1e2a36]"
         }`}
       >
         {value}
       </div>
-      {hint ? <div className="stat-desc text-[12px] text-[#5c6b7a]">{hint}</div> : null}
+      {hint ? <div className="stat-desc text-[11px] text-[#5c6b7a] sm:text-[12px]">{hint}</div> : null}
     </>
   );
 

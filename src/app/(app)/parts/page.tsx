@@ -16,6 +16,7 @@ import { TechnicianPartsHub } from "@/components/technician/TechnicianPartsHub";
 import type { EmergencyPurchaseReviewRow } from "@/components/EmergencyPurchaseReview";
 import { formatMoney, formatPct } from "@/lib/calculations";
 import type { Part, Profile, TechPartOrderRequest, Vendor, WorkOrder } from "@/lib/types";
+import { useLiveReload } from "@/components/LiveDataRefresh";
 
 type PartForm = {
   part_number: string;
@@ -287,6 +288,8 @@ export default function PartsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useLiveReload(load, 40_000);
 
   useEffect(() => {
     if (deepLinkFilter === "low-stock") {
@@ -743,7 +746,7 @@ export default function PartsPage() {
       action: "purchase_order_approved",
       recordType: "purchase_order",
       recordId: row.id,
-      newValue: row.parts?.part_number ?? row.part_id,
+      newValue: `${row.parts?.part_number ?? row.part_id} × ${row.quantity_requested}`,
     });
     await loadManagerPos();
     setSuccess("Purchase order approved.");
@@ -1109,7 +1112,7 @@ export default function PartsPage() {
               checked={showInactive}
               onChange={(e) => setShowInactive(e.target.checked)}
             />
-            <span className="label-text text-sm">Show inactive</span>
+            <span className="label-text text-sm">Show Inactive</span>
           </label>
           {hasActiveFilters ? (
             <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
@@ -1154,7 +1157,7 @@ export default function PartsPage() {
           {parts.length === 0 ? (
             <div className="p-6">
               <EmptyState
-                title="No parts in inventory"
+                title="No Parts in Inventory"
                 description="Add parts to track usage on work orders."
               />
             </div>
@@ -1272,7 +1275,7 @@ export default function PartsPage() {
                     <tr>
                       <td colSpan={isManager ? 11 : 8} className="p-6">
                         <EmptyState
-                          title="No matching parts"
+                          title="No Matching Parts"
                           description="Try clearing search or column filters."
                           action={
                             hasActiveFilters ? (

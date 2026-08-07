@@ -305,19 +305,53 @@ export function postCogsForParts(input: {
   amount: number;
   asOf: string;
   workOrderId: string;
+  /** Unique id for this parts usage line (avoids same-day collisions). */
+  partsLineId?: string;
   userId: string | null;
 }): { ok: true; journal: JournalEntry } | { ok: false; error: string } {
   const amount = Math.round(Number(input.amount) * 100) / 100;
   if (amount <= 0) return { ok: false, error: "COGS amount required." };
+  const sourceId =
+    input.partsLineId != null && input.partsLineId !== ""
+      ? `cogs-parts:${input.partsLineId}`
+      : `cogs-parts:${input.workOrderId}:${input.asOf}:${amount}:${Date.now()}`;
+  const existing = journalsForSource("cogs", sourceId);
+  if (existing) return { ok: true, journal: existing };
   return postJournal({
     entryDate: input.asOf,
     source: "cogs",
-    sourceId: `cogs:${input.workOrderId}:${input.asOf}`,
-    memo: `Parts COGS WO ${input.workOrderId}`,
+    sourceId,
+    memo: `COGS — Parts Expense (WO ${input.workOrderId})`,
     userId: input.userId,
     lines: [
-      { accountCode: "5100", debit: amount, memo: "COGS parts" },
+      { accountCode: "5100", debit: amount, memo: "COGS — Parts Expense" },
       { accountCode: "1200", credit: amount, memo: "Inventory relief" },
+    ],
+  });
+}
+
+/** Accrue technician job cost: DR COGS — Labor Cost / CR Accrued Wages. */
+export function postCogsForLabor(input: {
+  amount: number;
+  asOf: string;
+  workOrderId: string;
+  laborId: string;
+  userId: string | null;
+}): { ok: true; journal: JournalEntry } | { ok: false; error: string } {
+  const amount = Math.round(Number(input.amount) * 100) / 100;
+  if (amount <= 0) return { ok: false, error: "Labor COGS amount required." };
+  const sourceId = `cogs-labor:${input.laborId}`;
+  const existing = journalsForSource("cogs", sourceId);
+  if (existing) return { ok: true, journal: existing };
+  return postJournal({
+    entryDate: input.asOf,
+    source: "cogs",
+    sourceId,
+    memo: `COGS — Labor Cost (WO ${input.workOrderId})`,
+    userId: input.userId,
+    lines: [
+      { accountCode: "5000", debit: amount, memo: "COGS — Labor Cost" },
+      { accountCode: "2400", credit: amount, memo: "Accrued wages payable" },
     ],
   });
 }

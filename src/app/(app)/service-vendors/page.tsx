@@ -413,7 +413,7 @@ export default function ServiceVendorsPage() {
 
       {view === "directory" && isManager && pending.length > 0 ? (
         <section className="mb-6 rounded-xl border border-warning/40 bg-warning/5 p-4">
-          <h2 className="mb-3 font-semibold">Pending approval ({pending.length})</h2>
+          <h2 className="mb-3 font-semibold">Pending Approval ({pending.length})</h2>
           <ul className="space-y-2">
             {pending.map((v) => (
               <li
@@ -472,7 +472,7 @@ export default function ServiceVendorsPage() {
             value={tradeFilter}
             onChange={(e) => setTradeFilter(e.target.value)}
           >
-            <option value="all">All trades</option>
+            <option value="all">All Trades</option>
             {SERVICE_TRADES.map((t) => (
               <option key={t} value={t}>
                 {t}
@@ -487,13 +487,13 @@ export default function ServiceVendorsPage() {
             checked={showInactive}
             onChange={(e) => setShowInactive(e.target.checked)}
           />
-          <span className="label-text text-sm">Show inactive</span>
+          <span className="label-text text-sm">Show Inactive</span>
         </label>
       </div>
 
       {listed.length === 0 ? (
         <EmptyState
-          title="No service providers yet"
+          title="No Service Providers Yet"
           description={
             isManager
               ? "Add HVAC, electrical, and other specialty vendors you subcontract work to."
@@ -507,7 +507,7 @@ export default function ServiceVendorsPage() {
               <tr>
                 <th>Provider</th>
                 <th>Trade</th>
-                <th>Service area</th>
+                <th>Service Area</th>
                 <th>Rating</th>
                 <th>Status</th>
               </tr>
@@ -546,7 +546,7 @@ export default function ServiceVendorsPage() {
       ) : null}
 
       {showForm && canCreate ? (
-        <ScrollableOverlay title="Add service provider" onClose={() => setShowForm(false)}>
+        <ScrollableOverlay title="Add Service Provider" onClose={() => setShowForm(false)}>
           <form onSubmit={createVendor}>
             <div className="max-h-[min(60vh,24rem)] space-y-3 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
               <FormRow label="Company name" required>

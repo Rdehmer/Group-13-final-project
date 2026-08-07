@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, FileText, ClipboardList, ChevronRight, Paperclip, Clipboard } from "lucide-react";
+import { Search, FileText, ClipboardList, ChevronRight, Paperclip, Clipboard, CreditCard } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
+import { InvoicePaymentDialog } from "@/components/InvoicePaymentDialog";
 import { formatMoney } from "@/lib/calculations";
 import {
   buildWorkOrderPreview,
@@ -16,6 +17,8 @@ import {
   invoiceBucket,
   calendarMonthsForYear,
   formatMonthLabel,
+  isCoveredLine,
+  isUnsentInvoice,
   monthKeyFromDate,
   matchesInvoiceQueue,
   INVOICE_QUEUE_TABS,
@@ -72,7 +75,9 @@ export default function BillingPage() {
   const [teamMap, setTeamMap] = useState<Record<string, string>>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(0.0825);
-  const [filter, setFilter] = useState<InvoiceQueueFilter>("all");
+  const [filter, setFilter] = useState<InvoiceQueueFilter>("sent");
+  /** When true, Draft/Sent tracks the selected invoice; manual pills lock the choice. */
+  const [filterAuto, setFilterAuto] = useState(true);
   const [invoiceMonth, setInvoiceMonth] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<"customer" | "date" | "due" | "total" | "balance">("date");
@@ -87,6 +92,7 @@ export default function BillingPage() {
   const [poByInvoice, setPoByInvoice] = useState<Record<string, PoBadge>>({});
   const [poByWorkOrder, setPoByWorkOrder] = useState<Record<string, PoBadge>>({});
   const [invoiceBatchMap, setInvoiceBatchMap] = useState<Map<string, BatchLookup>>(new Map());
+  const [payInvoice, setPayInvoice] = useState<InvoiceRow | null>(null);
 
   async function loadPoBadges(invoiceList: InvoiceRow[], readyWo: WoRow[]) {
     const invIds = invoiceList.map((i) => i.id);
@@ -170,6 +176,7 @@ export default function BillingPage() {
     setError(null);
     setPreviewWoId(woId);
     setSelectedId(null);
+    const wo = completedWo.find((w) => w.id === woId);
     const [{ data: labor }, { data: parts }] = await Promise.all([
       supabase.from("technician_labor").select("*").eq("work_order_id", woId),
       supabase.from("work_order_parts").select("*").eq("work_order_id", woId),
@@ -179,6 +186,16 @@ export default function BillingPage() {
         (labor as TechnicianLabor[]) ?? [],
         (parts as WorkOrderPart[]) ?? [],
         rate,
+        undefined,
+        wo
+          ? {
+              work_order_type: wo.work_order_type,
+              warranty_coverage: wo.warranty_coverage,
+              outside_contract: wo.outside_contract,
+              under_expired_contract: wo.under_expired_contract,
+              contract_id: wo.contract_id,
+            }
+          : null,
       ),
     );
     setPreviewBusy(false);
@@ -250,6 +267,19 @@ export default function BillingPage() {
 
   const today = useMemo(() => new Date(), []);
 
+  /** Draft vs Sent/Open auto-follow selected invoice while Auto is on. */
+  useEffect(() => {
+    if (!filterAuto || !selectedId || previewWoId) return;
+    const inv = invoices.find((i) => i.id === selectedId);
+    if (!inv) return;
+    const next: InvoiceQueueFilter = isUnsentInvoice(inv.status) ? "draft" : "sent";
+    setFilter((prev) => {
+      // Only auto-move between draft/sent — leave other queue filters alone
+      if (prev !== "draft" && prev !== "sent") return prev;
+      return prev === next ? prev : next;
+    });
+  }, [filterAuto, selectedId, invoices, previewWoId]);
+
   const invoiceMonthOptions = useMemo(() => calendarMonthsForYear(new Date().getFullYear()), []);
 
   const filtered = useMemo(() => {
@@ -308,8 +338,35 @@ export default function BillingPage() {
 
   function clearFilters() {
     setFilter("all");
+    setFilterAuto(false);
     setInvoiceMonth("all");
     setQuery("");
+  }
+
+  function applyDraftSentFilter(next: "draft" | "sent") {
+    setFilterAuto(false);
+    setFilter(next);
+    setPreviewWoId(null);
+    setWoPreview(null);
+    window.setTimeout(() => {
+      document
+        .getElementById("invoice-queue")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
+
+  function enableAutoDraftSent() {
+    setFilterAuto(true);
+    const inv = selectedId ? invoices.find((i) => i.id === selectedId) : null;
+    if (inv) {
+      setFilter(isUnsentInvoice(inv.status) ? "draft" : "sent");
+    } else {
+      // Prefer open AR (sent) when present, else drafts
+      const hasOpenSent = invoices.some(
+        (i) => !isUnsentInvoice(i.status) && Number(i.remaining_balance) > 0 && i.status !== "Canceled",
+      );
+      setFilter(hasOpenSent ? "sent" : "draft");
+    }
   }
 
   function toggleSort(key: typeof sortKey) {
@@ -327,6 +384,7 @@ export default function BillingPage() {
   }
 
   function applyQueueFilter(next: InvoiceQueueFilter) {
+    setFilterAuto(false);
     setFilter((prev) => (prev === next ? "all" : next));
     setPreviewWoId(null);
     setWoPreview(null);
@@ -387,7 +445,11 @@ export default function BillingPage() {
     }
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: patch.status ? "status_change" : "assigned",
+      action: patch.status
+        ? patch.status === "Sent"
+          ? "billing_release"
+          : "status_change"
+        : "assigned",
       recordType: "invoice",
       recordId: invoiceId,
       newValue: patch.status ?? patch.assigned_to ?? "unassigned",
@@ -427,6 +489,7 @@ export default function BillingPage() {
       invoice_total: woPreview.total,
       remaining_balance: woPreview.total,
       status,
+      notes: woPreview.coverageNotes || null,
       created_by: user?.id ?? null,
       assigned_to: user?.id ?? null,
     };
@@ -467,10 +530,13 @@ export default function BillingPage() {
     await linkWorkOrderPosToInvoice(supabase, wo.id, inv.id);
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "created",
+      action: status === "Sent" ? "billing_release" : "created",
       recordType: "invoice",
       recordId: inv.id,
-      newValue: invoiceNumber,
+      newValue:
+        status === "Sent"
+          ? `${invoiceNumber} · released as Sent`
+          : invoiceNumber,
     });
 
     setPreviewWoId(null);
@@ -573,13 +639,47 @@ export default function BillingPage() {
 
       <div
         id="invoice-queue"
-        className="mb-4 scroll-mt-4 flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end"
+        className="mb-4 scroll-mt-4 flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end"
       >
+        <div className="mr-auto flex flex-wrap items-center gap-2">
+          <div className="join shadow-sm" role="group" aria-label="Draft or sent invoices">
+            <button
+              type="button"
+              className={`btn btn-sm join-item ${filter === "draft" ? "btn-primary" : "btn-outline"}`}
+              onClick={() => applyDraftSentFilter("draft")}
+            >
+              Draft
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm join-item ${filter === "sent" ? "btn-primary" : "btn-outline"}`}
+              onClick={() => applyDraftSentFilter("sent")}
+            >
+              Sent / Open
+            </button>
+          </div>
+          <button
+            type="button"
+            className={`btn btn-sm ${filterAuto ? "btn-secondary" : "btn-ghost"}`}
+            onClick={enableAutoDraftSent}
+            title="Follow selected invoice status"
+          >
+            {filterAuto ? "Auto · on" : "Auto"}
+          </button>
+          <span className="hidden text-xs opacity-50 sm:inline">
+            {filterAuto
+              ? "Filter tracks the selected invoice (you can override anytime)"
+              : "Manual filter — click Auto to follow selection"}
+          </span>
+        </div>
         <label className="form-control w-full sm:max-w-[14rem]">
           <select
             className="select select-bordered select-sm w-full"
             value={filter}
-            onChange={(e) => setFilter(e.target.value as InvoiceQueueFilter)}
+            onChange={(e) => {
+              setFilterAuto(false);
+              setFilter(e.target.value as InvoiceQueueFilter);
+            }}
             aria-label="Invoice status"
           >
             {INVOICE_QUEUE_TABS.map((t) => (
@@ -628,16 +728,20 @@ export default function BillingPage() {
               <div className="p-6">
                 <EmptyState
                   title={
-                    invoiceMonth !== "all"
-                      ? `No invoices in ${formatMonthLabel(invoiceMonth)}`
-                      : filter !== "all"
-                        ? `No invoices for ${INVOICE_QUEUE_TABS.find((t) => t.id === filter)?.label ?? "this filter"}`
-                        : "No invoices match"
+                    !filtersActive && invoices.length === 0
+                      ? "No invoices yet"
+                      : invoiceMonth !== "all"
+                        ? `No invoices in ${formatMonthLabel(invoiceMonth)}`
+                        : filter !== "all"
+                          ? `No invoices for ${INVOICE_QUEUE_TABS.find((t) => t.id === filter)?.label ?? "this filter"}`
+                          : "No invoices match"
                   }
                   description={
-                    filtersActive
-                      ? "Try Clear filters, or change status/month/search. You can also create an invoice from a completed work order above."
-                      : "Adjust search or create an invoice from a completed work order above."
+                    !filtersActive && invoices.length === 0
+                      ? "Complete a work order, then create an invoice from the Ready to invoice section above."
+                      : filtersActive
+                        ? "Try Clear filters, or change status/month/search. You can also create an invoice from a completed work order above."
+                        : "Adjust search or create an invoice from a completed work order above."
                   }
                 />
               </div>
@@ -762,15 +866,26 @@ export default function BillingPage() {
                               <span className="opacity-50">Unassigned</span>
                             )}
                           </td>
-                          <td>
-                            <Link
-                              href={`/billing/${inv.id}`}
-                              className="btn btn-ghost btn-xs"
-                              onClick={(e) => e.stopPropagation()}
-                              aria-label={`Open ${inv.invoice_number}`}
-                            >
-                              <ChevronRight className="h-4 w-4" />
-                            </Link>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1">
+                              {Number(inv.remaining_balance) > 0 && inv.status !== "Canceled" ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-success btn-xs gap-1"
+                                  onClick={() => setPayInvoice(inv)}
+                                  title="Record payment"
+                                >
+                                  <CreditCard className="h-3 w-3" /> Pay
+                                </button>
+                              ) : null}
+                              <Link
+                                href={`/billing/${inv.id}`}
+                                className="btn btn-ghost btn-xs"
+                                aria-label={`Open ${inv.invoice_number}`}
+                              >
+                                <ChevronRight className="h-4 w-4" />
+                              </Link>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -814,6 +929,7 @@ export default function BillingPage() {
                 busy={busy}
                 onStatusChange={(status) => updateInvoiceWorkflow(selected.id, { status })}
                 onAssignChange={(userId) => updateInvoiceWorkflow(selected.id, { assigned_to: userId })}
+                onPayment={() => setPayInvoice(selected)}
               />
             ) : (
               <EmptyState
@@ -824,6 +940,29 @@ export default function BillingPage() {
           </div>
         </div>
       </div>
+
+      <InvoicePaymentDialog
+        open={Boolean(payInvoice)}
+        invoice={
+          payInvoice
+            ? {
+                id: payInvoice.id,
+                invoice_number: payInvoice.invoice_number,
+                customer_id: payInvoice.customer_id,
+                customer_name: payInvoice.customers?.name ?? null,
+                invoice_total: Number(payInvoice.invoice_total),
+                amount_paid: Number(payInvoice.amount_paid),
+                remaining_balance: Number(payInvoice.remaining_balance),
+                status: payInvoice.status,
+              }
+            : null
+        }
+        onClose={() => setPayInvoice(null)}
+        onPaid={async () => {
+          setPayInvoice(null);
+          await load();
+        }}
+      />
     </div>
   );
 }
@@ -837,6 +976,7 @@ function InvoiceListPreview({
   busy,
   onStatusChange,
   onAssignChange,
+  onPayment,
 }: {
   inv: InvoiceRow;
   today: Date;
@@ -846,6 +986,7 @@ function InvoiceListPreview({
   busy: boolean;
   onStatusChange: (status: string) => void;
   onAssignChange: (userId: string | null) => void;
+  onPayment: () => void;
 }) {
   const overdueDays = daysPastDue(inv, today);
   const bucket = invoiceBucket(inv, today);
@@ -1025,14 +1166,14 @@ function InvoiceListPreview({
       </div>
 
       <div className="flex flex-wrap gap-2 pt-1">
+        {Number(inv.remaining_balance) > 0 && inv.status !== "Canceled" ? (
+          <button type="button" className="btn btn-success btn-sm gap-1" onClick={onPayment}>
+            <CreditCard className="h-4 w-4" /> Accept payment
+          </button>
+        ) : null}
         <Link href={`/billing/${inv.id}`} className="btn btn-primary btn-sm gap-1">
           <FileText className="h-4 w-4" /> Open invoice
         </Link>
-        {Number(inv.remaining_balance) > 0 && inv.status !== "Canceled" ? (
-          <Link href={`/payments?invoice=${inv.id}`} className="btn btn-outline btn-sm">
-            Record payment
-          </Link>
-        ) : null}
       </div>
     </div>
   );
@@ -1129,7 +1270,13 @@ function WorkOrderInvoicePreview({
         <p className="text-sm opacity-60">Loading labor and parts…</p>
       ) : preview ? (
         <>
-          <div className="max-h-56 overflow-y-auto rounded-box border border-base-300">
+          {preview.coverageSummary ? (
+            <p className="rounded-box border border-base-300 bg-base-200/40 px-3 py-2 text-xs leading-snug">
+              {preview.coverageSummary}
+            </p>
+          ) : null}
+
+          <div className="max-h-72 overflow-y-auto rounded-box border border-base-300">
             <table className="table table-sm">
               <thead>
                 <tr>
@@ -1138,36 +1285,100 @@ function WorkOrderInvoicePreview({
                 </tr>
               </thead>
               <tbody>
-                {preview.laborLines.length === 0 && preview.partsLines.length === 0 ? (
+                {(preview.detailLines?.length
+                  ? preview.detailLines
+                  : [...preview.laborLines, ...preview.partsLines]
+                ).length === 0 ? (
                   <tr>
                     <td colSpan={2} className="opacity-60">
                       No labor or parts on this work order — invoice will be $0 + tax.
                     </td>
                   </tr>
                 ) : null}
-                {preview.laborLines.map((line, i) => (
-                  <tr key={`l-${i}`}>
-                    <td className="max-w-[14rem] truncate text-xs sm:text-sm">{line.description}</td>
-                    <td className="text-right">{formatMoney(line.amount)}</td>
-                  </tr>
-                ))}
-                {preview.partsLines.map((line, i) => (
-                  <tr key={`p-${i}`}>
-                    <td className="max-w-[14rem] truncate text-xs sm:text-sm">{line.description}</td>
-                    <td className="text-right">{formatMoney(line.amount)}</td>
-                  </tr>
-                ))}
-                {preview.warrantyDeductions > 0 ? (
-                  <tr>
-                    <td>Warranty deductions</td>
-                    <td className="text-right">−{formatMoney(preview.warrantyDeductions)}</td>
-                  </tr>
-                ) : null}
+                {(() => {
+                  const detail =
+                    preview.detailLines?.length > 0
+                      ? preview.detailLines.filter((l) => l.kind !== "tax")
+                      : [...preview.laborLines, ...preview.partsLines];
+                  const covered = detail.filter((l) => isCoveredLine(l));
+                  const billable = detail.filter((l) => !isCoveredLine(l));
+                  const rows: ReactElement[] = [];
+                  if (covered.length) {
+                    rows.push(
+                      <tr key="h-cov" className="bg-success/10">
+                        <td colSpan={2} className="text-[10px] font-bold uppercase tracking-wide">
+                          Covered — PM / warranty (not charged)
+                        </td>
+                      </tr>,
+                    );
+                    covered.forEach((line, i) => {
+                      const list = line.listValue != null ? Number(line.listValue) : 0;
+                      rows.push(
+                        <tr key={`c-${i}`} className="bg-success/5">
+                          <td className="max-w-[14rem] text-xs sm:text-sm">{line.description}</td>
+                          <td className="text-right text-xs">
+                            {Number(line.amount) === 0
+                              ? list > 0
+                                ? `Included (list ${formatMoney(list)})`
+                                : "Included"
+                              : formatMoney(line.amount)}
+                          </td>
+                        </tr>,
+                      );
+                    });
+                  }
+                  if (billable.length) {
+                    rows.push(
+                      <tr key="h-bill" className="bg-warning/10">
+                        <td colSpan={2} className="text-[10px] font-bold uppercase tracking-wide">
+                          Billable — out of scope
+                        </td>
+                      </tr>,
+                    );
+                    billable.forEach((line, i) => {
+                      rows.push(
+                        <tr key={`b-${i}`}>
+                          <td className="max-w-[14rem] text-xs sm:text-sm">{line.description}</td>
+                          <td className="text-right">
+                            {Number(line.amount) < 0
+                              ? `−${formatMoney(Math.abs(line.amount))}`
+                              : formatMoney(line.amount)}
+                          </td>
+                        </tr>,
+                      );
+                    });
+                  }
+                  if (preview.warrantyDeductions > 0 && !detail.some((l) => l.kind === "warranty")) {
+                    rows.push(
+                      <tr key="w">
+                        <td>Warranty / coverage deduction</td>
+                        <td className="text-right">−{formatMoney(preview.warrantyDeductions)}</td>
+                      </tr>,
+                    );
+                  }
+                  if (preview.coveredValue > 0) {
+                    rows.push(
+                      <tr key="cv" className="opacity-70">
+                        <td className="text-xs">Covered list value (disclosure)</td>
+                        <td className="text-right text-xs">{formatMoney(preview.coveredValue)}</td>
+                      </tr>,
+                    );
+                  }
+                  return rows;
+                })()}
               </tbody>
             </table>
           </div>
 
           <div className="space-y-1 text-sm">
+            <div className="flex justify-between text-xs opacity-70">
+              <span>Billable labor</span>
+              <span>{formatMoney(preview.laborCharges)}</span>
+            </div>
+            <div className="flex justify-between text-xs opacity-70">
+              <span>Billable parts</span>
+              <span>{formatMoney(preview.partsCharges)}</span>
+            </div>
             <div className="flex justify-between">
               <span className="opacity-70">Subtotal</span>
               <span>{formatMoney(preview.subtotal)}</span>

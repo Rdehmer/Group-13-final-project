@@ -26,6 +26,7 @@ import {
   STAFF_DELINQUENCY_LOCK_MESSAGE,
   isDelinquencyLockError,
 } from "@/lib/contract-billing";
+import { useLiveReload } from "@/components/LiveDataRefresh";
 
 type WorkOrderRow = WorkOrder & { customers?: { id: string; name: string } | null };
 
@@ -129,6 +130,8 @@ export default function WorkOrdersPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useLiveReload(load, 40_000);
 
   // Prefill create form from Equipment "Create work order" links (manager).
   useEffect(() => {

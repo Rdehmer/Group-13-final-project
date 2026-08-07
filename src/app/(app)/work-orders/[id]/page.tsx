@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -23,8 +23,16 @@ import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
-import { formatMoney } from "@/lib/calculations";
+import { formatMoney, formatPct } from "@/lib/calculations";
 import { buildWorkOrderPreview, sumLaborCharges, sumPartsCharges } from "@/lib/billing";
+import {
+  isOutOfScope,
+  laborBillableLabelForDb,
+  markWorkOrderOutsideContract,
+  resolveLaborBillableStatus,
+  splitPartCharges,
+} from "@/lib/coverage";
+import { computeJobGrossProfit } from "@/lib/reports";
 import { workOrderLaborHours, timesheetHref } from "@/lib/timesheets";
 import { JOB_STAGES, formatJobTime, isJobUrgent, jobStageIndex } from "@/lib/jobs";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
@@ -122,8 +130,15 @@ export default function JobDetailPage() {
   const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchase[]>([]);
   const [serviceRating, setServiceRating] = useState<WorkOrderServiceRating | null>(null);
   const [timeEntryHours, setTimeEntryHours] = useState({ hours: 0, laborCost: 0, billableAmount: 0 });
+  const [loading, setLoading] = useState(true);
+
+  const jobGrossProfit = useMemo(
+    () => computeJobGrossProfit({ invoices, labor, parts }),
+    [invoices, labor, parts],
+  );
 
   async function load() {
+    setLoading(true);
     const [{ data }, { data: { user } }, { data: settings }, { data: purchases }] = await Promise.all([
       supabase
         .from("work_orders")
@@ -131,9 +146,9 @@ export default function JobDetailPage() {
           "*, customers(name, billing_address, phone, email, service_address, city, state, zip_code), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
         )
         .eq("id", id)
-        .single(),
+        .maybeSingle(),
       supabase.auth.getUser(),
-      supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
+      supabase.from("company_settings").select("default_tax_rate").limit(1).maybeSingle(),
       supabase
         .from("emergency_purchases")
         .select("*")
@@ -245,6 +260,7 @@ export default function JobDetailPage() {
     } else {
       setTechName("Unassigned");
     }
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -452,6 +468,18 @@ export default function JobDetailPage() {
       (techId === profile.id ? profile : null);
     const rate = techProfile?.hourly_cost_rate ?? profile.hourly_cost_rate ?? 45;
     const billing = Number(laborForm.billing_rate) || techProfile?.hourly_billing_rate || profile.hourly_billing_rate || 95;
+    const laborBillable = resolveLaborBillableStatus(
+      wo
+        ? {
+            contract_id: wo.contract_id,
+            warranty_coverage: wo.warranty_coverage,
+            outside_contract: wo.outside_contract,
+            under_expired_contract: wo.under_expired_contract,
+            work_order_type: wo.work_order_type,
+          }
+        : null,
+      "billable",
+    );
     const { error: insertError } = await supabase.from("technician_labor").insert({
       work_order_id: id,
       technician_id: techId,
@@ -461,6 +489,7 @@ export default function JobDetailPage() {
       hourly_cost_rate: rate,
       overtime_cost_rate: rate * 1.5,
       customer_billing_rate: billing,
+      billable_status: laborBillableLabelForDb(laborBillable),
       notes: laborForm.notes || null,
       invoiced: false,
     });
@@ -558,30 +587,88 @@ export default function JobDetailPage() {
       setSaving(false);
       return;
     }
-    const billable = part.standard_customer_price * qty;
-    const { error: insertError } = await supabase.from("work_order_parts").insert({
-      work_order_id: id,
-      part_id: part.id,
-      quantity_used: qty,
-      unit_cost: part.unit_cost,
-      customer_price: part.standard_customer_price,
-      warranty_covered_amount: 0,
-      billable_amount: billable,
-      invoiced: false,
+    const split = splitPartCharges({
+      quantity: qty,
+      unitPrice: part.standard_customer_price,
+      job: wo
+        ? {
+            contract_id: wo.contract_id,
+            warranty_coverage: wo.warranty_coverage,
+            outside_contract: wo.outside_contract,
+            under_expired_contract: wo.under_expired_contract,
+            work_order_type: wo.work_order_type,
+          }
+        : null,
     });
+    const unitCost = Number(part.unit_cost) || 0;
+    const { data: inserted, error: insertError } = await supabase
+      .from("work_order_parts")
+      .insert({
+        work_order_id: id,
+        part_id: part.id,
+        quantity_used: qty,
+        unit_cost: part.unit_cost,
+        customer_price: part.standard_customer_price,
+        warranty_covered_amount: split.warranty_covered_amount,
+        billable_amount: split.billable_amount,
+        invoiced: false,
+      })
+      .select("id")
+      .single();
     if (insertError) {
       setError(insertError.message);
       setSaving(false);
       return;
     }
+    // If parts are out-of-scope on a contracted job, mark WO for billing labeling
+    if (
+      wo?.contract_id &&
+      !wo.outside_contract &&
+      split.billable_amount > 0 &&
+      isOutOfScope(
+        {
+          contract_id: wo.contract_id,
+          warranty_coverage: wo.warranty_coverage,
+          outside_contract: wo.outside_contract,
+          under_expired_contract: wo.under_expired_contract,
+          work_order_type: wo.work_order_type,
+        },
+        "part",
+      )
+    ) {
+      await markWorkOrderOutsideContract(supabase, id);
+    }
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
     const { data: { user } } = await supabase.auth.getUser();
+    const { postCogsForParts } = await import("@/lib/accounting/postings");
+    postCogsForParts({
+      amount: unitCost * qty,
+      asOf: new Date().toISOString().slice(0, 10),
+      workOrderId: id,
+      partsLineId: (inserted as { id?: string } | null)?.id,
+      userId: user?.id ?? null,
+    });
+    const outsideContractPart =
+      Boolean(wo?.contract_id) &&
+      (Boolean(wo?.outside_contract) || split.billable_amount > 0) &&
+      isOutOfScope(
+        {
+          contract_id: wo?.contract_id,
+          warranty_coverage: wo?.warranty_coverage,
+          outside_contract: wo?.outside_contract,
+          under_expired_contract: wo?.under_expired_contract,
+          work_order_type: wo?.work_order_type,
+        },
+        "part",
+      );
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "part_used",
+      action: outsideContractPart ? "extra_parts_outside_contract" : "part_used",
       recordType: "work_order",
       recordId: id,
-      newValue: part.name,
+      newValue: outsideContractPart
+        ? `${part.name} × ${qty} (outside contract)`
+        : part.name,
     });
     setPartForm({ part_id: "", quantity_used: "1" });
     await load();
@@ -632,6 +719,9 @@ export default function JobDetailPage() {
 
     const warranty = Number(row.warranty_covered_amount) || 0;
     const billable = Number(row.billable_amount);
+    const stockShortageOverride =
+      Boolean(isManager && stock && delta < 0 && stock.quantity_on_hand < -delta);
+    const appliedOverride = Boolean(row.manager_override) || stockShortageOverride;
 
     const { error: updError } = await supabase
       .from("work_order_parts")
@@ -640,7 +730,7 @@ export default function JobDetailPage() {
         customer_price: Number(row.customer_price),
         warranty_covered_amount: warranty,
         billable_amount: billable,
-        manager_override: row.manager_override || (delta < 0 && isManager),
+        manager_override: appliedOverride || (delta < 0 && isManager),
       })
       .eq("id", row.id);
     if (updError) {
@@ -657,13 +747,24 @@ export default function JobDetailPage() {
     }
 
     const { data: { user } } = await supabase.auth.getUser();
-    await logActivity(supabase, {
-      userId: user?.id ?? null,
-      action: "part_updated",
-      recordType: "work_order",
-      recordId: id,
-      newValue: row.parts?.name ?? row.part_id,
-    });
+    const partLabel = row.parts?.name ?? row.part_id;
+    if (stockShortageOverride) {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "extra_parts_approved",
+        recordType: "work_order",
+        recordId: id,
+        newValue: `${partLabel} · stock override qty ${newQty}`,
+      });
+    } else {
+      await logActivity(supabase, {
+        userId: user?.id ?? null,
+        action: "part_updated",
+        recordType: "work_order",
+        recordId: id,
+        newValue: partLabel,
+      });
+    }
     setSavedMsg("Parts row saved");
     await load();
     setSaving(false);
@@ -712,7 +813,8 @@ export default function JobDetailPage() {
       .eq("id", awrId);
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "awr_decision",
+      action:
+        approval_status === "Approved" ? "extra_work_approved" : "extra_work_rejected",
       recordType: "work_order",
       recordId: id,
       newValue: approval_status,
@@ -732,53 +834,55 @@ export default function JobDetailPage() {
     }
     setSaving(true);
     setError(null);
-    const preview = buildWorkOrderPreview(labor, parts as WorkOrderPart[], taxRate);
+    const preview = buildWorkOrderPreview(
+      labor,
+      parts as WorkOrderPart[],
+      taxRate,
+      undefined,
+      {
+        work_order_type: wo.work_order_type,
+        warranty_coverage: wo.warranty_coverage,
+        outside_contract: wo.outside_contract,
+        under_expired_contract: wo.under_expired_contract,
+        contract_id: wo.contract_id,
+      },
+    );
     const due = new Date();
     due.setDate(due.getDate() + 30);
     const { data: { user } } = await supabase.auth.getUser();
     const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
 
+    const basePayload = {
+      invoice_number: invoiceNumber,
+      customer_id: wo.customer_id,
+      work_order_id: wo.id,
+      contract_id: wo.contract_id,
+      equipment_id: wo.equipment_id,
+      due_date: due.toISOString().slice(0, 10),
+      labor_charges: preview.laborCharges,
+      parts_charges: preview.partsCharges,
+      warranty_deductions: preview.warrantyDeductions,
+      tax: preview.tax,
+      invoice_total: preview.total,
+      remaining_balance: preview.total,
+      status: asDraft ? "Draft" : "Sent",
+      notes: preview.coverageNotes || null,
+      created_by: user?.id ?? null,
+    };
+
     const { data: inv, error: insertError } = await supabase
       .from("invoices")
-      .insert({
-        invoice_number: invoiceNumber,
-        customer_id: wo.customer_id,
-        work_order_id: wo.id,
-        contract_id: wo.contract_id,
-        equipment_id: wo.equipment_id,
-        due_date: due.toISOString().slice(0, 10),
-        labor_charges: preview.laborCharges,
-        parts_charges: preview.partsCharges,
-        warranty_deductions: preview.warrantyDeductions,
-        tax: preview.tax,
-        invoice_total: preview.total,
-        remaining_balance: preview.total,
-        status: asDraft ? "Draft" : "Sent",
-        created_by: user?.id ?? null,
-      })
+      .insert(basePayload)
       .select()
       .single();
 
     if (insertError) {
       // Retry without equipment_id if column not migrated yet.
       if (insertError.message.includes("equipment_id")) {
+        const { equipment_id: _eq, ...withoutEq } = basePayload;
         const retry = await supabase
           .from("invoices")
-          .insert({
-            invoice_number: invoiceNumber,
-            customer_id: wo.customer_id,
-            work_order_id: wo.id,
-            contract_id: wo.contract_id,
-            due_date: due.toISOString().slice(0, 10),
-            labor_charges: preview.laborCharges,
-            parts_charges: preview.partsCharges,
-            warranty_deductions: preview.warrantyDeductions,
-            tax: preview.tax,
-            invoice_total: preview.total,
-            remaining_balance: preview.total,
-            status: asDraft ? "Draft" : "Sent",
-            created_by: user?.id ?? null,
-          })
+          .insert(withoutEq)
           .select()
           .single();
         if (retry.error) {
@@ -842,7 +946,25 @@ export default function JobDetailPage() {
     setSaving(false);
   }
 
-  if (!wo) return <div className="p-8 text-center opacity-60">Loading job…</div>;
+  if (loading) {
+    return <div className="p-8 text-center opacity-60">Loading job…</div>;
+  }
+
+  if (!wo) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Record not found"
+          description="This work order may have been removed or the link is invalid."
+          action={
+            <Link href="/work-orders" className="btn btn-sm">
+              Back to Work Orders
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
 
   const stageIdx = jobStageIndex(wo.status);
   const laborTotal = sumLaborCharges(labor);
@@ -1076,6 +1198,60 @@ export default function JobDetailPage() {
         <div className="space-y-4 lg:col-span-2">
           {tab === "overview" ? (
             <>
+              <div className="card bg-base-100 shadow">
+                <div className="card-body gap-3">
+                  <h2 className="card-title text-base">Job Gross Profit</h2>
+                  <p className="text-xs opacity-70">
+                    Gross Profit = Billed Revenue − (Labor COGS + Parts COGS). Billed revenue alone is
+                    not profitability.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Billed Revenue</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.billedRevenue)}
+                      </p>
+                      <p className="text-xs opacity-55">
+                        {jobGrossProfit.invoiceCount} recognized invoice
+                        {jobGrossProfit.invoiceCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Labor COGS</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.laborCogs)}
+                      </p>
+                      <p className="text-xs opacity-55">Hours × cost rates</p>
+                    </div>
+                    <div className="rounded-box border border-base-300 p-3">
+                      <p className="text-xs opacity-60">Parts COGS</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.partsCogs)}
+                      </p>
+                      <p className="text-xs opacity-55">Qty × unit cost</p>
+                    </div>
+                    <div
+                      className={`rounded-box border p-3 ${
+                        jobGrossProfit.grossProfit < 0
+                          ? "border-error/40 bg-error/5"
+                          : "border-success/30 bg-success/5"
+                      }`}
+                    >
+                      <p className="text-xs opacity-60">Gross Profit</p>
+                      <p className="font-display text-lg font-semibold tabular-nums">
+                        {formatMoney(jobGrossProfit.grossProfit)}
+                      </p>
+                      <p className="text-xs opacity-55">
+                        {jobGrossProfit.margin != null
+                          ? `Margin ${formatPct(jobGrossProfit.margin)}`
+                          : jobGrossProfit.billedRevenue <= 0
+                            ? "Bill the job to compute margin"
+                            : "—"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="card bg-base-100 shadow">
                 <div className="card-body space-y-4">
                   <h2 className="card-title text-base gap-2">

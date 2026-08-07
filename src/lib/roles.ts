@@ -49,7 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       {
         href: "/dashboard",
-        label: "Admin Home",
+        label: "Admin Dashboard",
         roles: ["administrator"],
       },
       {
@@ -70,6 +70,11 @@ export const NAV_ITEMS: NavItem[] = [
           {
             href: "/settings/vendor-matrix",
             label: "Vendor Matrix",
+            roles: ["administrator"],
+          },
+          {
+            href: "/settings/risk-controls",
+            label: "Risk Controls",
             roles: ["administrator"],
           },
         ],
@@ -127,6 +132,11 @@ export const NAV_ITEMS: NavItem[] = [
         /** Staff mailbox linked to customer portal Inbox threads. */
         label: "Inbox",
         roles: ["service_manager", "billing"],
+      },
+      {
+        href: "/settings/risk-controls",
+        label: "Risk Controls",
+        roles: ["service_manager"],
       },
     ],
   },
@@ -239,6 +249,25 @@ export const NAV_ITEMS: NavItem[] = [
         /** Manager inbox for technician “I bought a part” emergency buys. */
         label: "Reimbursements",
         roles: ["service_manager"],
+      },
+    ],
+  },
+  // ── Manager / billing: Vendors ─────────────────────────────────────
+  {
+    section: true,
+    href: "#nav-vendors",
+    label: "Vendors",
+    roles: ["service_manager", "billing"],
+    children: [
+      {
+        href: "/vendors",
+        label: "Product Vendors",
+        roles: ["service_manager", "billing"],
+      },
+      {
+        href: "/service-vendors",
+        label: "Service Vendors",
+        roles: ["service_manager", "billing"],
       },
     ],
   },

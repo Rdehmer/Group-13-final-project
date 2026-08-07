@@ -21,6 +21,7 @@ import {
   type ScheduleWo,
   type TimedWo,
 } from "@/lib/technician-schedule";
+import { useLiveReload } from "@/components/LiveDataRefresh";
 
 /**
  * Read-only day timeline for managers — mirrors Technician Schedule day view, simplified for Overview.
@@ -121,6 +122,8 @@ export function ManagerDaySchedule() {
   useEffect(() => {
     void loadDay();
   }, [loadDay]);
+
+  useLiveReload(loadDay, 40_000);
 
   const timeline = useMemo(() => {
     let minMin = DAY_START_HOUR * 60;

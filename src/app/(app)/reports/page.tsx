@@ -10,6 +10,7 @@ import {
   Search,
   FileSpreadsheet,
   ChevronRight,
+  ChevronDown,
   BookOpen,
   Scale,
 } from "lucide-react";
@@ -84,10 +85,26 @@ type PaymentRow = Payment & { customers?: { name: string } };
 export default function ReportsPage() {
   const supabase = createClient();
   const searchParams = useSearchParams();
+  const reportParam = searchParams.get("report") as ReportId | null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reportId, setReportId] = useState<ReportId>("executive");
+  const [reportId, setReportId] = useState<ReportId>(() => {
+    if (reportParam && REPORT_NAME[reportParam]) return reportParam;
+    return "executive";
+  });
   const [query, setQuery] = useState("");
+  /** Which catalog sections are open. Active report’s group stays open automatically. */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    const startId =
+      reportParam && REPORT_NAME[reportParam as ReportId]
+        ? (reportParam as ReportId)
+        : ("executive" as ReportId);
+    for (const g of REPORT_CATALOG) {
+      initial[g.title] = g.reports.some((r) => r.id === startId);
+    }
+    return initial;
+  });
   const [range, setRange] = useState<DateRange>(() => defaultYtdRange());
   const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
   const [invoices, setInvoices] = useState<InvoiceWithCustomer[]>([]);
@@ -104,11 +121,39 @@ export default function ReportsPage() {
   const [payPeriodRange, setPayPeriodRange] = useState<DateRange>(() => defaultCurrentPayPeriod());
 
   useEffect(() => {
-    const raw = searchParams.get("report");
-    if (!raw) return;
-    const known = Object.keys(REPORT_NAME) as ReportId[];
-    if (known.includes(raw as ReportId)) setReportId(raw as ReportId);
-  }, [searchParams]);
+    if (reportParam && REPORT_NAME[reportParam] && reportParam !== reportId) {
+      setReportId(reportParam);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deep-link only
+  }, [reportParam]);
+
+  /** Keep the section that contains the active report expanded. */
+  useEffect(() => {
+    const group = REPORT_CATALOG.find((g) => g.reports.some((r) => r.id === reportId));
+    if (!group) return;
+    setOpenGroups((prev) => (prev[group.title] ? prev : { ...prev, [group.title]: true }));
+  }, [reportId]);
+
+  function selectReport(id: ReportId) {
+    setReportId(id);
+    const group = REPORT_CATALOG.find((g) => g.reports.some((r) => r.id === id));
+    if (group) {
+      setOpenGroups((prev) => ({ ...prev, [group.title]: true }));
+    }
+    // Reveal the report body (sidebar is long on mobile/desktop)
+    window.setTimeout(() => {
+      document.getElementById("report-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 40);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("report", id);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
+
+  function toggleGroup(title: string) {
+    setOpenGroups((prev) => ({ ...prev, [title]: !prev[title] }));
+  }
 
   async function load() {
     setLoading(true);
@@ -294,8 +339,8 @@ export default function ReportsPage() {
           ["Warranty deductions (contra)", -pnl.warranty],
           ["Service revenue (ex-tax)", pnl.serviceRevenue],
           ["Sales tax (liability; not revenue)", pnl.salesTax],
-          ["COGS — direct labor (actual)", pnl.cogsLabor],
-          ["COGS — parts at cost (actual)", pnl.cogsParts],
+          ["COGS — Labor Cost (actual)", pnl.cogsLabor],
+          ["COGS — Parts Expense (actual)", pnl.cogsParts],
           ["Total cost of services", pnl.cogs],
           ["Gross profit", pnl.gross],
           ["Gross margin", pnl.margin != null ? (pnl.margin * 100).toFixed(1) + "%" : "N/A"],
@@ -471,7 +516,7 @@ export default function ReportsPage() {
       case "job_profit":
         exportCsv(
           name,
-          ["Job", "Customer", "Revenue", "Labor cost", "Parts cost", "COGS", "Profit", "Margin", "Hours"],
+          ["Job", "Customer", "Billed Revenue", "Labor COGS", "Parts COGS", "COGS", "Gross Profit", "Margin", "Hours"],
           jobProfit.rows.map((r) => [
             r.workOrderNumber,
             r.customerName,
@@ -643,7 +688,7 @@ export default function ReportsPage() {
             <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => load()} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
             </button>
-            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => setReportId("policies")}>
+            <button type="button" className="btn btn-outline btn-sm gap-1" onClick={() => selectReport("policies")}>
               <Scale className="h-4 w-4" /> Policies
             </button>
             <Link href="/billing" className="btn btn-outline btn-sm">
@@ -676,46 +721,69 @@ export default function ReportsPage() {
             </label>
           </div>
           <nav className="p-2">
-            {filteredCatalog.map((group) => (
-              <div key={group.title} className="mb-3">
-                <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-base-content/45">
-                  {group.title}
-                </p>
-                <ul className="space-y-0.5">
-                  {group.reports.map((r) => {
-                    const active = reportId === r.id;
-                    return (
-                      <li key={r.id}>
-                        <button
-                          type="button"
-                          onClick={() => setReportId(r.id)}
-                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left text-sm transition ${
-                            active
-                              ? "bg-primary/12 font-semibold text-primary"
-                              : "hover:bg-base-200/80"
-                          }`}
-                        >
-                          <FileSpreadsheet className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
-                          <span>
-                            <span className="block leading-tight">{r.name}</span>
-                            <span className="mt-0.5 block text-[11px] font-normal leading-snug opacity-55">
-                              {r.description}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
+            {filteredCatalog.map((group) => {
+              const open = query.trim() ? true : Boolean(openGroups[group.title]);
+              const hasActive = group.reports.some((r) => r.id === reportId);
+              return (
+                <div key={group.title} className="mb-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.title)}
+                    className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[10px] font-bold uppercase tracking-wider transition hover:bg-base-200/70 ${
+                      hasActive ? "text-primary" : "text-base-content/45"
+                    }`}
+                    aria-expanded={open}
+                  >
+                    {open ? (
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    )}
+                    <span className="flex-1">{group.title}</span>
+                    <span className="badge badge-ghost badge-xs font-normal normal-case tracking-normal opacity-60">
+                      {group.reports.length}
+                    </span>
+                  </button>
+                  {open ? (
+                    <ul className="mt-0.5 space-y-0.5 border-l border-base-200 ml-2 pl-1">
+                      {group.reports.map((r) => {
+                        const active = reportId === r.id;
+                        return (
+                          <li key={r.id}>
+                            <button
+                              type="button"
+                              onClick={() => selectReport(r.id)}
+                              className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+                                active
+                                  ? "bg-primary/12 font-semibold text-primary"
+                                  : "hover:bg-base-200/80"
+                              }`}
+                            >
+                              <FileSpreadsheet className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
+                              <span className="min-w-0">
+                                <span className="block leading-tight">{r.name}</span>
+                                {active ? (
+                                  <span className="mt-0.5 block text-[11px] font-normal leading-snug opacity-55">
+                                    {r.description}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })}
             {filteredCatalog.length === 0 ? (
               <p className="p-3 text-sm opacity-60">No reports match.</p>
             ) : null}
           </nav>
         </aside>
 
-        <div className="min-w-0 space-y-4">
+        <div id="report-panel" className="min-w-0 scroll-mt-20 space-y-4">
           <div className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm print:border-0 print:shadow-none">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -896,7 +964,13 @@ export default function ReportsPage() {
           ) : (
             <div className="report-body rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-6 print:border-0 print:p-0 print:shadow-none">
               {reportId === "executive" ? (
-                <ExecutiveReport data={executive} onOpen={(id) => setReportId(id)} />
+                <ExecutiveReport
+                  data={executive}
+                  onOpen={(id) => selectReport(id)}
+                  greenfield={
+                    invoices.length === 0 && payments.length === 0 && contracts.length === 0
+                  }
+                />
               ) : null}
               {reportId === "pnl" ? <PnLReport pnl={pnl} /> : null}
               {reportId === "pnl_compare" ? <PnlCompareReport data={pnlCmp} /> : null}
@@ -999,12 +1073,22 @@ function ReportStat(props: {
 function ExecutiveReport({
   data,
   onOpen,
+  greenfield = false,
 }: {
   data: ReturnType<typeof executiveSnapshot>;
   onOpen: (id: ReportId) => void;
+  greenfield?: boolean;
 }) {
   return (
     <div className="space-y-6">
+      {greenfield ? (
+        <div className="alert alert-info text-sm">
+          <span>
+            <strong>No financial activity yet.</strong> Complete work orders and post invoices or
+            payments to populate executive KPIs and the rest of the report suite.
+          </span>
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <ReportStat
           label="Service revenue"
@@ -1269,19 +1353,31 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   if (data.rows.length === 0) {
     return (
       <EmptyState
-        title="No billed jobs in range"
-        description="Job profitability requires recognized invoices linked to work orders."
+        title="No Billed Jobs in Range"
+        description="Job profitability requires recognized invoices linked to work orders. Gross profit is never billed revenue alone."
       />
     );
   }
+  const laborTotal = data.rows.reduce((s, r) => s + r.laborCost, 0);
+  const partsTotal = data.rows.reduce((s, r) => s + r.partsCost, 0);
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="rounded-box border border-base-300 bg-base-200/40 px-3 py-2 text-sm">
+        <p className="font-medium">
+          Gross Profit = Billed Revenue − (Direct Labor Cost + Parts COGS)
+        </p>
+        <p className="mt-0.5 text-xs opacity-70">
+          Labor uses technician cost rates; parts use unit cost × quantity logged on the job — not
+          customer sell prices.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <ReportStat label="Jobs" value={data.totals.jobCount} />
-        <ReportStat label="Revenue" value={formatReportMoney(data.totals.revenue)} />
-        <ReportStat label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
+        <ReportStat label="Billed Revenue" value={formatReportMoney(data.totals.revenue)} />
+        <ReportStat label="Labor COGS" value={formatReportMoney(laborTotal)} />
+        <ReportStat label="Parts COGS" value={formatReportMoney(partsTotal)} />
         <ReportStat
-          label="Gross profit"
+          label="Gross Profit"
           value={formatReportMoney(data.totals.profit)}
           hint={formatReportPct(data.totals.margin)}
           danger={data.totals.lossCount > 0}
@@ -1291,12 +1387,22 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
         <div className="alert alert-warning text-sm">
           <span>
             <strong>{data.totals.lossCount}</strong> job{data.totals.lossCount === 1 ? "" : "s"} with negative
-            gross profit — review labor rates or parts cost vs price.
+            gross profit — review labor cost rates or parts cost vs billed price.
           </span>
         </div>
       ) : null}
       <div id="report-detail" className="scroll-mt-4"><ReportTable
-        headers={["Job", "Customer", "Type", "Revenue", "Labor", "Parts", "Profit", "Margin", "Hrs"]}
+        headers={[
+          "Job",
+          "Customer",
+          "Type",
+          "Billed Revenue",
+          "Labor COGS",
+          "Parts COGS",
+          "Gross Profit",
+          "Margin",
+          "Hrs",
+        ]}
       >
         {data.rows.map((r) => (
           <tr key={r.jobId} className={r.profit < 0 ? "bg-error/5" : ""}>
@@ -1326,15 +1432,17 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
         <tr className="border-t-2 font-bold">
           <td colSpan={3}>Total</td>
           <MoneyCell n={data.totals.revenue} bold />
-          <td colSpan={2} />
+          <MoneyCell n={laborTotal} bold />
+          <MoneyCell n={partsTotal} bold />
           <MoneyCell n={data.totals.profit} bold />
           <td className="text-right tabular-nums">{formatReportPct(data.totals.margin)}</td>
           <td className="text-right tabular-nums">{data.totals.laborHours.toFixed(1)}</td>
         </tr>
       </ReportTable></div>
       <PolicyNote>
-        Revenue is recognized service revenue (ex-tax) on linked invoices. COGS is actual technician cost rates
-        and parts unit costs on that work order.
+        Billed revenue is recognized service revenue (ex-tax) on linked invoices. Labor COGS is hours ×
+        technician cost rates. Parts COGS is quantity used × parts unit cost. Gross profit is never the
+        billed total alone.
       </PolicyNote>
     </div>
   );
@@ -1713,13 +1821,13 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
         <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
-              Direct labor at cost rates
+              COGS — Labor Cost
               {pnl.laborHours > 0 ? ` (${pnl.laborHours.toFixed(1)} hrs on matched jobs)` : ""}
             </td>
             <MoneyCell n={pnl.cogsLabor} />
           </tr>
           <tr>
-            <td className="pl-4">Parts consumed at unit cost</td>
+            <td className="pl-4">COGS — Parts Expense</td>
             <MoneyCell n={pnl.cogsParts} />
           </tr>
           <tr className="border-t-2 border-base-content/15 font-semibold">

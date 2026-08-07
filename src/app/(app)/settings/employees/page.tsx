@@ -132,21 +132,21 @@ export default function EmployeesSettingsPage() {
             checked={showInactive}
             onChange={(e) => setShowInactive(e.target.checked)}
           />
-          Show inactive
+          Show Inactive
         </label>
       </div>
 
       <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
         <div className="flex items-center gap-2 border-b border-base-200 px-4 py-3">
           <Users className="h-4 w-4" />
-          <h2 className="font-bold">Staff directory</h2>
+          <h2 className="font-bold">Staff Directory</h2>
           <span className="text-xs opacity-50">({filtered.length})</span>
         </div>
 
         {filtered.length === 0 ? (
           <div className="p-6">
             <EmptyState
-              title="No staff employees"
+              title="No Staff Employees"
               description="Staff are users with an employee role (not customer). Create accounts on login/signup, then assign a staff role here or in Users."
             />
           </div>
@@ -157,8 +157,8 @@ export default function EmployeesSettingsPage() {
                 <tr>
                   <th>Employee</th>
                   <th>Role</th>
-                  <th>Cost rate</th>
-                  <th>Billing rate</th>
+                  <th>Cost Rate</th>
+                  <th>Billing Rate</th>
                   <th>Permissions</th>
                   <th>Status</th>
                   <th />

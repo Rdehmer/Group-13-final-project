@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
+import { ActivityFeed } from "@/components/ActivityFeed";
 import { PageHeader } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone, StatCard } from "@/components/ui";
@@ -55,6 +56,7 @@ export default function BatchDetailPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [batch, setBatch] = useState<AccountingBatch | null>(null);
   const [invoices, setInvoices] = useState<
     (InvoiceForBatch & { lineId: string; lineAmount: number })[]
@@ -156,6 +158,30 @@ export default function BatchDetailPage() {
       }
     }
     setBusy(false);
+  }
+
+  /** Download G/L files without Post/Export status change (demo / emergency handoff). */
+  async function doBypassExport() {
+    if (!batch) return;
+    if (invoices.length + payments.length === 0) {
+      setError("Add invoices or payments before exporting.");
+      setSuccess(null);
+      return;
+    }
+    setError(null);
+    exportBatchCsv(batch, invoices, payments);
+    exportBatchJournalCsv(batch, invoices, payments);
+    const { data } = await supabase.auth.getUser();
+    await logActivity(supabase, {
+      userId: data.user?.id ?? null,
+      action: "bypass_export",
+      recordType: "accounting_batch",
+      recordId: batch.id,
+      newValue: batch.batch_number,
+    });
+    setSuccess(
+      `Bypass export downloaded journal + transactions for ${batch.batch_number}. Batch status stays ${batch.status}.`,
+    );
   }
 
   async function doUnexport() {
@@ -272,6 +298,15 @@ export default function BatchDetailPage() {
         description={batch.name || BATCH_STATUS_HINT[batch.status]}
         actions={
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm gap-1"
+              disabled={busy || invoices.length + payments.length === 0}
+              title="Download journal + transaction CSVs without posting or changing status"
+              onClick={() => void doBypassExport()}
+            >
+              <Download className="h-4 w-4" /> Bypass export
+            </button>
             <Link href="/batches" className="btn btn-ghost btn-sm gap-1">
               <ArrowLeft className="h-4 w-4" /> All batches
             </Link>
@@ -287,6 +322,14 @@ export default function BatchDetailPage() {
           <AlertTriangle className="h-4 w-4" />
           <span>{error}</span>
           <button type="button" className="btn btn-ghost btn-xs" onClick={() => setError(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+      {success ? (
+        <div className="alert alert-success py-2 text-sm">
+          <span>{success}</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setSuccess(null)}>
             Dismiss
           </button>
         </div>
@@ -355,6 +398,15 @@ export default function BatchDetailPage() {
         id="batch-actions"
         className="flex scroll-mt-4 flex-wrap gap-2 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm"
       >
+        <button
+          type="button"
+          className="btn btn-secondary gap-1"
+          disabled={busy || invoices.length + payments.length === 0}
+          title="Skip Post → Export. Downloads CSVs only; status stays as-is."
+          onClick={() => void doBypassExport()}
+        >
+          <Download className="h-4 w-4" /> Bypass export
+        </button>
         {isOpen ? (
           <>
             <button
@@ -434,6 +486,10 @@ export default function BatchDetailPage() {
             </button>
           </div>
         ) : null}
+        <p className="w-full text-xs opacity-55">
+          <strong>Bypass export</strong> downloads journal + transaction CSVs without posting or marking the
+          batch Exported. Use formal <strong>Export</strong> after Post when you want the G/L handoff recorded.
+        </p>
       </div>
 
       {batch.notes ? (
@@ -693,6 +749,7 @@ export default function BatchDetailPage() {
           </DualHorizontalScroll>
         )}
       </section>
+      <ActivityFeed className="mt-4" recordType="accounting_batch" recordId={id} />
     </div>
   );
 }

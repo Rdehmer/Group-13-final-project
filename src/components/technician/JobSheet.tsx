@@ -45,6 +45,7 @@ import {
   telHref,
   type FieldJob,
 } from "@/lib/technician-field";
+import { markWorkOrderOutsideContract, splitPartCharges } from "@/lib/coverage";
 import type { Part, Profile, WorkOrderPart } from "@/lib/types";
 import {
   applyDispatchStatusTransition,
@@ -276,14 +277,14 @@ export function JobSheet({
     }
   }
 
-  async function logPart(partId: string, quantity: number) {
+  async function logPart(partId: string, quantity: number, options?: { acknowledgedOutOfScope?: boolean }) {
     if (!inProgress) {
       setError("Parts unlock when the job is In Progress.");
       return;
     }
     const part = catalogParts.find((p) => p.id === partId);
     if (!part) return;
-    if (isOutOfScope(job, "part") && !scopePending) {
+    if (isOutOfScope(job, "part") && !options?.acknowledgedOutOfScope && !scopePending) {
       setPendingPart({ partId, quantity });
       setScopePending(true);
       return;
@@ -291,35 +292,70 @@ export function JobSheet({
     setBusy(true);
     setError(null);
     try {
-      const billable = part.standard_customer_price * quantity;
-      const { error: insertError } = await supabase.from("work_order_parts").insert({
-        work_order_id: job.id,
-        part_id: partId,
-        quantity_used: quantity,
-        unit_cost: part.unit_cost,
-        customer_price: part.standard_customer_price,
-        warranty_covered_amount: 0,
-        billable_amount: billable,
-        invoiced: false,
-        date_used: todayIso(),
+      const forceBillable =
+        Boolean(options?.acknowledgedOutOfScope) || isOutOfScope(job, "part");
+      if (forceBillable && job.contract_id && !job.outside_contract) {
+        await markWorkOrderOutsideContract(supabase, job.id, {
+          reason: "Out-of-scope part used in field",
+        });
+      }
+      const split = splitPartCharges({
+        quantity,
+        unitPrice: part.standard_customer_price,
+        job: {
+          contract_id: job.contract_id,
+          warranty_coverage: job.warranty_coverage,
+          outside_contract: forceBillable || job.outside_contract,
+          under_expired_contract: job.under_expired_contract,
+          work_order_type: job.work_order_type,
+        },
+        forceBillable,
       });
+      const unitCost = Number(part.unit_cost) || 0;
+      const { data: inserted, error: insertError } = await supabase
+        .from("work_order_parts")
+        .insert({
+          work_order_id: job.id,
+          part_id: partId,
+          quantity_used: quantity,
+          unit_cost: part.unit_cost,
+          customer_price: part.standard_customer_price,
+          warranty_covered_amount: split.warranty_covered_amount,
+          billable_amount: split.billable_amount,
+          invoiced: false,
+          date_used: todayIso(),
+        })
+        .select("id")
+        .single();
       if (insertError) throw new Error(insertError.message);
       if (!isVendor) {
         await supabase
           .from("parts")
           .update({ quantity_on_hand: Math.max(0, part.quantity_on_hand - quantity) })
           .eq("id", partId);
+        const { postCogsForParts } = await import("@/lib/accounting/postings");
+        postCogsForParts({
+          amount: unitCost * quantity,
+          asOf: todayIso(),
+          workOrderId: job.id,
+          partsLineId: (inserted as { id?: string } | null)?.id,
+          userId: profile.id,
+        });
       }
       await logActivity(supabase, {
         userId: profile.id,
-        action: "part_used",
+        action: forceBillable ? "extra_parts_outside_contract" : "part_used",
         recordType: "work_order",
         recordId: job.id,
-        newValue: `${part.name} x${quantity}`,
+        newValue: `${part.name} x${quantity}${forceBillable ? " (out of scope)" : " (covered)"}`,
       });
       setScopePending(false);
       setPendingPart(null);
-      setMessage(`Logged ${quantity}× ${part.name}`);
+      setMessage(
+        forceBillable
+          ? `Logged ${quantity}× ${part.name} as billable (out of scope)`
+          : `Logged ${quantity}× ${part.name} as covered (not charged)`,
+      );
       await onRefresh();
     } catch (err) {
       setError(humanizeFieldError(err instanceof Error ? err.message : String(err)));
@@ -441,10 +477,14 @@ export function JobSheet({
               className="btn btn-warning btn-sm"
               disabled={busy || !pendingPart}
               onClick={() => {
-                if (pendingPart) void logPart(pendingPart.partId, pendingPart.quantity);
+                if (pendingPart) {
+                  void logPart(pendingPart.partId, pendingPart.quantity, {
+                    acknowledgedOutOfScope: true,
+                  });
+                }
               }}
             >
-              Log anyway
+              Log as billable (out of scope)
             </button>
             <button
               type="button"

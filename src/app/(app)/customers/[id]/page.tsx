@@ -29,14 +29,16 @@ export default function CustomerDetailPage() {
   const [contracts, setContracts] = useState<ServiceContract[]>([]);
   const [invoices, setInvoices] = useState<Pick<Invoice, "id" | "invoice_number" | "invoice_total" | "remaining_balance" | "status">[]>([]);
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [delinquencyLocked, setDelinquencyLocked] = useState(false);
   const [delinquentInvoices, setDelinquentInvoices] = useState<DelinquentMonthlyInvoice[]>([]);
   const [graceDays, setGraceDays] = useState(DEFAULT_DELINQUENCY_GRACE_DAYS);
 
   async function load() {
+    setLoading(true);
     const [{ data: c }, { data: eq }, { data: wo }, { data: sc }, { data: inv }, { data: settings }, { data: monthlyInv }] =
       await Promise.all([
-      supabase.from("customers").select("*").eq("id", id).single(),
+      supabase.from("customers").select("*").eq("id", id).maybeSingle(),
       supabase.from("equipment").select("*").eq("customer_id", id).order("name"),
       supabase.from("work_orders").select("*").eq("customer_id", id).order("created_at", { ascending: false }).limit(10),
       supabase.from("service_contracts").select("*").eq("customer_id", id).order("start_date", { ascending: false }),
@@ -53,7 +55,7 @@ export default function CustomerDetailPage() {
         .is("work_order_id", null)
         .gt("recurring_service_charge", 0),
     ]);
-    setCustomer(c as Customer);
+    setCustomer((c as Customer) ?? null);
     setEquipment((eq as Equipment[]) ?? []);
     setWorkOrders((wo as WorkOrder[]) ?? []);
     const contractRows = (sc as ServiceContract[]) ?? [];
@@ -75,6 +77,7 @@ export default function CustomerDetailPage() {
     const delinquent = findDelinquentMonthlyInvoices(contractRows, monthly, policy.graceDays);
     setDelinquentInvoices(delinquent);
     setDelinquencyLocked(customerIsDelinquencyLocked(contractRows, monthly, policy));
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -103,7 +106,25 @@ export default function CustomerDetailPage() {
     setSaving(false);
   }
 
-  if (!customer) return <div className="p-8 text-center opacity-60">Loading…</div>;
+  if (loading) {
+    return <div className="p-8 text-center opacity-60">Loading…</div>;
+  }
+
+  if (!customer) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Record not found"
+          description="This customer may have been removed or the link is invalid."
+          action={
+            <Link href="/customers" className="btn btn-sm">
+              Back to Customers
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div>

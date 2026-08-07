@@ -7,6 +7,7 @@ import {
   withDerivedTimes,
   type ScheduleWo,
 } from "@/lib/technician-schedule";
+import { isOutOfScope as coverageIsOutOfScope } from "@/lib/coverage";
 
 export type FieldJob = ScheduleWo & {
   customers?: {
@@ -345,16 +346,13 @@ export function nextStepLabel(
 
 /** True when part/labor may be outside contract coverage. */
 export function isOutOfScope(
-  job: Pick<WorkOrder, "warranty_coverage" | "contract_id" | "under_expired_contract">,
+  job: Pick<
+    WorkOrder,
+    "warranty_coverage" | "contract_id" | "under_expired_contract" | "outside_contract"
+  >,
   kind: "part" | "labor",
 ): boolean {
-  if (job.under_expired_contract) return true;
-  if (!job.contract_id) return true;
-  const coverage = job.warranty_coverage ?? "";
-  if (coverage === "Not Covered") return true;
-  if (kind === "labor" && coverage === "Parts Only") return true;
-  if (kind === "part" && coverage === "Labor Covered") return true;
-  return false;
+  return coverageIsOutOfScope(job, kind);
 }
 
 export function hoursBetween(startIso: string, endIso: string): number {

@@ -6,21 +6,24 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, CreditCard, Download, Mail, Send, FileEdit, Plus, Trash2, Save } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
-import { StatusBadge, statusTone } from "@/components/ui";
+import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { formatMoney } from "@/lib/calculations";
 import { formatMonthlyPremium } from "@/lib/contract-pricing";
 import {
+  billableToEditable,
   buildWorkOrderPreview,
   daysPastDue,
   EDITABLE_LINE_KINDS,
   invoiceBucket,
   invoiceToEditableLines,
+  isCoveredLine,
   isUnsentInvoice,
   linesFromStoredInvoice,
   newEditableLine,
   recomputeLineAmount,
   rollupEditableLines,
+  suggestInvoiceStatus,
   type BillableLine,
   type EditableInvoiceLine,
 } from "@/lib/billing";
@@ -28,10 +31,16 @@ import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { EmailInvoiceModal, type EmailInvoiceRecipient } from "@/components/EmailInvoiceModal";
 import { EquipmentAttachPanel, EquipmentIdentityCard, type EquipmentOption } from "@/components/EquipmentAttachPanel";
 import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
+import { ActivityFeed } from "@/components/ActivityFeed";
+import { InvoicePaymentDialog } from "@/components/InvoicePaymentDialog";
+import {
+  InvoicePartsCatalogPicker,
+  catalogPartLineDescription,
+} from "@/components/InvoicePartsCatalogPicker";
 import { loadInvoiceBatchMap, type BatchLookup } from "@/lib/batches";
 import { downloadInvoicePdf, invoicePdfToBase64 } from "@/lib/invoicePdf";
 import type { ServiceHistoryWorkOrder } from "@/lib/invoices";
-import type { Invoice, Payment, Profile, ServiceContract, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
+import type { Invoice, Part, Payment, Profile, ServiceContract, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
 import {
   coverageCapsFromContract,
   isTmBillingEligible,
@@ -99,8 +108,15 @@ export default function InvoiceDetailPage() {
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
+  const [payOpen, setPayOpen] = useState(false);
+  const [partsPickerOpen, setPartsPickerOpen] = useState(false);
+  const [catalogParts, setCatalogParts] = useState<Part[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
+    setLoading(true);
     const [{ data }, { data: pay }, { data: settings }, { data: members }, batchRes] = await Promise.all([
       supabase
         .from("invoices")
@@ -108,9 +124,9 @@ export default function InvoiceDetailPage() {
           "*, customers(name, billing_address, email, phone, city, state), work_orders(id, work_order_number, problem_description, work_order_type, service_vendor_id), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
         )
         .eq("id", id)
-        .single(),
+        .maybeSingle(),
       supabase.from("payments").select("*").eq("invoice_id", id).order("payment_date", { ascending: false }),
-      supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
+      supabase.from("company_settings").select("default_tax_rate").limit(1).maybeSingle(),
       supabase
         .from("profiles")
         .select("id, full_name, email, role")
@@ -121,15 +137,35 @@ export default function InvoiceDetailPage() {
     ]);
 
     const invoice = data as InvoiceDetail | null;
+    if (!invoice) {
+      setInv(null);
+      setPayments((pay as Payment[]) ?? []);
+      setTeam((members as typeof team) ?? []);
+      setInvoiceBatch(null);
+      setServiceVendor(null);
+      setLoading(false);
+      return;
+    }
+
+    // Keep status in sync with payments/balance (Paid · Partially Paid) after other features change money
+    const suggested = suggestInvoiceStatus({
+      status: invoice.status,
+      amount_paid: invoice.amount_paid,
+      remaining_balance: invoice.remaining_balance,
+    });
+    if (suggested !== invoice.status) {
+      await supabase
+        .from("invoices")
+        .update({ status: suggested, updated_at: new Date().toISOString() })
+        .eq("id", invoice.id);
+      invoice.status = suggested;
+    }
+
     setInv(invoice);
     setPayments((pay as Payment[]) ?? []);
     setTeam((members as typeof team) ?? []);
-    setInvoiceBatch(invoice ? batchRes.map.get(invoice.id) ?? null : null);
+    setInvoiceBatch(batchRes.map.get(invoice.id) ?? null);
     if (settings?.default_tax_rate) setTaxRate(Number(settings.default_tax_rate));
-    if (!invoice) {
-      setServiceVendor(null);
-      return;
-    }
 
     setNotes(invoice.notes ?? "");
     setDirty(false);
@@ -163,55 +199,37 @@ export default function InvoiceDetailPage() {
     let detailLines: BillableLine[] = [];
 
     if (invoice.work_order_id) {
-      const [{ data: labor }, { data: parts }] = await Promise.all([
+      const [{ data: labor }, { data: parts }, { data: woCtx }] = await Promise.all([
         supabase.from("technician_labor").select("*").eq("work_order_id", invoice.work_order_id),
         supabase.from("work_order_parts").select("*").eq("work_order_id", invoice.work_order_id),
+        supabase
+          .from("work_orders")
+          .select(
+            "work_order_type, warranty_coverage, outside_contract, under_expired_contract, contract_id",
+          )
+          .eq("id", invoice.work_order_id)
+          .maybeSingle(),
       ]);
       const lab = (labor as TechnicianLabor[]) ?? [];
       const pts = (parts as WorkOrderPart[]) ?? [];
       if (lab.length > 0 || pts.length > 0) {
         const rate = settings?.default_tax_rate ? Number(settings.default_tax_rate) : 0;
-        const preview = buildWorkOrderPreview(lab, pts, rate, {
-          recurring: Number(invoice.recurring_service_charge),
-          additional: Number(invoice.additional_charges),
-          discounts: Number(invoice.discounts),
-        });
-        detailLines = [...preview.laborLines, ...preview.partsLines];
-        if (Number(invoice.warranty_deductions) > 0) {
-          detailLines.push({
-            kind: "warranty",
-            description: "Warranty deductions",
-            quantity: null,
-            unitPrice: null,
-            amount: -Number(invoice.warranty_deductions),
-          });
-        }
-        if (Number(invoice.recurring_service_charge) > 0) {
-          detailLines.push({
-            kind: "recurring",
-            description: "Recurring service charge",
-            quantity: null,
-            unitPrice: null,
-            amount: Number(invoice.recurring_service_charge),
-          });
-        }
-        if (Number(invoice.additional_charges) > 0) {
-          detailLines.push({
-            kind: "additional",
-            description: "Additional charges",
-            quantity: null,
-            unitPrice: null,
-            amount: Number(invoice.additional_charges),
-          });
-        }
-        if (Number(invoice.discounts) > 0) {
-          detailLines.push({
-            kind: "discount",
-            description: "Discounts",
-            quantity: null,
-            unitPrice: null,
-            amount: -Number(invoice.discounts),
-          });
+        const preview = buildWorkOrderPreview(
+          lab,
+          pts,
+          rate,
+          {
+            recurring: Number(invoice.recurring_service_charge),
+            additional: Number(invoice.additional_charges),
+            discounts: Number(invoice.discounts),
+          },
+          woCtx,
+        );
+        detailLines = preview.detailLines.filter((l) => l.kind !== "tax");
+        // Prefer generated coverage notes when invoice has none yet
+        if (!invoice.notes?.trim() && preview.coverageNotes) {
+          invoice.notes = preview.coverageNotes;
+          setNotes(preview.coverageNotes);
         }
       }
     }
@@ -221,13 +239,24 @@ export default function InvoiceDetailPage() {
     }
 
     setLines(detailLines);
+    setInv(invoice);
 
-    // Prefer stored totals as the editable source of truth so save is predictable.
+    // Prefer stored totals as the editable source of truth so save is predictable —
+    // but seed descriptions from covered vs billable WO lines when draft.
     if (isUnsentInvoice(invoice.status)) {
-      setEditLines(invoiceToEditableLines(invoice));
+      const fromPreview = detailLines.length
+        ? billableToEditable(detailLines)
+        : invoiceToEditableLines(invoice);
+      // If preview has only $0 covered lines and no charges, merge with stored rollup
+      if (fromPreview.some((l) => Number(l.amount) !== 0) || Number(invoice.invoice_total) === 0) {
+        setEditLines(fromPreview.length ? fromPreview : invoiceToEditableLines(invoice));
+      } else {
+        setEditLines(invoiceToEditableLines(invoice));
+      }
     }
 
     await loadPricingBanner(invoice, detailLines);
+    setLoading(false);
   }
 
   async function loadPricingBanner(invoice: InvoiceDetail, detailLines: BillableLine[]) {
@@ -403,6 +432,82 @@ export default function InvoiceDetailPage() {
     setSavedMsg(null);
   }
 
+  async function openPartsPicker() {
+    setPartsPickerOpen(true);
+    if (catalogParts.length > 0) return;
+    setCatalogLoading(true);
+    try {
+      const { data, error: loadErr } = await supabase
+        .from("parts")
+        .select("*")
+        .eq("is_active", true)
+        .order("name");
+      if (loadErr) throw loadErr;
+      setCatalogParts((data as Part[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load parts catalog.");
+      setPartsPickerOpen(false);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  function addPartsFromCatalog(
+    picked: { part: Part; quantity: number }[],
+    options?: { keepOpen?: boolean },
+  ) {
+    if (picked.length === 0) return;
+    setEditLines((rows) => {
+      let next = [...rows];
+      for (const { part, quantity } of picked) {
+        const unit = Number(part.standard_customer_price);
+        const qty = quantity;
+        const amount = (qty * (Number.isFinite(unit) ? unit : 0)).toFixed(2);
+        next.push(
+          newEditableLine("parts", {
+            description: catalogPartLineDescription(part),
+            quantity: String(qty),
+            unitPrice: Number.isFinite(unit) ? String(unit) : "0",
+            amount,
+          }),
+        );
+      }
+      // Drop a single blank "Parts / materials" placeholder if it was still alone & empty
+      if (
+        next.length > 1 &&
+        next.some(
+          (r) =>
+            r.kind === "parts" &&
+            r.description === "Parts / materials" &&
+            (r.amount === "0" || r.amount === "0.00") &&
+            !r.quantity &&
+            !r.unitPrice,
+        )
+      ) {
+        next = next.filter(
+          (r) =>
+            !(
+              r.kind === "parts" &&
+              r.description === "Parts / materials" &&
+              (r.amount === "0" || r.amount === "0.00") &&
+              !r.quantity &&
+              !r.unitPrice
+            ),
+        );
+      }
+      return next;
+    });
+    setDirty(true);
+    setSavedMsg(
+      picked.length === 1
+        ? `Added ${catalogPartLineDescription(picked[0].part)} from inventory.`
+        : `Added ${picked.length} parts from inventory.`,
+    );
+    if (!options?.keepOpen) {
+      setPartsPickerOpen(false);
+    }
+  }
+
   function removeLine(lineId: string) {
     setEditLines((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.id !== lineId)));
     setDirty(true);
@@ -416,6 +521,11 @@ export default function InvoiceDetailPage() {
     setSavedMsg(null);
 
     const { data: { user } } = await supabase.auth.getUser();
+    const nextStatus = suggestInvoiceStatus({
+      status: inv.status,
+      amount_paid: inv.amount_paid,
+      remaining_balance: liveTotals.remaining_balance,
+    });
     const { error: updError } = await supabase
       .from("invoices")
       .update({
@@ -428,6 +538,7 @@ export default function InvoiceDetailPage() {
         tax: liveTotals.tax,
         invoice_total: liveTotals.invoice_total,
         remaining_balance: liveTotals.remaining_balance,
+        status: nextStatus,
         notes: notes || null,
         updated_at: new Date().toISOString(),
       })
@@ -460,6 +571,7 @@ export default function InvoiceDetailPage() {
     }
     setSaving(true);
     setError(null);
+    // Manual workflow pick wins; payment-driven reconcile still runs on next payment/reload
     const { data: { user } } = await supabase.auth.getUser();
     const { error: updError } = await supabase
       .from("invoices")
@@ -472,11 +584,14 @@ export default function InvoiceDetailPage() {
     }
     await logActivity(supabase, {
       userId: user?.id ?? null,
-      action: "status_change",
+      action: status === "Sent" ? "billing_release" : "status_change",
       recordType: "invoice",
       recordId: inv.id,
+      previousValue: inv.status,
       newValue: status,
     });
+    // Optimistic so the select updates immediately before reload finishes
+    setInv((prev) => (prev ? { ...prev, status } : prev));
     await load();
     setSaving(false);
   }
@@ -623,13 +738,21 @@ export default function InvoiceDetailPage() {
     if (!inv) return;
     setError(null);
     try {
-      await downloadInvoicePdf(inv, pdfWorkOrder(), {
-        name: inv.customers?.name ?? "Customer",
-        email: inv.customers?.email,
-        phone: inv.customers?.phone,
-        city: inv.customers?.city,
-        state: inv.customers?.state,
-      });
+      await downloadInvoicePdf(
+        inv,
+        pdfWorkOrder(),
+        {
+          name: inv.customers?.name ?? "Customer",
+          email: inv.customers?.email,
+          phone: inv.customers?.phone,
+          city: inv.customers?.city,
+          state: inv.customers?.state,
+        },
+        {
+          detailLines: lines,
+          coverageNotes: inv.notes,
+        },
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not build PDF.");
     }
@@ -639,30 +762,48 @@ export default function InvoiceDetailPage() {
     recipients: Array<{ kind: "customer" | "service_vendor"; to: string }>;
     subject: string;
     message: string;
+    cc?: string;
   }) {
     if (!inv) return;
     if (payload.recipients.length === 0) {
-      setEmailError("Select at least one recipient.");
+      setEmailError("Enter at least one recipient.");
       return;
     }
     setEmailBusy(true);
     setEmailError(null);
+    setEmailSuccess(null);
     try {
-      const pdfBase64 = await invoicePdfToBase64(inv, pdfWorkOrder(), {
-        name: inv.customers?.name ?? "Customer",
-        email: inv.customers?.email,
-        phone: inv.customers?.phone,
-        city: inv.customers?.city,
-        state: inv.customers?.state,
-      });
+      const pdfBase64 = await invoicePdfToBase64(
+        inv,
+        pdfWorkOrder(),
+        {
+          name: inv.customers?.name ?? "Customer",
+          email: inv.customers?.email,
+          phone: inv.customers?.phone,
+          city: inv.customers?.city,
+          state: inv.customers?.state,
+        },
+        {
+          detailLines: lines,
+          coverageNotes: inv.notes,
+        },
+      );
 
       const res = await fetch(`/api/invoices/${inv.id}/email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, pdfBase64 }),
+        body: JSON.stringify({
+          recipients: payload.recipients,
+          subject: payload.subject,
+          message: payload.message,
+          cc: payload.cc,
+          pdfBase64,
+        }),
       });
       const json = (await res.json()) as {
         error?: string;
+        demo?: boolean;
+        message?: string;
         sent?: Array<{ kind: string; to: string }>;
         failures?: Array<{ kind: string; error: string }>;
       };
@@ -686,14 +827,17 @@ export default function InvoiceDetailPage() {
         await setStatus("Sent");
       }
 
+      const toList = (json.sent ?? []).map((s) => s.to).join(", ");
       const failNote =
         json.failures && json.failures.length
           ? ` Some failed: ${json.failures.map((f) => f.error).join("; ")}`
           : "";
-      setSavedMsg(
-        `Emailed invoice to ${(json.sent ?? []).map((s) => s.to).join(", ")}.${failNote}`,
-      );
-      setEmailOpen(false);
+      const demoNote = json.demo
+        ? " (demo mode — PDF prepared, external email skipped until RESEND_API_KEY is set)"
+        : "";
+      const msg = `Invoice emailed to ${toList}.${demoNote}${failNote}`;
+      setEmailSuccess(msg);
+      setSavedMsg(msg);
     } catch (e) {
       setEmailError(e instanceof Error ? e.message : "Email failed.");
     } finally {
@@ -701,8 +845,24 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  if (!inv) {
+  if (loading) {
     return <div className="p-8 text-center opacity-60">Loading invoice…</div>;
+  }
+
+  if (!inv) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Record not found"
+          description="This invoice may have been removed or the link is invalid."
+          action={
+            <Link href="/billing" className="btn btn-sm">
+              Back to Billing
+            </Link>
+          }
+        />
+      </div>
+    );
   }
 
   const today = new Date();
@@ -790,10 +950,15 @@ export default function InvoiceDetailPage() {
               <FileEdit className="h-4 w-4" /> Revert to draft
             </button>
           ) : null}
-          {Number(inv.remaining_balance) > 0 && inv.status !== "Canceled" && !canEdit ? (
-            <Link href={`/payments?invoice=${inv.id}`} className="btn btn-outline btn-sm gap-1">
-              <CreditCard className="h-4 w-4" /> Record payment
-            </Link>
+          {Number(inv.remaining_balance) > 0 && inv.status !== "Canceled" ? (
+            <button
+              type="button"
+              className="btn btn-success btn-sm gap-1"
+              disabled={saving}
+              onClick={() => setPayOpen(true)}
+            >
+              <CreditCard className="h-4 w-4" /> Accept payment
+            </button>
           ) : null}
           <button
             type="button"
@@ -809,6 +974,7 @@ export default function InvoiceDetailPage() {
             disabled={saving || emailBusy || inv.status === "Canceled"}
             onClick={() => {
               setEmailError(null);
+              setEmailSuccess(null);
               setEmailOpen(true);
             }}
           >
@@ -841,7 +1007,8 @@ export default function InvoiceDetailPage() {
             onAssignChange={setAssignee}
           />
           <p className="mt-2 text-xs opacity-60">
-            Workflow queues: Draft → Needs Review → Reviewed → Sent (or On Hold anytime before paid).
+            Status follows payments automatically (Partially Paid / Paid) and workflow buttons (Send, Hold, Draft).
+            You can still change it here anytime.
           </p>
         </div>
       </div>
@@ -883,51 +1050,35 @@ export default function InvoiceDetailPage() {
         </div>
       </div>
 
-      {canEdit ? (
-        <div className="alert alert-info mb-4 sticky top-16 z-20 text-sm shadow-sm">
-          <div>
-            <p className="font-semibold">Edit unsent invoice</p>
-            <p>
-              Workflow status: <strong>{inv.status}</strong>. Edit line items, assign an owner, attach PO/receipts, then{" "}
-              <strong>Send</strong> when ready. Qty × Rate auto-fills Amount; tax updates at {(taxRate * 100).toFixed(2)}%.
-              After send, lines are locked unless you <strong>Revert to draft</strong>.
-            </p>
-          </div>
-        </div>
-      ) : inv.status !== "Canceled" && inv.status !== "Paid" ? (
-        <div className="alert alert-warning mb-4 text-sm">
-          <div>
-            <p className="font-semibold">Line items locked</p>
-            <p>
-              This invoice is <strong>{inv.status}</strong>, so line items cannot be edited.
-              {(inv.status === "Sent" || inv.status === "Partially Paid") ? (
-                <>
-                  {" "}
-                  Click <strong>Revert to draft</strong> above to unlock editing, then save and send again when ready.
-                </>
-              ) : null}
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {pricingBanner ? (
-        <div
-          className={`alert mb-4 text-sm ${
-            pricingBanner.kind === "tm"
-              ? "alert-info"
-              : pricingBanner.kind === "over_cap"
-                ? "alert-warning"
-                : "alert-success"
-          }`}
-        >
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p>{pricingBanner.message}</p>
-            {canEdit && pricingBanner.suggestFee && pricingBanner.suggestFee > 0 ? (
-              <button type="button" className="btn btn-sm btn-primary" onClick={applySuggestedServiceFee}>
-                Add {formatMoney(pricingBanner.suggestFee)} service fee
-              </button>
+      {canEdit || inv.status === "Canceled" || inv.status === "Paid" ? null : (
+        <div className="alert alert-warning mb-3 py-2 text-sm">
+          <span>
+            Line items locked — this invoice is <strong>{inv.status}</strong> and cannot be edited.
+            {inv.status === "Sent" || inv.status === "Partially Paid" ? (
+              <>
+                {" "}
+                Click <strong>Revert to draft</strong> above to unlock, then save and send again when ready.
+              </>
             ) : null}
+          </span>
+        </div>
+      )}
+
+      {/* Only show when action is needed — pure info banners leave empty-looking boxes */}
+      {pricingBanner &&
+      canEdit &&
+      pricingBanner.suggestFee &&
+      pricingBanner.suggestFee > 0 ? (
+        <div className="alert alert-warning mb-3 py-2 text-sm">
+          <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span className="min-w-0 leading-snug">{pricingBanner.message}</span>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary shrink-0"
+              onClick={applySuggestedServiceFee}
+            >
+              Add {formatMoney(pricingBanner.suggestFee)} service fee
+            </button>
           </div>
         </div>
       ) : null}
@@ -1077,9 +1228,18 @@ export default function InvoiceDetailPage() {
 
         <div className="px-6 py-4 sm:px-8">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">
-              Line items {canEdit ? <span className="badge badge-info badge-sm ml-2 normal-case">Editable</span> : null}
-            </h2>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">
+                Line items{" "}
+                {canEdit ? (
+                  <span className="badge badge-info badge-sm ml-2 normal-case">Editable</span>
+                ) : null}
+              </h2>
+              <p className="mt-1 max-w-xl text-xs opacity-60">
+                Covered lines (PM agreements / warranties) show as included with $0 charged. Billable
+                lines are out-of-scope or excess repairs charged to the customer.
+              </p>
+            </div>
             {canEdit ? (
               <div className="flex flex-wrap items-center gap-2">
                 <select
@@ -1100,7 +1260,7 @@ export default function InvoiceDetailPage() {
                 <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => addLine("labor")}>
                   <Plus className="h-3 w-3" /> Labor
                 </button>
-                <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => addLine("parts")}>
+                <button type="button" className="btn btn-outline btn-xs gap-1" onClick={() => void openPartsPicker()}>
                   <Plus className="h-3 w-3" /> Parts
                 </button>
               </div>
@@ -1123,8 +1283,11 @@ export default function InvoiceDetailPage() {
                 <tbody>
                   {editLines.map((line) => {
                     const isDeduction = line.kind === "warranty" || line.kind === "discount";
+                    const coveredHint =
+                      /covered|pm \/ agreement|warranty|contract included/i.test(line.description) &&
+                      Number(line.amount) === 0;
                     return (
-                      <tr key={line.id}>
+                      <tr key={line.id} className={coveredHint ? "bg-success/5" : undefined}>
                         <td>
                           <select
                             className="select select-bordered select-sm w-full max-w-[9rem]"
@@ -1218,16 +1381,71 @@ export default function InvoiceDetailPage() {
                       </td>
                     </tr>
                   ) : (
-                    (showLines as BillableLine[]).map((line, i) => (
-                      <tr key={i}>
-                        <td>{line.description}</td>
-                        <td className="text-right">{line.quantity != null ? line.quantity : "—"}</td>
-                        <td className="text-right">
-                          {line.unitPrice != null ? formatMoney(line.unitPrice) : "—"}
-                        </td>
-                        <td className="text-right font-medium">{formatMoney(line.amount)}</td>
-                      </tr>
-                    ))
+                    (() => {
+                      const billableRows = (showLines as BillableLine[]).filter(
+                        (l) => !isCoveredLine(l),
+                      );
+                      const coveredRows = (showLines as BillableLine[]).filter((l) =>
+                        isCoveredLine(l),
+                      );
+                      const renderRow = (line: BillableLine, i: number, covered: boolean) => {
+                        const included =
+                          covered && Number(line.amount) === 0;
+                        const list = line.listValue != null ? Number(line.listValue) : 0;
+                        return (
+                          <tr
+                            key={`${covered ? "c" : "b"}-${i}`}
+                            className={covered ? "bg-success/5" : undefined}
+                          >
+                            <td>
+                              {covered ? (
+                                <span className="badge badge-success badge-xs mr-1.5 normal-case">
+                                  Covered
+                                </span>
+                              ) : (
+                                <span className="badge badge-warning badge-xs mr-1.5 normal-case">
+                                  Billable
+                                </span>
+                              )}
+                              {line.description}
+                            </td>
+                            <td className="text-right">
+                              {line.quantity != null ? line.quantity : "—"}
+                            </td>
+                            <td className="text-right">
+                              {line.unitPrice != null ? formatMoney(line.unitPrice) : "—"}
+                            </td>
+                            <td className="text-right font-medium">
+                              {included
+                                ? list > 0
+                                  ? `Included (list ${formatMoney(list)})`
+                                  : "Included — no charge"
+                                : formatMoney(line.amount)}
+                            </td>
+                          </tr>
+                        );
+                      };
+                      return (
+                        <>
+                          {coveredRows.length > 0 ? (
+                            <tr className="bg-success/10">
+                              <td colSpan={4} className="text-xs font-bold uppercase tracking-wide">
+                                Covered — PM / agreement / warranty (not charged)
+                              </td>
+                            </tr>
+                          ) : null}
+                          {coveredRows.map((line, i) => renderRow(line, i, true))}
+                          {billableRows.length > 0 ? (
+                            <tr className="bg-warning/10">
+                              <td colSpan={4} className="text-xs font-bold uppercase tracking-wide">
+                                Billable — out of scope / customer charged
+                              </td>
+                            </tr>
+                          ) : null}
+                          {billableRows.map((line, i) => renderRow(line, i, false))}
+                        </>
+                      );
+                    })()
                   )}
                 </tbody>
               </table>
@@ -1236,8 +1454,9 @@ export default function InvoiceDetailPage() {
 
           {canEdit ? (
             <p className="mt-2 text-xs opacity-60">
-              Tip: enter Qty and Rate to auto-calc amount, or type Amount directly. Warranty and discounts reduce the
-              subtotal. Keep at least one line; $0 lines are allowed until you adjust them.
+              Prefix descriptions with &quot;Covered —&quot; for PM/warranty included work ($0 amount) and
+              &quot;Billable — out of scope&quot; for customer-charged repairs. Qty × Rate auto-calcs amount;
+              warranty and discount types reduce the subtotal.
             </p>
           ) : null}
 
@@ -1248,28 +1467,28 @@ export default function InvoiceDetailPage() {
             {liveTotals ? (
               <>
                 <div className="flex justify-between text-xs opacity-70">
-                  <span>Labor</span>
+                  <span>Billable labor</span>
                   <span>{formatMoney(liveTotals.labor_charges)}</span>
                 </div>
                 <div className="flex justify-between text-xs opacity-70">
-                  <span>Parts</span>
+                  <span>Billable parts</span>
                   <span>{formatMoney(liveTotals.parts_charges)}</span>
                 </div>
                 {liveTotals.recurring_service_charge > 0 ? (
                   <div className="flex justify-between text-xs opacity-70">
-                    <span>Recurring</span>
+                    <span>Recurring / agreement fee</span>
                     <span>{formatMoney(liveTotals.recurring_service_charge)}</span>
                   </div>
                 ) : null}
                 {liveTotals.additional_charges > 0 ? (
                   <div className="flex justify-between text-xs opacity-70">
-                    <span>Additional</span>
+                    <span>Additional billable</span>
                     <span>{formatMoney(liveTotals.additional_charges)}</span>
                   </div>
                 ) : null}
                 {liveTotals.warranty_deductions > 0 ? (
                   <div className="flex justify-between text-xs opacity-70">
-                    <span>Warranty</span>
+                    <span>Warranty / coverage</span>
                     <span>−{formatMoney(liveTotals.warranty_deductions)}</span>
                   </div>
                 ) : null}
@@ -1280,7 +1499,24 @@ export default function InvoiceDetailPage() {
                   </div>
                 ) : null}
               </>
-            ) : null}
+            ) : (
+              <>
+                <div className="flex justify-between text-xs opacity-70">
+                  <span>Billable labor</span>
+                  <span>{formatMoney(inv.labor_charges)}</span>
+                </div>
+                <div className="flex justify-between text-xs opacity-70">
+                  <span>Billable parts</span>
+                  <span>{formatMoney(inv.parts_charges)}</span>
+                </div>
+                {Number(inv.warranty_deductions) > 0 ? (
+                  <div className="flex justify-between text-xs opacity-70">
+                    <span>Warranty / coverage</span>
+                    <span>−{formatMoney(inv.warranty_deductions)}</span>
+                  </div>
+                ) : null}
+              </>
+            )}
             <div className="flex justify-between">
               <span className="opacity-70">Subtotal</span>
               <span>{formatMoney(displaySubtotal)}</span>
@@ -1324,9 +1560,21 @@ export default function InvoiceDetailPage() {
           )}
         </div>
 
-        {payments.length > 0 ? (
+        {payments.length > 0 || (Number(inv.remaining_balance) > 0 && inv.status !== "Canceled") ? (
           <div className="border-t border-base-300 px-6 py-4 sm:px-8">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide opacity-70">Payments</h2>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">Payments</h2>
+              {Number(inv.remaining_balance) > 0 && inv.status !== "Canceled" ? (
+                <button
+                  type="button"
+                  className="btn btn-success btn-xs gap-1"
+                  onClick={() => setPayOpen(true)}
+                >
+                  <CreditCard className="h-3.5 w-3.5" /> Accept payment
+                </button>
+              ) : null}
+            </div>
+            {payments.length > 0 ? (
             <DualHorizontalScroll>
               <table className="table table-sm">
                 <thead>
@@ -1349,19 +1597,58 @@ export default function InvoiceDetailPage() {
                 </tbody>
               </table>
             </DualHorizontalScroll>
+            ) : (
+              <p className="text-sm opacity-60">No payments recorded yet. Balance due {formatMoney(inv.remaining_balance)}.</p>
+            )}
           </div>
         ) : null}
       </article>
 
+      <ActivityFeed className="mt-4" recordType="invoice" recordId={inv.id} />
+
+      <InvoicePaymentDialog
+        open={payOpen}
+        invoice={{
+          id: inv.id,
+          invoice_number: inv.invoice_number,
+          customer_id: inv.customer_id,
+          customer_name: inv.customers?.name ?? null,
+          invoice_total: Number(inv.invoice_total),
+          amount_paid: Number(inv.amount_paid),
+          remaining_balance: Number(inv.remaining_balance),
+          status: inv.status,
+        }}
+        onClose={() => setPayOpen(false)}
+        onPaid={async () => {
+          setPayOpen(false);
+          setSavedMsg("Payment accepted");
+          await load();
+        }}
+      />
+
+      <InvoicePartsCatalogPicker
+        open={partsPickerOpen}
+        parts={catalogParts}
+        loading={catalogLoading}
+        onClose={() => setPartsPickerOpen(false)}
+        onAdd={addPartsFromCatalog}
+      />
       <EmailInvoiceModal
         open={emailOpen}
         invoiceNumber={inv.invoice_number}
         customerName={inv.customers?.name ?? "Customer"}
+        balanceDue={Number(inv.remaining_balance)}
+        dueDate={inv.due_date}
         recipients={emailRecipients}
         busy={emailBusy}
         error={emailError}
+        success={emailSuccess}
         onClose={() => {
-          if (!emailBusy) setEmailOpen(false);
+          if (!emailBusy) {
+            setEmailOpen(false);
+            setEmailSuccess(null);
+            setEmailError(null);
+          }
         }}
         onSend={(payload) => void handleEmailSend(payload)}
       />
