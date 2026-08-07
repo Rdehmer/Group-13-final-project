@@ -2,15 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Building2, Mail, UserCircle } from "lucide-react";
+import { Building2, UserCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import type { Customer, Profile } from "@/lib/types";
 import type { CustomerAddressFields } from "@/lib/customer-address";
-import { formatCustomerPhone } from "@/lib/technician-field";
+import type { CustomerContactFields } from "@/lib/customer-contact";
 import { BusinessLocationCard, emptyBusinessLocationAddress } from "../BusinessLocationCard";
-
+import { ContactInformationCard } from "../ContactInformationCard";
 type CustomerAccount = Pick<
   Customer,
   | "name"
@@ -39,6 +39,11 @@ export default function CustomerAccountPage() {
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [customer, setCustomer] = useState<CustomerAccount | null>(null);
+  const [customerContact, setCustomerContact] = useState<CustomerContactFields>({
+    primary_contact_name: null,
+    email: null,
+    phone: null,
+  });
   const [customerAddress, setCustomerAddress] = useState<CustomerAddressFields>(
     emptyBusinessLocationAddress(),
   );
@@ -55,6 +60,11 @@ export default function CustomerAccountPage() {
 
     if (data) {
       setCustomer(data as CustomerAccount);
+      setCustomerContact({
+        primary_contact_name: data.primary_contact_name,
+        email: data.email,
+        phone: data.phone,
+      });
       setCustomerAddress({
         service_address: data.service_address,
         billing_address: data.billing_address,
@@ -95,7 +105,7 @@ export default function CustomerAccountPage() {
     <div>
       <PageHeader
         title="Account Information"
-        description="View your business account details on file with EquipmentIQ."
+        description="View and update your business account details on file with EquipmentIQ."
         actions={
           <Link href="/customer" className="btn btn-ghost btn-sm">
             ← Dashboard
@@ -129,48 +139,9 @@ export default function CustomerAccountPage() {
           </div>
         </div>
 
-        <div className="card bg-base-100 shadow">
-          <div className="card-body gap-4">
-            <div className="flex items-start gap-3">
-              <div className="rounded-box bg-primary/10 p-2.5 text-primary">
-                <Mail className="h-5 w-5" aria-hidden />
-              </div>
-              <div>
-                <h2 className="card-title text-base">Contact information</h2>
-                <p className="text-sm opacity-70">
-                  Who EquipmentIQ should reach for scheduling and account questions.
-                </p>
-              </div>
-            </div>
-            <dl className="grid gap-3 sm:grid-cols-2">
-              <DetailRow
-                label="Primary contact"
-                value={customer.primary_contact_name?.trim() || "Not on file"}
-              />
-              <DetailRow label="Account email" value={customer.email?.trim() || "Not on file"} />
-              <DetailRow
-                label="Phone"
-                value={
-                  customer.phone?.trim()
-                    ? formatCustomerPhone(customer.phone)
-                    : "Not on file"
-                }
-              />
-            </dl>
-            <div role="status" className="alert alert-info text-sm">
-              <span>
-                To update contact details, message us in{" "}
-                <Link href="/customer/inbox" className="link link-hover font-medium">
-                  Inbox
-                </Link>{" "}
-                or call EquipmentIQ.
-              </span>
-            </div>
-          </div>
-        </div>
+        <ContactInformationCard contact={customerContact} onUpdated={setCustomerContact} />
 
         <BusinessLocationCard address={customerAddress} onUpdated={setCustomerAddress} />
-
         <div className="card bg-base-100 shadow">
           <div className="card-body gap-4">
             <div className="flex items-start gap-3">

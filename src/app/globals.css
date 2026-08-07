@@ -760,6 +760,30 @@ h3,
   box-shadow: var(--eq-shadow);
 }
 
+.alert-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 40%, var(--eq-line));
+  background: color-mix(in srgb, var(--color-warning) 10%, #fff);
+  color: var(--eq-ink);
+}
+
+.alert-error {
+  border-color: color-mix(in srgb, var(--color-error) 40%, var(--eq-line));
+  background: color-mix(in srgb, var(--color-error) 10%, #fff);
+  color: var(--eq-ink);
+}
+
+.alert-info {
+  border-color: color-mix(in srgb, var(--color-info) 40%, var(--eq-line));
+  background: color-mix(in srgb, var(--color-info) 10%, #fff);
+  color: var(--eq-ink);
+}
+
+.alert-success {
+  border-color: color-mix(in srgb, var(--color-success) 40%, var(--eq-line));
+  background: color-mix(in srgb, var(--color-success) 10%, #fff);
+  color: var(--eq-ink);
+}
+
 .stat {
   border: 1px solid var(--eq-line) !important;
   border-radius: var(--eq-radius) !important;
