@@ -115,6 +115,8 @@ export type InvoiceLineItem = {
   label: string;
   amount: number;
   negative?: boolean;
+  /** covered | billable section for customer UI */
+  section?: "covered" | "billable" | "other";
 };
 
 /** Itemized charge rows for customer-facing invoice display (matches PDF / billing breakdown). */
@@ -140,16 +142,49 @@ export function buildInvoiceLineItems(
   const discounts = Number(invoice.discounts ?? 0);
   const tax = Number(invoice.tax ?? 0);
 
-  if (labor > 0) lines.push({ label: "Labor", amount: labor });
-  if (parts > 0) lines.push({ label: "Parts / Materials", amount: parts });
-  if (recurring > 0) lines.push({ label: "Recurring Service", amount: recurring });
-  if (additional > 0) lines.push({ label: "Additional Charges", amount: additional });
-  if (warranty > 0) lines.push({ label: "Warranty Deductions", amount: warranty, negative: true });
-  if (discounts > 0) lines.push({ label: "Discounts", amount: discounts, negative: true });
-  if (tax > 0) lines.push({ label: "Tax", amount: tax });
+  if (warranty > 0) {
+    lines.push({
+      label: "Covered under warranty / PM agreement (deduction)",
+      amount: warranty,
+      negative: true,
+      section: "covered",
+    });
+  }
+  if (labor > 0) {
+    lines.push({
+      label: "Billable labor (out of scope / charged)",
+      amount: labor,
+      section: "billable",
+    });
+  }
+  if (parts > 0) {
+    lines.push({
+      label: "Billable parts (out of scope / charged)",
+      amount: parts,
+      section: "billable",
+    });
+  }
+  if (recurring > 0) {
+    lines.push({
+      label: "Recurring service / agreement fee",
+      amount: recurring,
+      section: "billable",
+    });
+  }
+  if (additional > 0) {
+    lines.push({
+      label: "Additional billable charges",
+      amount: additional,
+      section: "billable",
+    });
+  }
+  if (discounts > 0) {
+    lines.push({ label: "Discounts", amount: discounts, negative: true, section: "other" });
+  }
+  if (tax > 0) lines.push({ label: "Tax", amount: tax, section: "other" });
 
   if (lines.length === 0) {
-    lines.push({ label: "Service Charges", amount: Number(invoice.invoice_total ?? 0) });
+    lines.push({ label: "Service Charges", amount: Number(invoice.invoice_total ?? 0), section: "billable" });
   }
 
   return lines;

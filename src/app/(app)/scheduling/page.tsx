@@ -15,7 +15,6 @@ import {
   subDays,
 } from "date-fns";
 import {
-  AlertTriangle,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -37,7 +36,6 @@ import {
   formatAvailabilityClocks,
   formatShiftClock,
   getWeekDays,
-  isUsingLocalScheduleStore,
   listAvailability,
   listShifts,
   saveDayAvailability,
@@ -81,7 +79,6 @@ export default function SchedulingPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [localMode, setLocalMode] = useState(false);
 
   // Modal: edit tech's weekly preference for one weekday, or add a shift
   const [editor, setEditor] = useState<
@@ -173,7 +170,6 @@ export default function SchedulingPage() {
         .eq("status", "Approved"),
     ]);
 
-    setLocalMode(availRes.local || shiftRes.local || isUsingLocalScheduleStore());
     if (availRes.error) setError(availRes.error);
     else if (shiftRes.error) setError(shiftRes.error);
     setAvailability(availRes.data);
@@ -448,22 +444,6 @@ export default function SchedulingPage() {
           </div>
         }
       />
-
-      {localMode ? (
-        <div className="alert alert-warning text-sm">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <div>
-            <p className="font-semibold">Browser storage mode</p>
-            <p className="opacity-80">
-              Run{" "}
-              <code className="text-xs">
-                supabase/migrations/20260806_technician_availability.sql
-              </code>{" "}
-              so the whole team shares availability and shifts.
-            </p>
-          </div>
-        </div>
-      ) : null}
 
       {error ? (
         <div className="alert alert-error text-sm">

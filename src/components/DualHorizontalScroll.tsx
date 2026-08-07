@@ -80,7 +80,7 @@ export function DualHorizontalScroll({
   }
 
   return (
-    <div className={`dual-h-scroll ${className}`.trim()}>
+    <div className={`dual-h-scroll max-w-full ${className}`.trim()}>
       {needsScroll ? (
         <div
           ref={topRef}
@@ -94,7 +94,7 @@ export function DualHorizontalScroll({
       ) : null}
       <div
         ref={mainRef}
-        className={`overflow-x-auto ${contentClassName}`.trim()}
+        className={`max-w-full overflow-x-auto overscroll-x-contain ${contentClassName}`.trim()}
         onScroll={syncFrom("main")}
       >
         {children}

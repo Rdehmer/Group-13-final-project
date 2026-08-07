@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Mail, Menu, Search, Settings } from "lucide-react";
+import { LogOut, Mail, Menu, Settings } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
 import { filterNavForProfile } from "@/lib/employeePermissions";
@@ -12,6 +12,7 @@ import { ROLE_LABELS, type Profile } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { DemoPersonaSwitcher } from "@/components/DemoPersonaSwitcher";
 import { EquipmentIQMark } from "@/components/brand/EquipmentIQLogo";
+import { GlobalSearch } from "@/components/GlobalSearch";
 import { countUnreadInboxThreads, CUSTOMER_INBOX_UNREAD_EVENT } from "@/lib/customer-inbox";
 import { fetchManagerUnreadInboxCount, MANAGER_INBOX_UNREAD_EVENT } from "@/lib/manager-inbox";
 import { countUnreadVendorInboxThreads, VENDOR_INBOX_UNREAD_EVENT } from "@/lib/vendor-inbox";
@@ -439,7 +440,7 @@ function AppTopBar({
 
   return (
     <header className="eq-topbar">
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button
           type="button"
           className="eq-top-icon shrink-0"
@@ -450,25 +451,10 @@ function AppTopBar({
           <Menu className="h-5 w-5" strokeWidth={1.75} />
         </button>
 
-        {config.showSearch ? (
-          <div className="eq-search min-w-0 w-full max-w-[480px]">
-            <Search className="eq-search-icon" strokeWidth={1.75} />
-            <input
-              type="search"
-              className="eq-search-input"
-              placeholder="Search customers, invoices, work orders?"
-              aria-label="Search"
-              readOnly
-              onFocus={(e) => e.currentTarget.blur()}
-              title="Search (coming soon)"
-            />
-          </div>
-        ) : null}
+        {config.showSearch ? <GlobalSearch /> : null}
       </div>
 
-      <div className="min-w-0 flex-1" aria-hidden />
-
-      <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1.5">
         {showInbox ? inboxControl : null}
 
         {config.showSettings ? (
@@ -477,7 +463,7 @@ function AppTopBar({
           </Link>
         ) : null}
 
-        <div className="eq-user-menu">
+        <div className="eq-user-menu" title={profile.full_name || profile.email}>
           <span className="eq-avatar" aria-hidden>
             {initials || "?"}
           </span>
@@ -489,7 +475,7 @@ function AppTopBar({
           </div>
         </div>
 
-        <button type="button" className="eq-signout" onClick={onLogout} title="Sign out">
+        <button type="button" className="eq-signout" onClick={onLogout} title="Sign out" aria-label="Sign out">
           <LogOut className="h-4 w-4" strokeWidth={1.75} />
           <span className="hidden lg:inline">Sign out</span>
         </button>
@@ -749,16 +735,16 @@ export function AppShell({
   };
 
   return (
-    <div className="eq-shell min-h-screen lg:flex">
+    <div className="eq-shell min-h-[100dvh] min-h-screen lg:flex">
       {!desktopSidebarHidden ? (
         <aside className="eq-sidebar relative z-10 hidden w-[15.75rem] shrink-0 flex-col lg:flex">
           <SidebarNavBody {...sidebarBodyProps} />
         </aside>
       ) : null}
 
-      <div className="drawer min-h-screen min-w-0 flex-1">
+      <div className="drawer min-h-[100dvh] min-h-screen min-w-0 flex-1 overflow-x-clip">
         <input id="app-drawer" type="checkbox" className="drawer-toggle" />
-        <div className="drawer-content flex min-h-screen flex-col">
+        <div className="drawer-content flex min-h-[100dvh] min-h-screen min-w-0 flex-col overflow-x-clip">
           <AppTopBar
             config={topbarConfig}
             inboxControl={inboxControl}
@@ -770,20 +756,20 @@ export function AppShell({
           {gateActive ? (
             <div
               role="status"
-              className="border-b border-amber-300/80 bg-amber-50 px-4 py-2.5 text-center text-sm text-amber-950"
+              className="border-b border-amber-300/80 bg-amber-50 px-3 py-2.5 text-center text-xs text-amber-950 sm:px-4 sm:text-sm"
             >
               Submit your service rating on Home to continue using the portal.
             </div>
           ) : null}
 
-          <main className="eq-main flex-1">
+          <main className="eq-main min-w-0 flex-1">
             <div className="eq-page">{children}</div>
           </main>
         </div>
 
         <aside className="drawer-side z-40 lg:hidden">
           <label htmlFor="app-drawer" className="drawer-overlay" aria-label="Close menu" />
-          <nav className="eq-sidebar relative z-10 flex min-h-full w-[15.75rem] flex-col">
+          <nav className="eq-sidebar relative z-10 flex min-h-full w-[min(18rem,88vw)] flex-col">
             <SidebarNavBody {...sidebarBodyProps} />
           </nav>
         </aside>
