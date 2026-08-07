@@ -33,6 +33,7 @@ import { InvoiceWorkflowControls } from "@/components/InvoiceWorkflowControls";
 import { equipmentLabel } from "@/lib/equipment";
 import { linkWorkOrderPosToInvoice } from "@/lib/purchaseOrders";
 import { loadInvoiceBatchMap, type BatchLookup } from "@/lib/batches";
+import { isAwrPending } from "@/lib/additional-work";
 import type { Invoice, Profile, TechnicianLabor, WorkOrder, WorkOrderPart } from "@/lib/types";
 
 type InvoiceRow = Invoice & {
@@ -98,6 +99,21 @@ export default function BillingPage() {
   const [invoiceBatchMap, setInvoiceBatchMap] = useState<Map<string, BatchLookup>>(new Map());
   const [payInvoice, setPayInvoice] = useState<InvoiceRow | null>(null);
   const [previewAwrPending, setPreviewAwrPending] = useState(0);
+  const [pendingAwrByWo, setPendingAwrByWo] = useState<Record<string, number>>({});
+
+  async function loadPendingAwrCounts(woIds: string[]): Promise<Record<string, number>> {
+    if (!woIds.length) return {};
+    const { data } = await supabase
+      .from("additional_work_requests")
+      .select("work_order_id, approval_status")
+      .in("work_order_id", woIds);
+    const counts: Record<string, number> = {};
+    for (const row of (data ?? []) as { work_order_id: string; approval_status: string }[]) {
+      if (!isAwrPending(row.approval_status)) continue;
+      counts[row.work_order_id] = (counts[row.work_order_id] ?? 0) + 1;
+    }
+    return counts;
+  }
 
   async function loadPoBadges(invoiceList: InvoiceRow[], readyWo: WoRow[]) {
     const invIds = invoiceList.map((i) => i.id);
@@ -186,6 +202,9 @@ export default function BillingPage() {
     if (!gate.ok) {
       setPreviewAwrPending(gate.pendingAwrCount ?? 0);
       setError(gate.message);
+      if (gate.pendingAwrCount) {
+        setPendingAwrByWo((prev) => ({ ...prev, [woId]: gate.pendingAwrCount! }));
+      }
       setWoPreview(null);
       setPreviewBusy(false);
       return;
@@ -238,8 +257,10 @@ export default function BillingPage() {
       ]);
     const list = (inv as InvoiceRow[]) ?? [];
     const ready = (wo as WoRow[]) ?? [];
+    const pendingAwr = await loadPendingAwrCounts(ready.map((w) => w.id));
     setInvoices(list);
     setCompletedWo(ready);
+    setPendingAwrByWo(pendingAwr);
     setCurrentUserId(auth.user?.id ?? null);
     const teamList = (members as TeamMember[]) ?? [];
     setTeam(teamList);
@@ -434,9 +455,9 @@ export default function BillingPage() {
       needsReview,
       onHold,
       unassigned,
-      readyCount: completedWo.length,
+      readyCount: completedWo.filter((w) => !(pendingAwrByWo[w.id] ?? 0)).length,
     };
-  }, [invoices, completedWo, today]);
+  }, [invoices, completedWo, pendingAwrByWo, today]);
 
   async function updateInvoiceWorkflow(
     invoiceId: string,
@@ -487,9 +508,14 @@ export default function BillingPage() {
     const gate = await fetchWorkOrderInvoiceGate(supabase, previewWoId);
     if (!gate.ok) {
       setError(gate.message);
+      if (gate.pendingAwrCount) {
+        setPreviewAwrPending(gate.pendingAwrCount);
+        setPendingAwrByWo((prev) => ({ ...prev, [wo.id]: gate.pendingAwrCount! }));
+      }
       setBusy(false);
       return;
     }
+    setPreviewAwrPending(0);
 
     const due = new Date();
     due.setDate(due.getDate() + 30);
@@ -619,7 +645,7 @@ export default function BillingPage() {
         <StatCard
           label="Ready to invoice"
           value={stats.readyCount}
-          hint="Completed, unbilled jobs · click to jump"
+          hint="Completed, unbilled, no pending scope · click to jump"
           onClick={() => {
             readySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
@@ -640,16 +666,28 @@ export default function BillingPage() {
           <div className="flex flex-wrap gap-2">
             {completedWo.map((wo) => {
               const missingEq = !wo.equipment_id && !wo.equipment;
+              const pendingAwrs = pendingAwrByWo[wo.id] ?? 0;
               const poInfo = poByWorkOrder[wo.id];
               return (
               <button
                 key={wo.id}
                 type="button"
-                className={`btn btn-sm ${previewWoId === wo.id ? "btn-primary" : missingEq ? "btn-outline border-warning" : "btn-outline"}`}
+                className={`btn btn-sm ${
+                  previewWoId === wo.id
+                    ? "btn-primary"
+                    : pendingAwrs > 0
+                      ? "btn-outline border-error"
+                      : missingEq
+                        ? "btn-outline border-warning"
+                        : "btn-outline"
+                }`}
                 onClick={() => loadPreviewForWo(wo.id)}
               >
                 {wo.work_order_number}
                 <span className="opacity-70">· {wo.customers?.name ?? "Customer"}</span>
+                {pendingAwrs > 0 ? (
+                  <span className="badge badge-error badge-xs">Scope pending</span>
+                ) : null}
                 {missingEq ? <span className="badge badge-warning badge-xs">No equip</span> : null}
                 {poInfo?.poCount ? (
                   <span className="badge badge-ghost badge-xs gap-0.5">
@@ -931,7 +969,7 @@ export default function BillingPage() {
                 preview={woPreview}
                 busy={previewBusy || busy}
                 error={error}
-                pendingAwrCount={previewAwrPending}
+                pendingAwrCount={previewAwrPending || pendingAwrByWo[previewWoId] ?? 0}
                 taxRate={taxRate}
                 poInfo={poByWorkOrder[previewWoId]}
                 onCancel={() => {
@@ -1214,6 +1252,7 @@ function WorkOrderInvoicePreview({
   pendingAwrCount = 0,
   taxRate,
   poInfo,
+  pendingAwrCount,
   onCancel,
   onCreateDraft,
   onCreateReview,
@@ -1226,12 +1265,14 @@ function WorkOrderInvoicePreview({
   pendingAwrCount?: number;
   taxRate: number;
   poInfo?: PoBadge;
+  pendingAwrCount: number;
   onCancel: () => void;
   onCreateDraft: () => void;
   onCreateReview: () => void;
   onCreateSend: () => void;
 }) {
   const missingEquipment = !wo.equipment_id && !wo.equipment;
+  const scopeBlocked = pendingAwrCount > 0;
 
   return (
     <div className="space-y-4">
@@ -1301,6 +1342,19 @@ function WorkOrderInvoicePreview({
       ) : null}
 
       {error ? <div className="alert alert-error text-sm">{error}</div> : null}
+
+      {scopeBlocked ? (
+        <div className="alert alert-error py-2 text-sm">
+          <span>
+            <strong>{pendingAwrCount} pending scope-change request{pendingAwrCount === 1 ? "" : "s"}</strong>{" "}
+            must be approved or rejected on the{" "}
+            <Link href={`/work-orders/${wo.id}`} className="link font-medium">
+              work order
+            </Link>{" "}
+            before invoicing.
+          </span>
+        </div>
+      ) : null}
 
       {missingEquipment ? (
         <p className="text-xs opacity-60">
@@ -1439,13 +1493,13 @@ function WorkOrderInvoicePreview({
             <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>
               Cancel
             </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={onCreateDraft} disabled={busy}>
+            <button type="button" className="btn btn-outline btn-sm" onClick={onCreateDraft} disabled={busy || scopeBlocked}>
               Save as draft
             </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={onCreateReview} disabled={busy}>
+            <button type="button" className="btn btn-outline btn-sm" onClick={onCreateReview} disabled={busy || scopeBlocked}>
               Needs review
             </button>
-            <button type="button" className="btn btn-primary btn-sm" onClick={onCreateSend} disabled={busy}>
+            <button type="button" className="btn btn-primary btn-sm" onClick={onCreateSend} disabled={busy || scopeBlocked}>
               {busy ? "Creating…" : "Create & send"}
             </button>
           </div>
