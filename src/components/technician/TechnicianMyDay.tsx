@@ -248,6 +248,32 @@ function Section({
   );
 }
 
+type MyDayQuickLinkIcon = typeof Package;
+
+function MyDayQuickLink({
+  href,
+  icon: Icon,
+  label,
+}: {
+  href: string;
+  icon: MyDayQuickLinkIcon;
+  label: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group flex aspect-square w-full min-w-0 flex-col items-center justify-center gap-2 rounded-xl border border-[#dce3ea] bg-white px-2 py-3 text-center no-underline shadow-[0_1px_2px_rgba(30,42,54,0.04),0_4px_12px_rgba(30,42,54,0.04)] transition hover:border-primary/35 hover:bg-primary/[0.03] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition group-hover:bg-primary/15">
+        <Icon className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+      </span>
+      <span className="block w-full max-w-[5.5rem] text-[11px] font-semibold leading-tight tracking-tight text-[#374151] text-balance sm:text-xs">
+        {label}
+      </span>
+    </Link>
+  );
+}
+
 export function TechnicianMyDay({ profile }: { profile: Profile }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
@@ -612,26 +638,11 @@ export function TechnicianMyDay({ profile }: { profile: Profile }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Link href="/parts" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
-          <Package className="h-4 w-4" />
-          Parts
-        </Link>
-        <Link href="/scheduling" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
-          <CalendarDays className="h-4 w-4" />
-          Hours
-        </Link>
-        <Link
-          href={timesheetHref({ tech: profile?.id })}
-          className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs"
-        >
-          <CalendarDays className="h-4 w-4" />
-          Timesheet
-        </Link>
-        <Link href="/time-off" className="btn btn-outline btn-sm min-h-12 flex-col gap-0.5 text-xs">
-          <CalendarOff className="h-4 w-4" />
-          Time off
-        </Link>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <MyDayQuickLink href="/parts" icon={Package} label="Parts" />
+        <MyDayQuickLink href="/scheduling" icon={CalendarDays} label="Hours" />
+        <MyDayQuickLink href={timesheetHref({ tech: profile?.id })} icon={CalendarDays} label="Timesheet" />
+        <MyDayQuickLink href="/time-off" icon={CalendarOff} label="Time Off" />
       </div>
 
       {leaveToday.length > 0 ? (

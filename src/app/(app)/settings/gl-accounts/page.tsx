@@ -338,7 +338,7 @@ export default function GlAccountsSettingsPage() {
                 checked={showInactive}
                 onChange={(e) => setShowInactive(e.target.checked)}
               />
-              Show inactive
+              Show Inactive
             </label>
           </div>
         </div>
@@ -428,7 +428,7 @@ export default function GlAccountsSettingsPage() {
                 <tr>
                   <th>Purpose</th>
                   <th>Description</th>
-                  <th>GL account</th>
+                  <th>GL Account</th>
                 </tr>
               </thead>
               <tbody>

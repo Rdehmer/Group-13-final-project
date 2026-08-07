@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { format } from "date-fns";
 import { Download } from "lucide-react";
@@ -259,7 +260,10 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const closeFormRef = useRef<() => void>(() => {});
   const [searchQuery, setSearchQuery] = useState("");
   const [filterState, setFilterState] = useState(ALL);
   const [filterCity, setFilterCity] = useState(ALL);
@@ -279,6 +283,32 @@ export default function CustomersPage() {
 
   const isManager =
     profile?.role === "service_manager" || profile?.role === "administrator";
+
+  function handleCloseForm() {
+    if (saving) return;
+    setShowForm(false);
+    setError(null);
+  }
+
+  closeFormRef.current = handleCloseForm;
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!showForm) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !saving) closeFormRef.current();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [showForm, saving]);
 
   async function load() {
     setLoading(true);
@@ -460,6 +490,7 @@ export default function CustomersPage() {
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setSaving(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -489,6 +520,7 @@ export default function CustomersPage() {
 
     if (insertError) {
       setError(insertError.message);
+      setSaving(false);
       return;
     }
     await logActivity(supabase, {
@@ -500,6 +532,7 @@ export default function CustomersPage() {
     });
     setShowForm(false);
     setForm(emptyCustomerForm);
+    setSaving(false);
     load();
   }
 
@@ -531,88 +564,112 @@ export default function CustomersPage() {
         }
       />
 
-      {showForm ? (
-        <dialog className="modal modal-open">
-          <div className="modal-box max-w-lg max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold">New Customer</h3>
-            {error ? <div className="alert alert-error mt-3 text-sm">{error}</div> : null}
-            <form onSubmit={onCreate} className="mt-4 space-y-3">
-              <FormRow label="Company" required>
-                <input className="input input-bordered w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-              </FormRow>
-              <FormRow label="Contact">
-                <input className="input input-bordered w-full" value={form.primary_contact_name} onChange={(e) => setForm({ ...form, primary_contact_name: e.target.value })} />
-              </FormRow>
-              <FormRow label="Email">
-                <input type="email" className="input input-bordered w-full" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </FormRow>
-              <FormRow label="Phone">
-                <input className="input input-bordered w-full" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              </FormRow>
+      {showForm && mounted
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[200] grid place-items-center bg-black/50 p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="new-customer-title"
+            >
+              <button
+                type="button"
+                className="absolute inset-0 cursor-default"
+                aria-label="Close dialog"
+                onClick={handleCloseForm}
+                disabled={saving}
+              />
+              <div className="relative z-10 flex max-h-[min(90vh,48rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-xl">
+                <div className="shrink-0 border-b border-base-200 px-6 py-5">
+                  <h3 id="new-customer-title" className="text-lg font-bold">
+                    New Customer
+                  </h3>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  {error ? <div className="alert alert-error mb-3 text-sm">{error}</div> : null}
+                  <form id="new-customer-form" onSubmit={onCreate} className="space-y-3">
+                    <FormRow label="Company" required>
+                      <input className="input input-bordered w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+                    </FormRow>
+                    <FormRow label="Contact">
+                      <input className="input input-bordered w-full" value={form.primary_contact_name} onChange={(e) => setForm({ ...form, primary_contact_name: e.target.value })} />
+                    </FormRow>
+                    <FormRow label="Email">
+                      <input type="email" className="input input-bordered w-full" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                    </FormRow>
+                    <FormRow label="Phone">
+                      <input className="input input-bordered w-full" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                    </FormRow>
 
-              <div className="divider my-1 text-xs opacity-60">Address</div>
-              <FormRow label="Street address">
-                <input
-                  className="input input-bordered w-full"
-                  value={form.service_address}
-                  onChange={(e) => setForm({ ...form, service_address: e.target.value })}
-                  autoComplete="street-address"
-                />
-              </FormRow>
-              <FormRow label="Address line 2">
-                <input
-                  className="input input-bordered w-full"
-                  value={form.billing_address}
-                  onChange={(e) => setForm({ ...form, billing_address: e.target.value })}
-                  placeholder="Suite, unit, building (optional)"
-                />
-              </FormRow>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <FormRow label="City">
-                  <input className="input input-bordered w-full" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-                </FormRow>
-                <FormRow label="State / Province">
-                  <input className="input input-bordered w-full" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
-                </FormRow>
-              </div>
-              <FormRow label="ZIP / Postal code">
-                <input className="input input-bordered w-full" value={form.zip_code} onChange={(e) => setForm({ ...form, zip_code: e.target.value })} />
-              </FormRow>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <FormRow label="Region">
-                  <input
-                    className="input input-bordered w-full"
-                    value={form.region}
-                    onChange={(e) => setForm({ ...form, region: e.target.value })}
-                    placeholder="e.g. Midwest, EU"
-                  />
-                </FormRow>
-                <FormRow label="Country">
-                  <input
-                    className="input input-bordered w-full"
-                    value={form.country}
-                    onChange={(e) => setForm({ ...form, country: e.target.value })}
-                    placeholder="e.g. United States"
-                  />
-                </FormRow>
-              </div>
+                    <div className="divider my-1 text-xs opacity-60">Address</div>
+                    <FormRow label="Street address">
+                      <input
+                        className="input input-bordered w-full"
+                        value={form.service_address}
+                        onChange={(e) => setForm({ ...form, service_address: e.target.value })}
+                        autoComplete="street-address"
+                      />
+                    </FormRow>
+                    <FormRow label="Address line 2">
+                      <input
+                        className="input input-bordered w-full"
+                        value={form.billing_address}
+                        onChange={(e) => setForm({ ...form, billing_address: e.target.value })}
+                        placeholder="Suite, unit, building (optional)"
+                      />
+                    </FormRow>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FormRow label="City">
+                        <input className="input input-bordered w-full" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+                      </FormRow>
+                      <FormRow label="State / Province">
+                        <input className="input input-bordered w-full" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+                      </FormRow>
+                    </div>
+                    <FormRow label="ZIP / Postal code">
+                      <input className="input input-bordered w-full" value={form.zip_code} onChange={(e) => setForm({ ...form, zip_code: e.target.value })} />
+                    </FormRow>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FormRow label="Region">
+                        <input
+                          className="input input-bordered w-full"
+                          value={form.region}
+                          onChange={(e) => setForm({ ...form, region: e.target.value })}
+                          placeholder="e.g. Midwest, EU"
+                        />
+                      </FormRow>
+                      <FormRow label="Country">
+                        <input
+                          className="input input-bordered w-full"
+                          value={form.country}
+                          onChange={(e) => setForm({ ...form, country: e.target.value })}
+                          placeholder="e.g. United States"
+                        />
+                      </FormRow>
+                    </div>
 
-              <FormRow label="Status">
-                <select className="select select-bordered w-full" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as Customer["status"] })}>
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                  <option value="On Hold">On Hold</option>
-                </select>
-              </FormRow>
-              <div className="modal-action">
-                <button type="button" className="btn" onClick={() => setShowForm(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save</button>
+                    <FormRow label="Status">
+                      <select className="select select-bordered w-full" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as Customer["status"] })}>
+                        <option value="Active">Active</option>
+                        <option value="Inactive">Inactive</option>
+                        <option value="On Hold">On Hold</option>
+                      </select>
+                    </FormRow>
+                  </form>
+                </div>
+                <div className="flex shrink-0 justify-end gap-2 border-t border-base-200 px-6 py-4">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleCloseForm} disabled={saving}>
+                    Cancel
+                  </button>
+                  <button type="submit" form="new-customer-form" className="btn btn-primary btn-sm" disabled={saving}>
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                </div>
               </div>
-            </form>
-          </div>
-          <form method="dialog" className="modal-backdrop"><button type="button" onClick={() => setShowForm(false)}>close</button></form>
-        </dialog>
-      ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
 
       {!loading && customers.length > 0 ? (
         <div className="mb-4 rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">

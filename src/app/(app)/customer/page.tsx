@@ -270,7 +270,7 @@ function CustomerDashboardPageInner() {
         <div className="grid gap-3 sm:grid-cols-2">
           <HomePrimaryAction
             href="/customer/request-contract"
-            title="Request a contract"
+            title="Request a Contract"
             description="Choose coverage for your equipment and send a request to EquipmentIQ."
             icon={<FilePlus2 className="h-5 w-5" aria-hidden />}
             isGateActive={isGateActive}
@@ -278,7 +278,7 @@ function CustomerDashboardPageInner() {
           />
           <HomePrimaryAction
             href="/customer/request-service"
-            title="Request service"
+            title="Request Service"
             description="Book a repair, maintenance visit, or other work order."
             icon={<Wrench className="h-5 w-5" aria-hidden />}
             isGateActive={isGateActive}
@@ -294,7 +294,7 @@ function CustomerDashboardPageInner() {
           icon={<ClipboardList className="h-5 w-5" aria-hidden />}
           isGateActive={isGateActive}
           blockNavigation={blockNavigation}
-          primaryAction={{ href: "/customer/request-contract", label: "Request a contract" }}
+          primaryAction={{ href: "/customer/request-contract", label: "Request a Contract" }}
           links={[
             {
               href: "/customer/contracts",
@@ -315,16 +315,16 @@ function CustomerDashboardPageInner() {
           icon={<Wrench className="h-5 w-5" aria-hidden />}
           isGateActive={isGateActive}
           blockNavigation={blockNavigation}
-          primaryAction={{ href: "/customer/request-service", label: "Request service" }}
+          primaryAction={{ href: "/customer/request-service", label: "Request Service" }}
           links={[
             {
               href: "/customer/open-request",
-              label: "Active requests",
+              label: "Active Requests",
               hint: String(openRequests),
             },
             {
               href: "/customer/order-history",
-              label: "Service history",
+              label: "Service History",
               hint: String(workOrders.length),
             },
           ]}
