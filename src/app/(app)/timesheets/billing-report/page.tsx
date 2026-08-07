@@ -30,7 +30,9 @@ import {
   listEntriesForCycle,
   listSubmissionsForCycle,
   listTechnicians,
+  listApprovedFieldHoursForCycle,
   loadTimesheetSettings,
+  mergeCycleAndFieldEntries,
   reviewSubmission,
   saveTimesheetSettings,
   setCycleStatus,
@@ -135,12 +137,34 @@ export default function TimesheetsPage() {
     setBusy(true);
     setError(null);
     const techFilter = profile.role === "technician" ? profile.id : undefined;
+
+    // Resolve cycle dates even if local cycles state is still catching up
+    let cycleMeta = cycles.find((c) => c.id === cycleId) ?? null;
+    if (!cycleMeta) {
+      const cycRes = await listCycles(supabase);
+      if (!cycRes.error) {
+        setCycles(cycRes.data);
+        cycleMeta = cycRes.data.find((c) => c.id === cycleId) ?? null;
+      }
+    }
+
     const [eRes, sRes] = await Promise.all([
       listEntriesForCycle(supabase, cycleId, techFilter),
       listSubmissionsForCycle(supabase, cycleId),
     ]);
     if (eRes.error || sRes.error) setError(eRes.error ?? sRes.error);
-    setEntries(eRes.data);
+
+    let nextEntries = eRes.data;
+    // Manager/billing: roll Timesheets hours into this cycle for totals & per-tech table
+    if (canManageTimesheets(profile.role) && cycleMeta) {
+      const fieldRes = await listApprovedFieldHoursForCycle(supabase, cycleMeta, techFilter);
+      if (fieldRes.error) {
+        setError((prev) => prev ?? fieldRes.error);
+      }
+      nextEntries = mergeCycleAndFieldEntries(eRes.data, fieldRes.data);
+    }
+
+    setEntries(nextEntries);
     setSubmissions(sRes.data);
 
     if (profile.role === "technician") {
@@ -151,7 +175,7 @@ export default function TimesheetsPage() {
       setMySubmission(null);
     }
     setBusy(false);
-  }, [cycleId, profile, supabase]);
+  }, [cycleId, profile, supabase, cycles]);
 
   useEffect(() => {
     void loadCycleData();
@@ -323,13 +347,23 @@ export default function TimesheetsPage() {
         description={
           isTech
             ? "Log daily hours for the current billing cycle and submit for review."
-            : "Review labor for the billing cycle, approve submissions, and run the consolidated report."
+            : "Hours come from approved and closed activity on Timesheets (by technician), totaled for the billing cycle."
         }
         actions={
           isManager ? (
-            <Link href="/timesheets/billing-report" className="btn btn-outline btn-sm" onClick={() => setTab("report")}>
-              Billing report
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/timesheets" className="btn btn-outline btn-sm">
+                Open Timesheets
+              </Link>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={busy || !cycleId}
+                onClick={() => void loadCycleData()}
+              >
+                Refresh hours
+              </button>
+            </div>
           ) : null
         }
       />
@@ -728,7 +762,9 @@ export default function TimesheetsPage() {
             <div className="card-body">
               <h2 className="card-title text-base">Consolidated hours by technician</h2>
               <p className="text-sm opacity-60">
-                Use this for payroll / client billing. Totals are summed daily hours for the selected cycle.
+                Totals mirror the Timesheets tab for this cycle: approved punches, closed My Day
+                shifts, and job labor (not still waiting on approval). Click a technician for the
+                daily breakdown.
               </p>
               <div className="overflow-x-auto">
                 <table className="table table-sm">

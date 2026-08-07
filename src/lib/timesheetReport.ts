@@ -1,11 +1,16 @@
 /**
  * Timesheet billing-cycle helpers — daily entries, submissions, consolidated report.
  * Technicians are profiles with role = technician (no separate Technician table).
+ *
+ * Manager reports roll up hours from the field Timesheets module (time entries,
+ * approved labor, and closed My Day clocks) for the selected cycle date range.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   Profile,
+  TechnicianLabor,
+  TimeEntry,
   TimesheetCycle,
   TimesheetCycleType,
   TimesheetEntry,
@@ -14,6 +19,9 @@ import type {
   TimesheetSubmissionStatus,
   UserRole,
 } from "@/lib/types";
+import { loadDayClocksForTechnicians, hoursFromDayClock } from "@/lib/day-clock";
+import { includesInPayrollTotals } from "@/lib/time-entry-controls";
+import { loadTimeEntries, weekContaining } from "@/lib/timesheets";
 
 export function canManageTimesheets(role: UserRole): boolean {
   return role === "administrator" || role === "service_manager" || role === "billing";
@@ -342,6 +350,276 @@ export type TechCycleSummary = {
   hasNoEntries: boolean;
 };
 
+/** Hours count for one field clock / labor punch. */
+function hoursFromFieldEntry(e: TimeEntry): number {
+  const reg = Number(e.regular_hours) || 0;
+  const ot = Number(e.overtime_hours) || 0;
+  if (reg + ot > 0) return Math.round((reg + ot) * 100) / 100;
+  const mins = Number(e.total_minutes) || 0;
+  if (mins > 0) return Math.round((mins / 60) * 100) / 100;
+  return 0;
+}
+
+/** Expand cycle bounds to full Sun–Sat weeks so they match the Timesheets work week. */
+function fieldReportDateWindow(cycle: Pick<TimesheetCycle, "start_date" | "end_date">): {
+  from: string;
+  to: string;
+} {
+  const a = weekContaining(cycle.start_date);
+  const b = weekContaining(cycle.end_date);
+  return { from: a.start, to: b.end };
+}
+
+function emptyByDay(): Map<string, TimesheetEntry> {
+  return new Map();
+}
+
+function bumpHours(
+  byDay: Map<string, TimesheetEntry>,
+  input: {
+    technicianId: string;
+    workDate: string;
+    hours: number;
+    cycleId: string;
+    notes: string | null;
+    sourcePrefix: string;
+    mode: "sum" | "max";
+  },
+) {
+  const hours = Math.round(Number(input.hours) * 100) / 100;
+  if (!(hours > 0) || !input.workDate || !input.technicianId) return;
+
+  const key = `${input.technicianId}|${input.workDate}`;
+  const existing = byDay.get(key);
+  if (existing) {
+    existing.hours =
+      input.mode === "sum"
+        ? Math.round((Number(existing.hours) + hours) * 100) / 100
+        : Math.max(Number(existing.hours), hours);
+    if (input.notes) {
+      existing.notes = existing.notes ? `${existing.notes}; ${input.notes}` : input.notes;
+    }
+    return;
+  }
+
+  byDay.set(key, {
+    id: `${input.sourcePrefix}-${input.technicianId}-${input.workDate}`,
+    technician_id: input.technicianId,
+    cycle_id: input.cycleId,
+    work_date: input.workDate,
+    hours,
+    notes: input.notes,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+}
+
+function mergeDayMaps(maps: Map<string, TimesheetEntry>[]): TimesheetEntry[] {
+  const out = emptyByDay();
+  for (const m of maps) {
+    for (const [key, row] of m) {
+      const existing = out.get(key);
+      if (!existing || Number(row.hours) > Number(existing.hours)) {
+        out.set(key, { ...row });
+      }
+    }
+  }
+  return Array.from(out.values()).sort((a, b) =>
+    a.work_date === b.work_date
+      ? a.technician_id.localeCompare(b.technician_id)
+      : a.work_date.localeCompare(b.work_date),
+  );
+}
+
+/**
+ * Manager report hours from the field Timesheets module for a billing cycle:
+ * - approved / locked / ready payroll time_entries
+ * - technician_labor rows that are not approval-gated
+ * - closed My Day clock-in/out shifts (same source as Timesheets "Week hours")
+ */
+export async function listApprovedFieldHoursForCycle(
+  supabase: SupabaseClient,
+  cycle: Pick<TimesheetCycle, "id" | "start_date" | "end_date">,
+  technicianId?: string,
+): Promise<{ data: TimesheetEntry[]; error: string | null }> {
+  try {
+    const window = fieldReportDateWindow(cycle);
+    const displayFrom = cycle.start_date;
+    const displayTo = cycle.end_date;
+    const inDisplay = (d: string) => d >= displayFrom && d <= displayTo;
+
+    const fromPunches = emptyByDay();
+    const fromLabor = emptyByDay();
+    const fromClocks = emptyByDay();
+
+    // 1) Field time entries (same loader as /timesheets)
+    const field = await loadTimeEntries(supabase, {
+      from: window.from,
+      to: window.to,
+      technicianId,
+    }).catch(() => [] as TimeEntry[]);
+
+    for (const e of field) {
+      if (e.deleted_at || e.is_void || e.voided_at) continue;
+      const workDate = e.entry_date;
+      if (!workDate || !inDisplay(workDate)) continue;
+
+      const status = e.approval_status;
+      const explicitlyApproved =
+        status === "approved" || status === "locked" || Boolean(e.approved_at);
+
+      // Skip open / rejected / voids
+      if (!includesInPayrollTotals(e) && !explicitlyApproved) continue;
+      // Skip still waiting manager approval unless already approved
+      if (
+        (status === "pending_approval" || status === "submitted") &&
+        !explicitlyApproved
+      ) {
+        continue;
+      }
+
+      const hours = hoursFromFieldEntry(e);
+      if (hours <= 0) continue;
+
+      const noteBits = [
+        e.work_orders?.work_order_number ? `WO ${e.work_orders.work_order_number}` : null,
+        e.notes?.trim() || null,
+      ].filter(Boolean) as string[];
+
+      bumpHours(fromPunches, {
+        technicianId: e.technician_id,
+        workDate,
+        hours,
+        cycleId: cycle.id,
+        notes: noteBits.length
+          ? noteBits.join(" · ")
+          : explicitlyApproved
+            ? "Approved timesheet hours"
+            : "Timesheet hours",
+        sourcePrefix: explicitlyApproved ? "field" : "field-complete",
+        mode: "sum",
+      });
+    }
+
+    // 2) technician_labor (job hours) — include rows not pending manager gate
+    let laborQ = supabase
+      .from("technician_labor")
+      .select("id, technician_id, work_date, regular_hours, overtime_hours, notes, approval_gated")
+      .gte("work_date", displayFrom)
+      .lte("work_date", displayTo);
+    if (technicianId) laborQ = laborQ.eq("technician_id", technicianId);
+    const { data: laborRows } = await laborQ;
+    for (const row of (laborRows as (TechnicianLabor & { approval_gated?: boolean })[]) ?? []) {
+      if (row.approval_gated === true) continue;
+      const hours =
+        Math.round(((Number(row.regular_hours) || 0) + (Number(row.overtime_hours) || 0)) * 100) /
+        100;
+      if (hours <= 0) continue;
+      bumpHours(fromLabor, {
+        technicianId: row.technician_id,
+        workDate: row.work_date,
+        hours,
+        cycleId: cycle.id,
+        notes: row.notes?.trim() || "Job labor hours",
+        sourcePrefix: "labor",
+        mode: "sum",
+      });
+    }
+
+    // 3) Closed My Day clocks — same rollup as Timesheets "Week hours"
+    const clocks = await loadDayClocksForTechnicians(
+      supabase,
+      technicianId ? [technicianId] : "all",
+      displayFrom,
+      displayTo,
+    ).catch(() => []);
+
+    for (const row of clocks) {
+      if (!row.clock_out_at) continue;
+      if (!inDisplay(row.work_date)) continue;
+      const hours = hoursFromDayClock(row);
+      if (hours <= 0) continue;
+      bumpHours(fromClocks, {
+        technicianId: row.technician_id,
+        workDate: row.work_date,
+        hours,
+        cycleId: cycle.id,
+        notes: "My Day shift (clock in → out)",
+        sourcePrefix: "dayclock",
+        mode: "sum",
+      });
+    }
+
+    // Merge sources per tech/day using max (same shift often mirrored across sources)
+    let data = mergeDayMaps([fromPunches, fromLabor, fromClocks]);
+
+    // Last resort: any payroll-countable punches if still empty
+    if (data.length === 0 && field.length > 0) {
+      const fallback = emptyByDay();
+      for (const e of field) {
+        if (!includesInPayrollTotals(e)) continue;
+        const workDate = e.entry_date;
+        if (!workDate || !inDisplay(workDate)) continue;
+        const hours = hoursFromFieldEntry(e);
+        if (hours <= 0) continue;
+        bumpHours(fallback, {
+          technicianId: e.technician_id,
+          workDate,
+          hours,
+          cycleId: cycle.id,
+          notes: `Timesheet (${e.approval_status})`,
+          sourcePrefix: "field-payroll",
+          mode: "sum",
+        });
+      }
+      data = mergeDayMaps([fallback]);
+    }
+
+    return { data, error: null };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Could not load approved timesheet hours.";
+    return { data: [], error: msg };
+  }
+}
+
+/** Combine cycle logbook entries with field hours (field wins when larger same day). */
+export function mergeCycleAndFieldEntries(
+  cycleEntries: TimesheetEntry[],
+  fieldEntries: TimesheetEntry[],
+): TimesheetEntry[] {
+  const map = new Map<string, TimesheetEntry>();
+
+  for (const e of cycleEntries) {
+    map.set(`${e.technician_id}|${e.work_date}`, { ...e, hours: Number(e.hours) || 0 });
+  }
+
+  for (const e of fieldEntries) {
+    const key = `${e.technician_id}|${e.work_date}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...e, hours: Number(e.hours) || 0 });
+      continue;
+    }
+    const fieldHrs = Number(e.hours) || 0;
+    const cycleHrs = Number(existing.hours) || 0;
+    if (fieldHrs >= cycleHrs) {
+      map.set(key, {
+        ...e,
+        hours: fieldHrs,
+        notes: e.notes || existing.notes,
+      });
+    } else if (!existing.notes && e.notes) {
+      existing.notes = e.notes;
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) =>
+    a.work_date === b.work_date
+      ? a.technician_id.localeCompare(b.technician_id)
+      : a.work_date.localeCompare(b.work_date),
+  );
+}
+
 export function buildCycleSummaries(
   technicians: Profile[],
   entries: TimesheetEntry[],
@@ -350,11 +628,19 @@ export function buildCycleSummaries(
   return technicians.map((tech) => {
     const mine = entries.filter((e) => e.technician_id === tech.id);
     const sub = submissions.find((s) => s.technician_id === tech.id) ?? null;
+    const hasFieldHours = mine.some(
+      (e) =>
+        e.id.startsWith("field") ||
+        e.id.startsWith("labor") ||
+        e.id.startsWith("dayclock"),
+    );
+    const submissionStatus: TimesheetSubmissionStatus | "Missing" =
+      sub?.status ?? (hasFieldHours ? "Approved" : "Missing");
     return {
       technician: tech,
       totalHours: sumHours(mine),
       entryCount: mine.length,
-      submissionStatus: sub?.status ?? "Missing",
+      submissionStatus,
       submission: sub,
       hasNoEntries: mine.length === 0,
     };
