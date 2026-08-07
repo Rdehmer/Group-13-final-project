@@ -248,7 +248,7 @@ export default function VendorsPage() {
   if (!profile || !ALLOWED_ROLES.has(profile.role)) {
     return (
       <EmptyState
-        title="Vendors unavailable"
+        title="Vendors Unavailable"
         description="Only managers, administrators, and billing can access the vendor portal."
       />
     );
@@ -278,7 +278,7 @@ export default function VendorsPage() {
                   setShowForm(true);
                 }}
               >
-                New supplier
+                New Supplier
               </button>
             ) : null}
           </div>
@@ -307,7 +307,7 @@ export default function VendorsPage() {
       {isManager && pending.length > 0 ? (
         <section className="mb-6 rounded-xl border border-warning/40 bg-warning/5 p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-semibold">Pending approval ({pending.length})</h2>
+            <h2 className="font-semibold">Pending Approval ({pending.length})</h2>
             <button
               type="button"
               className="btn btn-ghost btn-xs"
@@ -371,7 +371,7 @@ export default function VendorsPage() {
             checked={showInactive}
             onChange={(e) => setShowInactive(e.target.checked)}
           />
-          <span className="label-text text-sm">Show inactive</span>
+          <span className="label-text text-sm">Show Inactive</span>
         </label>
         <p className="text-sm opacity-70">
           {totals.count} vendor{totals.count === 1 ? "" : "s"} · Open AP{" "}
@@ -381,7 +381,7 @@ export default function VendorsPage() {
 
       {listed.length === 0 ? (
         <EmptyState
-          title={schemaMissing ? "Schema missing" : showPendingOnly ? "No pending suppliers" : "No suppliers yet"}
+          title={schemaMissing ? "Schema Missing" : showPendingOnly ? "No Pending Suppliers" : "No Suppliers Yet"}
           description={
             schemaMissing
               ? "Apply the vendors approval migration, then refresh."
@@ -397,7 +397,7 @@ export default function VendorsPage() {
               <tr>
                 <th>Name</th>
                 <th>Contact</th>
-                <th className="text-right">Open balance</th>
+                <th className="text-right">Open Balance</th>
                 <th>Aging</th>
                 <th>Status</th>
               </tr>
@@ -447,7 +447,7 @@ export default function VendorsPage() {
       )}
 
       {showForm && canCreate ? (
-        <ScrollableOverlay title="New supplier" onClose={() => setShowForm(false)}>
+        <ScrollableOverlay title="New Supplier" onClose={() => setShowForm(false)}>
           <form onSubmit={createVendor}>
             <div className="max-h-[min(60vh,24rem)] space-y-3 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
               <FormRow label="Name" required>

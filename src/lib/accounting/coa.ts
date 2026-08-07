@@ -33,8 +33,8 @@ export const CHART_OF_ACCOUNTS: GlAccount[] = [
   { code: "4300", name: "Service Revenue — Other", type: "revenue", normal: "credit" },
   { code: "4400", name: "Contract Revenue Recognized (ASC 606)", type: "revenue", normal: "credit" },
   { code: "4900", name: "Sales Discounts & Warranty Contra", type: "revenue", normal: "debit" },
-  { code: "5000", name: "Cost of Services — Labor", type: "cogs", normal: "debit" },
-  { code: "5100", name: "Cost of Services — Parts", type: "cogs", normal: "debit" },
+  { code: "5000", name: "COGS — Labor Cost", type: "cogs", normal: "debit" },
+  { code: "5100", name: "COGS — Parts Expense", type: "cogs", normal: "debit" },
   { code: "6000", name: "Bad Debt Expense", type: "expense", normal: "debit" },
   { code: "6100", name: "Payroll Expense (Accrual)", type: "expense", normal: "debit" },
 ];

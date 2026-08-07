@@ -475,9 +475,9 @@ function AppTopBar({
           </div>
         </div>
 
-        <button type="button" className="eq-signout" onClick={onLogout} title="Sign out" aria-label="Sign out">
+        <button type="button" className="eq-signout" onClick={onLogout} title="Sign Out" aria-label="Sign Out">
           <LogOut className="h-4 w-4" strokeWidth={1.75} />
-          <span className="hidden lg:inline">Sign out</span>
+          <span className="hidden lg:inline">Sign Out</span>
         </button>
       </div>
     </header>
@@ -569,7 +569,9 @@ function SidebarNavBody({
 
       <div className="eq-sidebar-foot">
         <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
-        <p className="mt-0.5 text-[10px] text-white/30">Field Service · Billing · Operations</p>
+        <p className="mt-0.5 text-[10px] text-white/30">
+          Field Service {"\u00B7"} Billing {"\u00B7"} Operations
+        </p>
       </div>
     </>
   );

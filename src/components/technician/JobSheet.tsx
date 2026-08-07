@@ -220,22 +220,35 @@ export function JobSheet({
         },
         forceBillable,
       });
-      const { error: insertError } = await supabase.from("work_order_parts").insert({
-        work_order_id: job.id,
-        part_id: partId,
-        quantity_used: quantity,
-        unit_cost: part.unit_cost,
-        customer_price: part.standard_customer_price,
-        warranty_covered_amount: split.warranty_covered_amount,
-        billable_amount: split.billable_amount,
-        invoiced: false,
-        date_used: todayIso(),
-      });
+      const unitCost = Number(part.unit_cost) || 0;
+      const { data: inserted, error: insertError } = await supabase
+        .from("work_order_parts")
+        .insert({
+          work_order_id: job.id,
+          part_id: partId,
+          quantity_used: quantity,
+          unit_cost: part.unit_cost,
+          customer_price: part.standard_customer_price,
+          warranty_covered_amount: split.warranty_covered_amount,
+          billable_amount: split.billable_amount,
+          invoiced: false,
+          date_used: todayIso(),
+        })
+        .select("id")
+        .single();
       if (insertError) throw new Error(insertError.message);
       await supabase
         .from("parts")
         .update({ quantity_on_hand: Math.max(0, part.quantity_on_hand - quantity) })
         .eq("id", partId);
+      const { postCogsForParts } = await import("@/lib/accounting/postings");
+      postCogsForParts({
+        amount: unitCost * quantity,
+        asOf: todayIso(),
+        workOrderId: job.id,
+        partsLineId: (inserted as { id?: string } | null)?.id,
+        userId: profile.id,
+      });
       await logActivity(supabase, {
         userId: profile.id,
         action: "part_used",

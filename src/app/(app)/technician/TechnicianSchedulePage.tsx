@@ -1545,16 +1545,29 @@ export default function TechnicianSchedulePage() {
     if (coverage && isOutOfScope(coverage, "part") && job?.contract_id && !job.outside_contract) {
       await markWorkOrderOutsideContract(supabase, selectedId);
     }
-    await supabase.from("work_order_parts").insert({
-      work_order_id: selectedId,
-      part_id: part.id,
-      quantity_used: qty,
-      unit_cost: part.unit_cost,
-      customer_price: part.standard_customer_price,
-      warranty_covered_amount: split.warranty_covered_amount,
-      billable_amount: split.billable_amount,
-    });
+    const unitCost = Number(part.unit_cost) || 0;
+    const { data: inserted } = await supabase
+      .from("work_order_parts")
+      .insert({
+        work_order_id: selectedId,
+        part_id: part.id,
+        quantity_used: qty,
+        unit_cost: part.unit_cost,
+        customer_price: part.standard_customer_price,
+        warranty_covered_amount: split.warranty_covered_amount,
+        billable_amount: split.billable_amount,
+      })
+      .select("id")
+      .single();
     await supabase.from("parts").update({ quantity_on_hand: part.quantity_on_hand - qty }).eq("id", part.id);
+    const { postCogsForParts } = await import("@/lib/accounting/postings");
+    postCogsForParts({
+      amount: unitCost * qty,
+      asOf: new Date().toISOString().slice(0, 10),
+      workOrderId: selectedId,
+      partsLineId: (inserted as { id?: string } | null)?.id,
+      userId: profile?.id ?? null,
+    });
     setPartForm({ part_id: "", quantity_used: "1" });
     await loadDetail(selectedId);
     await loadInventory();

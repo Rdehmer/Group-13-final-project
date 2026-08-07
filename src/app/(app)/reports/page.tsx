@@ -334,8 +334,8 @@ export default function ReportsPage() {
           ["Warranty deductions (contra)", -pnl.warranty],
           ["Service revenue (ex-tax)", pnl.serviceRevenue],
           ["Sales tax (liability; not revenue)", pnl.salesTax],
-          ["COGS — direct labor (actual)", pnl.cogsLabor],
-          ["COGS — parts at cost (actual)", pnl.cogsParts],
+          ["COGS — Labor Cost (actual)", pnl.cogsLabor],
+          ["COGS — Parts Expense (actual)", pnl.cogsParts],
           ["Total cost of services", pnl.cogs],
           ["Gross profit", pnl.gross],
           ["Gross margin", pnl.margin != null ? (pnl.margin * 100).toFixed(1) + "%" : "N/A"],
@@ -511,7 +511,7 @@ export default function ReportsPage() {
       case "job_profit":
         exportCsv(
           name,
-          ["Job", "Customer", "Revenue", "Labor cost", "Parts cost", "COGS", "Profit", "Margin", "Hours"],
+          ["Job", "Customer", "Billed Revenue", "Labor COGS", "Parts COGS", "COGS", "Gross Profit", "Margin", "Hours"],
           jobProfit.rows.map((r) => [
             r.workOrderNumber,
             r.customerName,
@@ -1330,19 +1330,31 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
   if (data.rows.length === 0) {
     return (
       <EmptyState
-        title="No billed jobs in range"
-        description="Job profitability requires recognized invoices linked to work orders."
+        title="No Billed Jobs in Range"
+        description="Job profitability requires recognized invoices linked to work orders. Gross profit is never billed revenue alone."
       />
     );
   }
+  const laborTotal = data.rows.reduce((s, r) => s + r.laborCost, 0);
+  const partsTotal = data.rows.reduce((s, r) => s + r.partsCost, 0);
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="rounded-box border border-base-300 bg-base-200/40 px-3 py-2 text-sm">
+        <p className="font-medium">
+          Gross Profit = Billed Revenue − (Direct Labor Cost + Parts COGS)
+        </p>
+        <p className="mt-0.5 text-xs opacity-70">
+          Labor uses technician cost rates; parts use unit cost × quantity logged on the job — not
+          customer sell prices.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <ReportStat label="Jobs" value={data.totals.jobCount} />
-        <ReportStat label="Revenue" value={formatReportMoney(data.totals.revenue)} />
-        <ReportStat label="Direct costs" value={formatReportMoney(data.totals.cogs)} />
+        <ReportStat label="Billed Revenue" value={formatReportMoney(data.totals.revenue)} />
+        <ReportStat label="Labor COGS" value={formatReportMoney(laborTotal)} />
+        <ReportStat label="Parts COGS" value={formatReportMoney(partsTotal)} />
         <ReportStat
-          label="Gross profit"
+          label="Gross Profit"
           value={formatReportMoney(data.totals.profit)}
           hint={formatReportPct(data.totals.margin)}
           danger={data.totals.lossCount > 0}
@@ -1352,12 +1364,22 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
         <div className="alert alert-warning text-sm">
           <span>
             <strong>{data.totals.lossCount}</strong> job{data.totals.lossCount === 1 ? "" : "s"} with negative
-            gross profit — review labor rates or parts cost vs price.
+            gross profit — review labor cost rates or parts cost vs billed price.
           </span>
         </div>
       ) : null}
       <div id="report-detail" className="scroll-mt-4"><ReportTable
-        headers={["Job", "Customer", "Type", "Revenue", "Labor", "Parts", "Profit", "Margin", "Hrs"]}
+        headers={[
+          "Job",
+          "Customer",
+          "Type",
+          "Billed Revenue",
+          "Labor COGS",
+          "Parts COGS",
+          "Gross Profit",
+          "Margin",
+          "Hrs",
+        ]}
       >
         {data.rows.map((r) => (
           <tr key={r.jobId} className={r.profit < 0 ? "bg-error/5" : ""}>
@@ -1387,15 +1409,17 @@ function JobProfitReport({ data }: { data: ReturnType<typeof jobProfitability> }
         <tr className="border-t-2 font-bold">
           <td colSpan={3}>Total</td>
           <MoneyCell n={data.totals.revenue} bold />
-          <td colSpan={2} />
+          <MoneyCell n={laborTotal} bold />
+          <MoneyCell n={partsTotal} bold />
           <MoneyCell n={data.totals.profit} bold />
           <td className="text-right tabular-nums">{formatReportPct(data.totals.margin)}</td>
           <td className="text-right tabular-nums">{data.totals.laborHours.toFixed(1)}</td>
         </tr>
       </ReportTable></div>
       <PolicyNote>
-        Revenue is recognized service revenue (ex-tax) on linked invoices. COGS is actual technician cost rates
-        and parts unit costs on that work order.
+        Billed revenue is recognized service revenue (ex-tax) on linked invoices. Labor COGS is hours ×
+        technician cost rates. Parts COGS is quantity used × parts unit cost. Gross profit is never the
+        billed total alone.
       </PolicyNote>
     </div>
   );
@@ -1774,13 +1798,13 @@ function PnLReport({ pnl }: { pnl: ReturnType<typeof profitAndLoss> }) {
         <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Account", "Total"]}>
           <tr>
             <td className="pl-4">
-              Direct labor at cost rates
+              COGS — Labor Cost
               {pnl.laborHours > 0 ? ` (${pnl.laborHours.toFixed(1)} hrs on matched jobs)` : ""}
             </td>
             <MoneyCell n={pnl.cogsLabor} />
           </tr>
           <tr>
-            <td className="pl-4">Parts consumed at unit cost</td>
+            <td className="pl-4">COGS — Parts Expense</td>
             <MoneyCell n={pnl.cogsParts} />
           </tr>
           <tr className="border-t-2 border-base-content/15 font-semibold">
