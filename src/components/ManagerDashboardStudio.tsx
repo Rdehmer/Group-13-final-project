@@ -70,6 +70,8 @@ export type ManagerDashboardData = {
     quantity_on_hand: number;
     reorder_level: number;
   }[];
+  /** True when the parts catalog has at least one row (vs no low-stock after catalog exists). */
+  hasPartsCatalog: boolean;
   pendingTimeOff: number;
   ptoThisWeek: number;
   unscheduledOpen: number;
@@ -626,8 +628,16 @@ export function ManagerDashboardStudio({ data }: { data: ManagerDashboardData })
             >
               {data.lowStockParts.length === 0 ? (
                 <EmptyState
-                  title="Inventory looks good"
-                  description="No parts at or below reorder level."
+                  title={
+                    data.hasPartsCatalog
+                      ? "Inventory looks good"
+                      : "No inventory catalog yet"
+                  }
+                  description={
+                    data.hasPartsCatalog
+                      ? "No parts at or below reorder level."
+                      : "Add parts to track on-hand quantities and reorder levels."
+                  }
                 />
               ) : (
                 <ul className="divide-y divide-base-300">

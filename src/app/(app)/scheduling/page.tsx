@@ -38,6 +38,7 @@ import {
   formatShiftClock,
   getWeekDays,
   isUsingLocalScheduleStore,
+  resetScheduleStorageMode,
   listAvailability,
   listShifts,
   saveDayAvailability,
@@ -121,6 +122,8 @@ export default function SchedulingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    // Re-probe tables each visit (migration may have been applied mid-session).
+    resetScheduleStorageMode();
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -174,8 +177,7 @@ export default function SchedulingPage() {
     ]);
 
     setLocalMode(availRes.local || shiftRes.local || isUsingLocalScheduleStore());
-    if (availRes.error) setError(availRes.error);
-    else if (shiftRes.error) setError(shiftRes.error);
+    // List helpers always degrade to local; only surface true write-path messages via setError later.
     setAvailability(availRes.data);
     setShifts(shiftRes.data);
     setTimeOff((ptoRes.data as TimeOffRange[]) ?? []);
@@ -450,16 +452,17 @@ export default function SchedulingPage() {
       />
 
       {localMode ? (
-        <div className="alert alert-warning text-sm">
+        <div className="alert alert-info text-sm">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <div>
-            <p className="font-semibold">Browser storage mode</p>
+            <p className="font-semibold">Using this browser for schedule data</p>
             <p className="opacity-80">
-              Run{" "}
+              Shared Supabase tables are not available yet, so Team Schedule runs locally on this
+              device. Apply{" "}
               <code className="text-xs">
                 supabase/migrations/20260806_technician_availability.sql
               </code>{" "}
-              so the whole team shares availability and shifts.
+              in the Supabase SQL editor for cross-login team sharing.
             </p>
           </div>
         </div>

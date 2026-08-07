@@ -111,8 +111,10 @@ export default function JobDetailPage() {
   const [emergencyPurchases, setEmergencyPurchases] = useState<EmergencyPurchase[]>([]);
   const [serviceRating, setServiceRating] = useState<WorkOrderServiceRating | null>(null);
   const [timeEntryHours, setTimeEntryHours] = useState({ hours: 0, laborCost: 0, billableAmount: 0 });
+  const [loading, setLoading] = useState(true);
 
   async function load() {
+    setLoading(true);
     const [{ data }, { data: { user } }, { data: settings }, { data: purchases }] = await Promise.all([
       supabase
         .from("work_orders")
@@ -120,9 +122,9 @@ export default function JobDetailPage() {
           "*, customers(name, billing_address, phone, email, service_address, city, state, zip_code), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
         )
         .eq("id", id)
-        .single(),
+        .maybeSingle(),
       supabase.auth.getUser(),
-      supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
+      supabase.from("company_settings").select("default_tax_rate").limit(1).maybeSingle(),
       supabase
         .from("emergency_purchases")
         .select("*")
@@ -216,6 +218,7 @@ export default function JobDetailPage() {
     } else {
       setTechName("Unassigned");
     }
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -781,7 +784,25 @@ export default function JobDetailPage() {
     setSaving(false);
   }
 
-  if (!wo) return <div className="p-8 text-center opacity-60">Loading job…</div>;
+  if (loading) {
+    return <div className="p-8 text-center opacity-60">Loading job…</div>;
+  }
+
+  if (!wo) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Record not found"
+          description="This work order may have been removed or the link is invalid."
+          action={
+            <Link href="/work-orders" className="btn btn-sm">
+              Back to Work Orders
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
 
   const stageIdx = jobStageIndex(wo.status);
   const laborTotal = sumLaborCharges(labor);

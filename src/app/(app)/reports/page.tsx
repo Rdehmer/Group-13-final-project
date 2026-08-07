@@ -882,7 +882,13 @@ export default function ReportsPage() {
           ) : (
             <div className="report-body rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-6 print:border-0 print:p-0 print:shadow-none">
               {reportId === "executive" ? (
-                <ExecutiveReport data={executive} onOpen={(id) => setReportId(id)} />
+                <ExecutiveReport
+                  data={executive}
+                  onOpen={(id) => setReportId(id)}
+                  greenfield={
+                    invoices.length === 0 && payments.length === 0 && contracts.length === 0
+                  }
+                />
               ) : null}
               {reportId === "pnl" ? <PnLReport pnl={pnl} /> : null}
               {reportId === "pnl_compare" ? <PnlCompareReport data={pnlCmp} /> : null}
@@ -983,12 +989,22 @@ function ReportStat(props: {
 function ExecutiveReport({
   data,
   onOpen,
+  greenfield = false,
 }: {
   data: ReturnType<typeof executiveSnapshot>;
   onOpen: (id: ReportId) => void;
+  greenfield?: boolean;
 }) {
   return (
     <div className="space-y-6">
+      {greenfield ? (
+        <div className="alert alert-info text-sm">
+          <span>
+            <strong>No financial activity yet.</strong> Complete work orders and post invoices or
+            payments to populate executive KPIs and the rest of the report suite.
+          </span>
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <ReportStat
           label="Service revenue"

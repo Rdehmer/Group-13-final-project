@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, CreditCard, Download, Mail, Send, FileEdit, Plus, Trash2, Save } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
-import { StatusBadge, statusTone } from "@/components/ui";
+import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { formatMoney } from "@/lib/calculations";
 import { formatMonthlyPremium } from "@/lib/contract-pricing";
@@ -99,8 +99,10 @@ export default function InvoiceDetailPage() {
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
+    setLoading(true);
     const [{ data }, { data: pay }, { data: settings }, { data: members }, batchRes] = await Promise.all([
       supabase
         .from("invoices")
@@ -108,9 +110,9 @@ export default function InvoiceDetailPage() {
           "*, customers(name, billing_address, email, phone, city, state), work_orders(id, work_order_number, problem_description, work_order_type, service_vendor_id), equipment(id, name, model, serial_number, installation_date, manufacturer, location, operating_status, customer_id)",
         )
         .eq("id", id)
-        .single(),
+        .maybeSingle(),
       supabase.from("payments").select("*").eq("invoice_id", id).order("payment_date", { ascending: false }),
-      supabase.from("company_settings").select("default_tax_rate").limit(1).single(),
+      supabase.from("company_settings").select("default_tax_rate").limit(1).maybeSingle(),
       supabase
         .from("profiles")
         .select("id, full_name, email, role")
@@ -128,6 +130,7 @@ export default function InvoiceDetailPage() {
     if (settings?.default_tax_rate) setTaxRate(Number(settings.default_tax_rate));
     if (!invoice) {
       setServiceVendor(null);
+      setLoading(false);
       return;
     }
 
@@ -228,6 +231,7 @@ export default function InvoiceDetailPage() {
     }
 
     await loadPricingBanner(invoice, detailLines);
+    setLoading(false);
   }
 
   async function loadPricingBanner(invoice: InvoiceDetail, detailLines: BillableLine[]) {
@@ -701,8 +705,24 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  if (!inv) {
+  if (loading) {
     return <div className="p-8 text-center opacity-60">Loading invoice…</div>;
+  }
+
+  if (!inv) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          title="Record not found"
+          description="This invoice may have been removed or the link is invalid."
+          action={
+            <Link href="/billing" className="btn btn-sm">
+              Back to Billing
+            </Link>
+          }
+        />
+      </div>
+    );
   }
 
   const today = new Date();

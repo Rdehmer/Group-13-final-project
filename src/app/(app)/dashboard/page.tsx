@@ -313,12 +313,6 @@ export default async function DashboardPage() {
           href: "/work-orders?filter=urgent",
           danger: (criticalCount ?? 0) > 0,
         },
-        {
-          label: "Timesheet exceptions review",
-          value: 1,
-          href: "/timesheets",
-          danger: true,
-        },
       ].filter((t) => t.value > 0)
     : [];
 
@@ -363,6 +357,7 @@ export default async function DashboardPage() {
             quantity_on_hand: p.quantity_on_hand,
             reorder_level: p.reorder_level,
           })),
+          hasPartsCatalog: (allParts ?? []).length > 0,
           pendingTimeOff,
           ptoThisWeek,
           unscheduledOpen,
@@ -523,7 +518,18 @@ export default async function DashboardPage() {
           <div className="card-body">
             <h2 className="card-title text-base">Low Stock Parts</h2>
             {(lowStockParts ?? []).length === 0 ? (
-              <EmptyState title="Inventory looks good" description="No parts at or below reorder level." />
+              <EmptyState
+                title={
+                  (allParts ?? []).length === 0
+                    ? "No inventory catalog yet"
+                    : "Inventory looks good"
+                }
+                description={
+                  (allParts ?? []).length === 0
+                    ? "Add parts to track on-hand quantities and reorder levels."
+                    : "No parts at or below reorder level."
+                }
+              />
             ) : (
               <DualHorizontalScroll>
                 <table className="table table-sm">

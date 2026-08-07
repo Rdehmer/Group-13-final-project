@@ -41,15 +41,47 @@ export type WeekDay = {
   shortLabel: string;
 };
 
-function isSchemaMissing(message: string | null | undefined): boolean {
-  if (!message) return false;
-  const m = message.toLowerCase();
+type ScheduleQueryError = {
+  message?: string | null;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+};
+
+function isSchemaMissing(error: ScheduleQueryError | string | null | undefined): boolean {
+  if (!error) return false;
+  if (typeof error === "string") {
+    return isSchemaMissing({ message: error });
+  }
+  const code = String(error.code ?? "").toUpperCase();
+  // PostgREST / Postgres: missing relation or not in schema cache yet
+  if (code === "PGRST205" || code === "42P01" || code === "PGRST204") return true;
+  const blob = [error.message, error.details, error.hint].filter(Boolean).join(" ").toLowerCase();
+  if (!blob) return false;
   return (
-    m.includes("does not exist") ||
-    m.includes("schema cache") ||
-    m.includes("could not find") ||
-    m.includes("technician_availability") ||
-    m.includes("technician_shifts")
+    blob.includes("does not exist") ||
+    blob.includes("schema cache") ||
+    blob.includes("could not find") ||
+    blob.includes("technician_availability") ||
+    blob.includes("technician_shifts") ||
+    blob.includes("relation")
+  );
+}
+
+/** Prefer browser storage when the shared tables are unavailable so Team Schedule still loads. */
+function shouldUseLocalFallback(error: ScheduleQueryError | string | null | undefined): boolean {
+  if (!error) return false;
+  if (isSchemaMissing(error)) return true;
+  const message =
+    typeof error === "string" ? error : String(error.message ?? error.details ?? "");
+  const m = message.toLowerCase();
+  // Network / auth noise should not brick the board for managers/techs offline demo.
+  return (
+    m.includes("failed to fetch") ||
+    m.includes("network") ||
+    m.includes("fetch failed") ||
+    m.includes("jwt") ||
+    m.includes("timeout")
   );
 }
 
@@ -195,15 +227,32 @@ export function isUsingLocalScheduleStore(): boolean {
   return storageMode === "local";
 }
 
+/** Force a re-probe (e.g. after applying the availability migration in Supabase). */
+export function resetScheduleStorageMode() {
+  storageMode = "unknown";
+}
+
 export async function detectScheduleStorage(supabase: SupabaseClient): Promise<"remote" | "local"> {
   if (storageMode === "remote" || storageMode === "local") return storageMode;
-  const { error } = await supabase.from("technician_availability").select("id").limit(1);
-  if (error && isSchemaMissing(error.message)) {
+  try {
+    const { error } = await supabase.from("technician_availability").select("id").limit(1);
+    if (error) {
+      // Only use remote when the table is actually readable.
+      storageMode = "local";
+      return "local";
+    }
+    // Confirm shifts table exists too — half-migrated projects still get local mode.
+    const shiftsProbe = await supabase.from("technician_shifts").select("id").limit(1);
+    if (shiftsProbe.error) {
+      storageMode = "local";
+      return "local";
+    }
+    storageMode = "remote";
+    return "remote";
+  } catch {
     storageMode = "local";
     return "local";
   }
-  storageMode = "remote";
-  return "remote";
 }
 
 /** Default Mon–Fri 8–5, Sat 8–12 preferred; Sun off. */
@@ -266,11 +315,8 @@ export async function listAvailability(
   if (technicianIds?.length) q = q.in("technician_id", technicianIds);
   const { data, error } = await q;
   if (error) {
-    if (isSchemaMissing(error.message)) {
-      storageMode = "local";
-      return listAvailability(supabase, technicianIds);
-    }
-    return { data: [], error: error.message, local: false };
+    storageMode = "local";
+    return listAvailability(supabase, technicianIds);
   }
   return { data: (data as TechnicianAvailability[]) ?? [], error: null, local: false };
 }
@@ -347,7 +393,7 @@ export async function saveDayAvailability(
     .eq("day_of_week", input.day_of_week);
 
   if (deleteError) {
-    if (isSchemaMissing(deleteError.message)) {
+    if (shouldUseLocalFallback(deleteError) || isSchemaMissing(deleteError)) {
       storageMode = "local";
       return saveDayAvailability(supabase, input);
     }
@@ -369,7 +415,7 @@ export async function saveDayAvailability(
     .select();
 
   if (error) {
-    if (isSchemaMissing(error.message)) {
+    if (shouldUseLocalFallback(error) || isSchemaMissing(error)) {
       storageMode = "local";
       return saveDayAvailability(supabase, input);
     }
@@ -424,11 +470,8 @@ export async function listShifts(
   if (opts.technicianIds?.length) q = q.in("technician_id", opts.technicianIds);
   const { data, error } = await q;
   if (error) {
-    if (isSchemaMissing(error.message)) {
-      storageMode = "local";
-      return listShifts(supabase, opts);
-    }
-    return { data: [], error: error.message, local: false };
+    storageMode = "local";
+    return listShifts(supabase, opts);
   }
   return { data: (data as TechnicianShift[]) ?? [], error: null, local: false };
 }
@@ -485,7 +528,7 @@ export async function upsertShift(
       .select()
       .single();
     if (error) {
-      if (isSchemaMissing(error.message)) {
+      if (shouldUseLocalFallback(error) || isSchemaMissing(error)) {
         storageMode = "local";
         return upsertShift(supabase, input);
       }
@@ -500,7 +543,7 @@ export async function upsertShift(
     .select()
     .single();
   if (error) {
-    if (isSchemaMissing(error.message)) {
+    if (shouldUseLocalFallback(error) || isSchemaMissing(error)) {
       storageMode = "local";
       return upsertShift(supabase, input);
     }
@@ -530,7 +573,7 @@ export async function cancelShift(
     .from("technician_shifts")
     .update({ status: "canceled", updated_at: new Date().toISOString() })
     .eq("id", id);
-  if (error && isSchemaMissing(error.message)) {
+  if (error && (shouldUseLocalFallback(error) || isSchemaMissing(error))) {
     storageMode = "local";
     return cancelShift(supabase, id);
   }
