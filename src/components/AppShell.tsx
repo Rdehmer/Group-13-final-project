@@ -34,7 +34,16 @@ function sidebarInboxBadge(href: string, unreadInbox: number): number {
   return 0;
 }
 
-function isPathActive(pathname: string, href: string) {
+/**
+ * Whether pathname belongs under a nav href.
+ * Customer Home is exact-only so /customer/inbox does not light Home.
+ * /vendors excludes /vendors/aging (AP aging is a sibling destination).
+ */
+function pathMatchesHref(pathname: string, href: string): boolean {
+  if (!href || href.startsWith("#")) return false;
+  if (href === CUSTOMER_HOME) {
+    return pathname === CUSTOMER_HOME || pathname === `${CUSTOMER_HOME}/`;
+  }
   if (href === "/vendors") {
     return (
       pathname === "/vendors" ||
@@ -42,6 +51,41 @@ function isPathActive(pathname: string, href: string) {
     );
   }
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** @deprecated Prefer pathMatchesHref + resolveActiveHref for exclusive tab highlight. */
+function isPathActive(pathname: string, href: string) {
+  return pathMatchesHref(pathname, href);
+}
+
+/** Flat list of clickable sidebar destinations (leaves + nestable parents). */
+function collectNavHrefs(items: NavItem[]): string[] {
+  const out: string[] = [];
+  function walk(item: NavItem) {
+    if (item.section) {
+      item.children?.forEach(walk);
+      return;
+    }
+    if (item.href && !item.href.startsWith("#")) out.push(item.href);
+    item.children?.forEach(walk);
+  }
+  items.forEach(walk);
+  return [...new Set(out)];
+}
+
+/**
+ * Single active destination: longest matching href wins so parent tabs
+ * (e.g. /timesheets) do not stay highlighted on child routes
+ * (e.g. /timesheets/billing-report).
+ */
+function resolveActiveHref(pathname: string, hrefs: string[]): string | null {
+  const matches = hrefs.filter((href) => pathMatchesHref(pathname, href));
+  if (matches.length === 0) return null;
+  return matches.sort((a, b) => b.length - a.length || b.localeCompare(a))[0] ?? null;
+}
+
+function isNavHrefActive(href: string, activeHref: string | null): boolean {
+  return Boolean(activeHref && href === activeHref);
 }
 
 function gatedNavClassName(isBlocked: boolean, active: boolean, className?: string) {
@@ -58,7 +102,7 @@ function navLabel(item: NavItem, role: Profile["role"]): string {
   if (item.href === "/technician" && role === "technician") return "My Day";
   if (item.href === "/scheduling" && role === "technician") return "Hours";
   if (item.href === "/timesheets" && role === "technician") return "My Timesheet";
-  if (item.href === "/dashboard" && role === "administrator") return "Admin Home";
+  if (item.href === "/dashboard" && role === "administrator") return "Admin Dashboard";
   if (item.href === "/dashboard" && role === "service_manager") return "Dashboard";
   return item.label;
 }
@@ -91,22 +135,20 @@ function NavLabelWithBadge({ label, count }: { label: string; count?: number }) 
 
 function GatedNavLink({
   item,
-  pathname,
+  active,
   className,
   isGateActive,
   blockNavigation,
   badgeCount,
 }: {
   item: NavItem;
-  pathname: string;
+  active: boolean;
   className?: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeCount?: number;
 }) {
   const router = useRouter();
-  const active =
-    item.href === CUSTOMER_HOME ? pathname === CUSTOMER_HOME : isPathActive(pathname, item.href);
   const isBlocked = isGateActive && item.href !== CUSTOMER_HOME;
   const label = <NavLabelWithBadge label={item.label} count={badgeCount} />;
 
@@ -115,6 +157,7 @@ function GatedNavLink({
       <span
         role="link"
         aria-disabled="true"
+        aria-current={active ? "page" : undefined}
         className={gatedNavClassName(true, active, className)}
         onClick={blockNavigation}
       >
@@ -126,6 +169,7 @@ function GatedNavLink({
   return (
     <Link
       href={item.href}
+      aria-current={active ? "page" : undefined}
       className={gatedNavClassName(false, active, className)}
       onClick={(event) => {
         event.preventDefault();
@@ -140,13 +184,13 @@ function GatedNavLink({
 
 function NavChildList({
   items,
-  pathname,
+  activeHref,
   isGateActive,
   blockNavigation,
   badgeForHref,
 }: {
   items: NavItem[];
-  pathname: string;
+  activeHref: string | null;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeForHref?: (href: string) => number;
@@ -160,7 +204,7 @@ function NavChildList({
               <div className="eq-nav-section">{child.label}</div>
               <NavChildList
                 items={child.children}
-                pathname={pathname}
+                activeHref={activeHref}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 badgeForHref={badgeForHref}
@@ -172,7 +216,7 @@ function NavChildList({
           <li key={`${child.href}-${child.label}`}>
             <GatedNavLink
               item={child}
-              pathname={pathname}
+              active={isNavHrefActive(child.href, activeHref)}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
               badgeCount={badgeForHref?.(child.href)}
@@ -187,28 +231,26 @@ function NavChildList({
 function NavDetailsGroup({
   item,
   pathname,
+  activeHref,
   isGateActive,
   blockNavigation,
   badgeForHref,
 }: {
   item: NavItem;
   pathname: string;
+  activeHref: string | null;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeForHref: (href: string) => number;
 }) {
   const router = useRouter();
-  const childActive = item.children!.some(function walk(child): boolean {
-    if (child.children?.length) return child.children.some(walk);
-    return child.href === CUSTOMER_HOME
-      ? pathname === CUSTOMER_HOME
-      : isPathActive(pathname, child.href);
-  });
+  const groupHrefs = collectNavHrefs([item]);
   const sectionOpen =
-    childActive ||
-    isPathActive(pathname, item.href) ||
-    pathname.startsWith("/vendors/aging") ||
-    pathname.startsWith("/service-vendors");
+    groupHrefs.some((href) => href === activeHref) ||
+    // Parent routes that share structure with related pages (vendors group).
+    (item.href === "/vendors" &&
+      (pathname.startsWith("/vendors/aging") || pathname.startsWith("/service-vendors")));
+  const parentActive = isNavHrefActive(item.href, activeHref);
   const parentBlocked = isGateActive && item.href !== CUSTOMER_HOME;
   const parentBadge =
     item.href === "/vendors"
@@ -221,7 +263,8 @@ function NavDetailsGroup({
         <span
           role="link"
           aria-disabled="true"
-          className={gatedNavClassName(true, sectionOpen)}
+          aria-current={parentActive ? "page" : undefined}
+          className={gatedNavClassName(true, parentActive)}
           onClick={blockNavigation}
         >
           <NavLabelWithBadge label={item.label} count={parentBadge} />
@@ -229,7 +272,9 @@ function NavDetailsGroup({
       ) : (
         <Link
           href={item.href}
-          className={gatedNavClassName(false, sectionOpen)}
+          aria-current={parentActive ? "page" : undefined}
+          className={gatedNavClassName(false, parentActive)}
+          data-nav-open={sectionOpen && !parentActive ? "true" : undefined}
           onClick={(event) => {
             event.preventDefault();
             closeMobileDrawer();
@@ -241,7 +286,7 @@ function NavDetailsGroup({
       )}
       <NavChildList
         items={item.children!}
-        pathname={pathname}
+        activeHref={activeHref}
         isGateActive={isGateActive}
         blockNavigation={blockNavigation}
         badgeForHref={badgeForHref}
@@ -253,6 +298,7 @@ function NavDetailsGroup({
 function NavSection({
   item,
   pathname,
+  activeHref,
   isGateActive,
   blockNavigation,
   unreadInbox,
@@ -260,6 +306,7 @@ function NavSection({
 }: {
   item: NavItem;
   pathname: string;
+  activeHref: string | null;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   unreadInbox: number;
@@ -275,21 +322,20 @@ function NavSection({
               key={`${child.href}-${child.label}`}
               item={child}
               pathname={pathname}
+              activeHref={activeHref}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
               badgeForHref={badgeForHref}
             />
           );
         }
-        const active = isPathActive(pathname, child.href);
         const badgeCount =
           sidebarInboxBadge(child.href, unreadInbox) || badgeForHref(child.href);
         return (
           <div key={`${child.href}-${child.label}`} className="eq-nav-row">
             <GatedNavLink
               item={child}
-              pathname={pathname}
-              className={active ? "eq-nav-item--active" : ""}
+              active={isNavHrefActive(child.href, activeHref)}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
               badgeCount={badgeCount}
@@ -501,6 +547,8 @@ function SidebarNavBody({
   badgeForHref: (href: string) => number;
   profileEmail: string;
 }) {
+  const activeHref = resolveActiveHref(pathname, collectNavHrefs(navItems));
+
   return (
     <>
       <div className="eq-sidebar-brand">
@@ -521,6 +569,7 @@ function SidebarNavBody({
                 key={item.href}
                 item={item}
                 pathname={pathname}
+                activeHref={activeHref}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 unreadInbox={unreadInbox}
@@ -535,6 +584,7 @@ function SidebarNavBody({
                 key={item.href}
                 item={item}
                 pathname={pathname}
+                activeHref={activeHref}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 badgeForHref={badgeForHref}
@@ -542,22 +592,13 @@ function SidebarNavBody({
             );
           }
 
-          const matches = navItems.filter(
-            (n) =>
-              !n.section &&
-              !n.children &&
-              (pathname === n.href || pathname.startsWith(`${n.href}/`)),
-          );
-          const best = [...matches].sort((a, b) => b.href.length - a.href.length)[0];
-          const active = best?.href === item.href;
           const badgeCount =
             sidebarInboxBadge(item.href, unreadInbox) || badgeForHref(item.href);
           return (
             <div key={item.href} className="eq-nav-row">
               <GatedNavLink
                 item={item}
-                pathname={pathname}
-                className={active ? "eq-nav-item--active" : ""}
+                active={isNavHrefActive(item.href, activeHref)}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 badgeCount={badgeCount}

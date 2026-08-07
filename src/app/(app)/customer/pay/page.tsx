@@ -246,6 +246,7 @@ function PayPortalInner() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
+  const [hasInvoiceHistory, setHasInvoiceHistory] = useState(false);
   const [contracts, setContracts] = useState<ServiceContract[]>([]);
   const [allStandingInvoices, setAllStandingInvoices] = useState<Invoice[]>([]);
   const [history, setHistory] = useState<Payment[]>([]);
@@ -280,8 +281,15 @@ function PayPortalInner() {
       return;
     }
 
-    const [{ data: inv }, { data: pay }, { data: cust }, { data: sc }, { data: monthlyInv }, configRes] =
-      await Promise.all([
+    const [
+      { data: inv },
+      { data: pay },
+      { data: cust },
+      { data: sc },
+      { data: monthlyInv },
+      historyProbe,
+      configRes,
+    ] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, work_orders(work_order_number), service_contracts(id, name)")
@@ -307,6 +315,10 @@ function PayPortalInner() {
         .eq("customer_id", p.customer_id)
         .is("work_order_id", null)
         .gt("recurring_service_charge", 0),
+      supabase
+        .from("invoices")
+        .select("id", { count: "exact", head: true })
+        .eq("customer_id", p.customer_id),
       fetch("/api/stripe/config")
         .then((r) => r.json())
         .catch(() => ({ configured: false, demo: false })),
@@ -314,6 +326,7 @@ function PayPortalInner() {
 
     const open = (inv as OpenInvoice[]) ?? [];
     setInvoices(open);
+    setHasInvoiceHistory((historyProbe.count ?? 0) > 0 || open.length > 0);
     setContracts((sc as ServiceContract[]) ?? []);
     setAllStandingInvoices((monthlyInv as Invoice[]) ?? []);
     setHistory((pay as Payment[]) ?? []);
@@ -704,11 +717,18 @@ function PayPortalInner() {
           {invoices.length === 0 ? (
             <div className="p-6">
               <EmptyState
-                title="You're all paid up"
-                description="No open balances. Thank you!"
+                title={hasInvoiceHistory ? "You're all paid up" : "No invoices yet"}
+                description={
+                  hasInvoiceHistory
+                    ? "No open balances. Thank you!"
+                    : "When EquipmentIQ bills you for service or contracts, open balances will appear here."
+                }
                 action={
-                  <Link href="/customer/order-history" className="btn btn-outline btn-sm">
-                    View service history
+                  <Link
+                    href={hasInvoiceHistory ? "/customer/order-history" : "/customer/request-service"}
+                    className="btn btn-outline btn-sm"
+                  >
+                    {hasInvoiceHistory ? "View service history" : "Request service"}
                   </Link>
                 }
               />

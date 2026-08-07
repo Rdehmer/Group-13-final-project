@@ -721,16 +721,20 @@ export default function BillingPage() {
               <div className="p-6">
                 <EmptyState
                   title={
-                    invoiceMonth !== "all"
-                      ? `No invoices in ${formatMonthLabel(invoiceMonth)}`
-                      : filter !== "all"
-                        ? `No invoices for ${INVOICE_QUEUE_TABS.find((t) => t.id === filter)?.label ?? "this filter"}`
-                        : "No invoices match"
+                    !filtersActive && invoices.length === 0
+                      ? "No invoices yet"
+                      : invoiceMonth !== "all"
+                        ? `No invoices in ${formatMonthLabel(invoiceMonth)}`
+                        : filter !== "all"
+                          ? `No invoices for ${INVOICE_QUEUE_TABS.find((t) => t.id === filter)?.label ?? "this filter"}`
+                          : "No invoices match"
                   }
                   description={
-                    filtersActive
-                      ? "Try Clear filters, or change status/month/search. You can also create an invoice from a completed work order above."
-                      : "Adjust search or create an invoice from a completed work order above."
+                    !filtersActive && invoices.length === 0
+                      ? "Complete a work order, then create an invoice from the Ready to invoice section above."
+                      : filtersActive
+                        ? "Try Clear filters, or change status/month/search. You can also create an invoice from a completed work order above."
+                        : "Adjust search or create an invoice from a completed work order above."
                   }
                 />
               </div>

@@ -239,10 +239,10 @@ export function ContractPieCard({
           />
         ) : (
           <div
-            className={`grid min-h-0 items-center gap-3 ${
+            className={`grid min-h-0 items-stretch gap-3 ${
               fillParent
-                ? "min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)] sm:grid-rows-1"
-                : "sm:grid-cols-[minmax(0,1fr)_minmax(0,11rem)]"
+                ? "min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden sm:grid-cols-[minmax(0,1.05fr)_minmax(12rem,0.95fr)] sm:grid-rows-1"
+                : "sm:grid-cols-[minmax(0,1.05fr)_minmax(13rem,0.95fr)]"
             }`}
           >
             <div className={`${chartClass} min-h-0 overflow-hidden`}>
@@ -285,44 +285,72 @@ export function ContractPieCard({
                 </ResponsiveContainer>
               </ChartMount>
             </div>
-            <ul className="max-h-full min-h-0 space-y-1.5 overflow-y-auto text-sm">
-              {data.map((slice, i) => {
-                const pct = total > 0 ? Math.round((slice.value / total) * 100) : 0;
-                return (
-                  <li key={`${slice.name}-${i}`}>
-                    <Link
-                      href={slice.href}
-                      className="flex items-start gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    >
-                      <span
-                        className="mt-1 h-2.5 w-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
-                        aria-hidden
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{slice.name}</span>
-                        <span className="text-xs text-base-content/55">
-                          {valueKind === "money"
-                            ? formatMoney(slice.value)
-                            : `${slice.value} ? ${pct}%`}
-                          {valueKind === "money" ? ` ? ${pct}%` : ""}
-                        </span>
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="min-h-0 max-h-full overflow-y-auto rounded-xl border border-base-300/60 bg-base-200/25">
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 z-[1] bg-base-100/95 text-[10px] font-semibold uppercase tracking-wide text-base-content/50 backdrop-blur">
+                  <tr>
+                    <th className="px-2.5 py-1.5 font-semibold">Segment</th>
+                    <th className="px-2 py-1.5 text-right font-semibold tabular-nums">
+                      {valueKind === "money" ? "Value" : "Count"}
+                    </th>
+                    <th className="w-12 px-2 py-1.5 text-right font-semibold tabular-nums">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map((slice, i) => {
+                    const pct = total > 0 ? Math.round((slice.value / total) * 100) : 0;
+                    return (
+                      <tr
+                        key={`${slice.name}-${i}`}
+                        className="border-t border-base-300/50 transition-colors hover:bg-base-200/80"
+                      >
+                        <td className="px-2.5 py-1.5">
+                          <Link
+                            href={slice.href}
+                            className="flex min-w-0 items-center gap-2 font-medium text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          >
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                              style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                              aria-hidden
+                            />
+                            <span className="truncate">{slice.name}</span>
+                          </Link>
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-base-content/80">
+                          <Link href={slice.href} className="hover:text-primary">
+                            {valueKind === "money"
+                              ? formatMoney(slice.value)
+                              : slice.value.toLocaleString("en-US")}
+                          </Link>
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-base-content/55">
+                          {pct}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-base-300/70 bg-base-100/80 text-xs font-semibold">
+                    <td className="px-2.5 py-1.5">Total</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {valueKind === "money"
+                        ? formatMoney(total)
+                        : total.toLocaleString("en-US")}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-base-content/55">
+                      100%
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
         )}
         {hasData && !fillParent ? (
           <p className="shrink-0 text-center text-xs text-base-content/50">
-            Total{" "}
-            {valueKind === "money"
-              ? formatMoney(total)
-              : `${total.toLocaleString("en-US")} contracts`}
-            {" ? "}
-            click a slice or label to open Contracts
+            Click a slice or row to open matching contracts
           </p>
         ) : null}
       </div>
@@ -344,6 +372,8 @@ export function WorkOrderTrendChart({
     : compact
       ? "h-40 w-full min-w-0"
       : "h-64 w-full min-w-0";
+  const hasActivity =
+    workOrderTrend.length > 0 && workOrderTrend.some((d) => (Number(d.count) || 0) > 0);
 
   return (
     <div
@@ -360,20 +390,27 @@ export function WorkOrderTrendChart({
             Work orders
           </Link>
         </div>
-        <div className={`${chartH} ${fillParent ? "min-h-0 flex-1" : ""}`}>
-          <ChartMount>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={workOrderTrend}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="count" name="Work Orders" fill="#1f5c42" />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartMount>
-        </div>
+        {!hasActivity ? (
+          <EmptyState
+            title="No work orders in the last 6 months"
+            description="Create your first job to see volume trends on this chart."
+          />
+        ) : (
+          <div className={`${chartH} ${fillParent ? "min-h-0 flex-1" : ""}`}>
+            <ChartMount>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={workOrderTrend}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="count" name="Work Orders" fill="#1f5c42" />
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartMount>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -49,7 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       {
         href: "/dashboard",
-        label: "Admin Home",
+        label: "Admin Dashboard",
         roles: ["administrator"],
       },
       {
