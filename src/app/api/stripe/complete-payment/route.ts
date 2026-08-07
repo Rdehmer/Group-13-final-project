@@ -5,12 +5,11 @@ import { logActivity } from "@/lib/activity";
 import { portalPaymentNotes, stripePortalPaymentMethod } from "@/lib/payments";
 import {
   decodeAllocations,
-  getDemoPaymentIntent,
   getStripe,
   isDemoPaymentIntentId,
   isStripeConfigured,
   isStripeDemoMode,
-  markDemoPaymentSucceeded,
+  verifyDemoPaymentIntent,
 } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -94,18 +93,13 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Demo payments are disabled." }, { status: 503 });
       }
 
-      const demo = getDemoPaymentIntent(paymentIntentId);
+      const demo = verifyDemoPaymentIntent(paymentIntentId, user.id, profile.customer_id);
       if (!demo) {
         return NextResponse.json(
-          { error: "Demo payment expired. Start checkout again." },
+          { error: "Demo payment expired or invalid. Start checkout again." },
           { status: 400 },
         );
       }
-      if (demo.userId !== user.id || demo.customerId !== profile.customer_id) {
-        return NextResponse.json({ error: "Payment does not belong to this user." }, { status: 403 });
-      }
-
-      markDemoPaymentSucceeded(paymentIntentId);
 
       const { method: paymentMethod, display: methodDisplay } = stripePortalPaymentMethod({
         type: "card",

@@ -82,6 +82,7 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
 
   const [stripeConfigured, setStripeConfigured] = useState(initialStripeConfig.configured);
   const [stripeDemo, setStripeDemo] = useState(initialStripeConfig.demo);
+  const [stripeSetupHint, setStripeSetupHint] = useState<string | null>(null);
   const [stripeSession, setStripeSession] = useState<StripeSession | null>(null);
 
   const load = useCallback(async (options?: { silent?: boolean }) => {
@@ -187,6 +188,18 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
     setStripeConfigured(initialStripeConfig.configured);
     setStripeDemo(initialStripeConfig.demo);
   }, [initialStripeConfig.configured, initialStripeConfig.demo]);
+
+  useEffect(() => {
+    fetch("/api/stripe/config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((config) => {
+        if (!config) return;
+        setStripeConfigured(Boolean(config.configured));
+        setStripeDemo(Boolean(config.demo));
+        setStripeSetupHint(typeof config.setupHint === "string" ? config.setupHint : null);
+      })
+      .catch(() => {});
+  }, []);
 
   // Handle Stripe redirect return
   useEffect(() => {
@@ -419,7 +432,7 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
         <Lock className="h-4 w-4 shrink-0 opacity-90" />
         <p className="text-sm font-medium">
           {stripeDemo
-            ? "Demo checkout · Payments are simulated locally (no Stripe keys)"
+            ? "Demo checkout · Payments are simulated (no Stripe keys required)"
             : "Powered by Stripe · Card & bank payments (PCI-compliant)"}
         </p>
         <span className="ml-auto text-xs opacity-80">EquipmentIQ</span>
@@ -431,9 +444,10 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
           <div>
             <p className="font-semibold">Stripe keys required</p>
             <p className="opacity-80">
-              Add <code className="text-xs">STRIPE_SECRET_KEY</code> and{" "}
-              <code className="text-xs">NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY</code> to{" "}
-              <code className="text-xs">.env.local</code>, then restart the dev server. Use test keys from{" "}
+              Add <code className="text-xs">STRIPE_SECRET_KEY</code> (
+              <code className="text-xs">sk_test_...</code>) and{" "}
+              <code className="text-xs">NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY</code> in Vercel Environment
+              Variables, then redeploy. Or set locally in <code className="text-xs">.env.local</code>.{" "}
               <a
                 className="link"
                 href="https://dashboard.stripe.com/test/apikeys"
@@ -445,6 +459,11 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
               .
             </p>
           </div>
+        </div>
+      ) : stripeSetupHint ? (
+        <div className="alert alert-info text-sm">
+          <AlertCircle className="h-4 w-4" />
+          <span>{stripeSetupHint}</span>
         </div>
       ) : null}
 
@@ -693,7 +712,7 @@ export function PayPortalClient({ initialStripeConfig }: { initialStripeConfig: 
                   <div className="rounded-xl border border-amber-500/30 bg-amber-50 px-4 py-3 text-sm dark:bg-amber-950/30">
                     <p className="font-semibold">Demo checkout</p>
                     <p className="mt-1 opacity-80">
-                      No Stripe keys are configured. Confirm to simulate a successful card payment of{" "}
+                      Stripe keys are not configured. Confirm to simulate a successful card payment of{" "}
                       <span className="font-medium tabular-nums">{formatMoney(stripeSession.amount)}</span>.
                     </p>
                   </div>

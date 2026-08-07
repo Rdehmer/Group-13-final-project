@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "crypto";
 import Stripe from "stripe";
 
 let stripeSingleton: Stripe | null = null;
@@ -13,21 +14,51 @@ export type DemoPaymentIntent = {
   createdAt: number;
 };
 
-const demoIntents = new Map<string, DemoPaymentIntent>();
+type DemoTokenPayload = {
+  userId: string;
+  customerId: string;
+  amount: number;
+  allocations: { invoiceId: string; amount: number }[];
+  memo: string | null;
+  exp: number;
+  createdAt: number;
+};
+
+const DEMO_TOKEN_TTL_MS = 30 * 60 * 1000;
+
+/** Standard secret keys only — restricted rk_/rkcs_ keys cannot create PaymentIntents. */
+export function isUsableStripeSecretKey(key: string): boolean {
+  return key.startsWith("sk_test_") || key.startsWith("sk_live_");
+}
 
 export function isStripeConfigured(): boolean {
-  return Boolean(process.env.STRIPE_SECRET_KEY?.trim() && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim());
+  const secret = process.env.STRIPE_SECRET_KEY?.trim();
+  const publishable = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim();
+  if (!secret || !publishable) return false;
+  return isUsableStripeSecretKey(secret);
 }
 
 /**
- * Local simulated checkout when live Stripe keys are absent.
- * Off in production unless STRIPE_DEMO_MODE=true; force-off with STRIPE_DEMO_MODE=false.
+ * Simulated checkout when live Stripe keys are absent or unusable.
+ * On by default (local + Vercel). Force off with STRIPE_DEMO_MODE=false.
  */
 export function isStripeDemoMode(): boolean {
   if (isStripeConfigured()) return false;
   if (process.env.STRIPE_DEMO_MODE === "false") return false;
-  if (process.env.STRIPE_DEMO_MODE === "true") return true;
-  return process.env.NODE_ENV !== "production";
+  return true;
+}
+
+/** Non-fatal setup note when env vars are partial or a restricted key is set. */
+export function getStripeSetupHint(): string | null {
+  const secret = process.env.STRIPE_SECRET_KEY?.trim();
+  const publishable = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim();
+  if (!secret && !publishable) return null;
+  if (!publishable) return "Add NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY for live Stripe checkout.";
+  if (!secret) return "Add STRIPE_SECRET_KEY for live Stripe checkout.";
+  if (!isUsableStripeSecretKey(secret)) {
+    return "Use a standard sk_test_ secret key in Vercel (restricted rk_ keys cannot charge cards). Demo checkout is active instead.";
+  }
+  return null;
 }
 
 export function canAcceptPortalPayments(): boolean {
@@ -51,6 +82,30 @@ export function getStripePublishableKey(): string {
   return process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() ?? "";
 }
 
+function demoSigningSecret(): string {
+  return (
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
+    "equipmentiq-demo-checkout"
+  );
+}
+
+function toBase64Url(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function fromBase64Url(value: string): string | null {
+  try {
+    return Buffer.from(value, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function signDemoPayload(encodedPayload: string): string {
+  return createHmac("sha256", demoSigningSecret()).update(encodedPayload).digest("base64url");
+}
+
 export function createDemoPaymentIntent(input: {
   customerId: string;
   userId: string;
@@ -58,8 +113,21 @@ export function createDemoPaymentIntent(input: {
   allocations: { invoiceId: string; amount: number }[];
   memo: string | null;
 }): DemoPaymentIntent {
-  const id = `demo_pi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-  const intent: DemoPaymentIntent = {
+  const createdAt = Date.now();
+  const payload: DemoTokenPayload = {
+    userId: input.userId,
+    customerId: input.customerId,
+    amount: input.amount,
+    allocations: input.allocations,
+    memo: input.memo,
+    createdAt,
+    exp: createdAt + DEMO_TOKEN_TTL_MS,
+  };
+  const encodedPayload = toBase64Url(JSON.stringify(payload));
+  const signature = signDemoPayload(encodedPayload);
+  const id = `demo_pi_${encodedPayload}.${signature}`;
+
+  return {
     id,
     customerId: input.customerId,
     userId: input.userId,
@@ -67,22 +135,61 @@ export function createDemoPaymentIntent(input: {
     allocations: input.allocations,
     memo: input.memo,
     status: "requires_confirmation",
-    createdAt: Date.now(),
+    createdAt,
   };
-  demoIntents.set(id, intent);
-  return intent;
 }
 
-export function getDemoPaymentIntent(id: string): DemoPaymentIntent | null {
-  return demoIntents.get(id) ?? null;
-}
+export function verifyDemoPaymentIntent(
+  id: string,
+  userId: string,
+  customerId: string,
+): DemoPaymentIntent | null {
+  if (!isDemoPaymentIntentId(id)) return null;
 
-export function markDemoPaymentSucceeded(id: string): DemoPaymentIntent | null {
-  const intent = demoIntents.get(id);
-  if (!intent) return null;
-  intent.status = "succeeded";
-  demoIntents.set(id, intent);
-  return intent;
+  const tokenBody = id.slice("demo_pi_".length);
+  const dot = tokenBody.lastIndexOf(".");
+  if (dot <= 0) return null;
+
+  const encodedPayload = tokenBody.slice(0, dot);
+  const signature = tokenBody.slice(dot + 1);
+  if (!encodedPayload || !signature) return null;
+
+  const expected = signDemoPayload(encodedPayload);
+  const sigBuf = Buffer.from(signature);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
+    return null;
+  }
+
+  const raw = fromBase64Url(encodedPayload);
+  if (!raw) return null;
+
+  let payload: DemoTokenPayload;
+  try {
+    payload = JSON.parse(raw) as DemoTokenPayload;
+  } catch {
+    return null;
+  }
+
+  if (
+    payload.userId !== userId ||
+    payload.customerId !== customerId ||
+    !Array.isArray(payload.allocations) ||
+    payload.exp <= Date.now()
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    customerId: payload.customerId,
+    userId: payload.userId,
+    amount: payload.amount,
+    allocations: payload.allocations,
+    memo: payload.memo,
+    status: "requires_confirmation",
+    createdAt: payload.createdAt,
+  };
 }
 
 export function isDemoPaymentIntentId(id: string): boolean {
