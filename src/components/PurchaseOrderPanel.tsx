@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -66,6 +66,7 @@ export function PurchaseOrderPanel({
   compact?: boolean;
 }) {
   const supabase = createClient();
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [orders, setOrders] = useState<PurchaseOrderWithDetails[]>([]);
   const [inventory, setInventory] = useState<Part[]>([]);
   const [schemaError, setSchemaError] = useState<string | null>(null);
@@ -85,6 +86,19 @@ export function PurchaseOrderPanel({
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
   const [files, setFiles] = useState<FileList | null>(null);
   const [invoicePoDraft, setInvoicePoDraft] = useState(invoicePoNumber ?? "");
+
+  function openAddPoForm() {
+    setError(null);
+    setForm({ po_number: nextPoNumber(), vendor_name: "", notes: "" });
+    setLines([emptyLine()]);
+    setFiles(null);
+    setShowForm(true);
+    window.setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      const input = formRef.current?.querySelector<HTMLInputElement>('input[name="po_number"]');
+      input?.focus();
+    }, 40);
+  }
 
   useEffect(() => {
     setInvoicePoDraft(invoicePoNumber ?? "");
@@ -186,18 +200,32 @@ export function PurchaseOrderPanel({
   async function createPo(e: React.FormEvent) {
     e.preventDefault();
     if (!canEdit) return;
+
+    const poNumber = form.po_number.trim();
+    if (!poNumber) {
+      setError("Enter a PO number.");
+      return;
+    }
+    if (!invoiceId && !workOrderId && !fallbackInvoiceId) {
+      setError("Open a job or invoice before creating a PO.");
+      return;
+    }
+
     setBusy(true);
     setError(null);
+    setSchemaError(null);
 
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
+    const linkedInvoiceId = invoiceId || fallbackInvoiceId || null;
+
     const { data: po, error: poError } = await supabase
       .from("purchase_orders")
       .insert({
-        po_number: form.po_number.trim(),
-        invoice_id: invoiceId || fallbackInvoiceId || null,
+        po_number: poNumber,
+        invoice_id: linkedInvoiceId,
         work_order_id: workOrderId || null,
         vendor_name: form.vendor_name.trim() || null,
         notes: form.notes.trim() || null,
@@ -208,7 +236,9 @@ export function PurchaseOrderPanel({
 
     if (poError || !po) {
       const msg =
-        poError?.message?.includes("purchase_orders") || poError?.message?.includes("schema cache")
+        poError?.message?.includes("purchase_orders") ||
+        poError?.message?.includes("schema cache") ||
+        poError?.code === "42P01"
           ? `${poError?.message ?? "Error"} — run supabase/migrations/20260805_purchase_orders.sql in Supabase.`
           : poError?.message ?? "Could not create PO";
       setError(msg);
@@ -232,7 +262,7 @@ export function PurchaseOrderPanel({
         })),
       );
       if (lineError) {
-        setError(lineError.message);
+        setError(`PO ${poNumber} created, but lines failed: ${lineError.message}`);
         setBusy(false);
         await refresh();
         return;
@@ -254,10 +284,23 @@ export function PurchaseOrderPanel({
       }
     }
 
-    // Sync invoice document PO from first/main tech PO when field empty
-    if (invoiceId && onInvoicePoChange && !invoicePoDraft) {
-      await onInvoicePoChange(form.po_number.trim());
-      setInvoicePoDraft(form.po_number.trim());
+    // Always stamp invoice document PO when empty so billing sees the number
+    if (linkedInvoiceId && !invoicePoDraft.trim()) {
+      if (onInvoicePoChange) {
+        await onInvoicePoChange(poNumber);
+      } else {
+        await supabase
+          .from("invoices")
+          .update({ po_number: poNumber, updated_at: new Date().toISOString() })
+          .eq("id", linkedInvoiceId)
+          .is("po_number", null);
+      }
+      setInvoicePoDraft(poNumber);
+    } else if (linkedInvoiceId && !invoiceId && po.invoice_id !== linkedInvoiceId) {
+      await supabase
+        .from("purchase_orders")
+        .update({ invoice_id: linkedInvoiceId, updated_at: new Date().toISOString() })
+        .eq("id", po.id);
     }
 
     await logActivity(supabase, {
@@ -265,7 +308,7 @@ export function PurchaseOrderPanel({
       action: "created",
       recordType: "purchase_order",
       recordId: po.id,
-      newValue: form.po_number,
+      newValue: poNumber,
     });
 
     setShowForm(false);
@@ -358,14 +401,17 @@ export function PurchaseOrderPanel({
         {canEdit ? (
           <button
             type="button"
-            className="btn btn-outline btn-sm gap-1"
-            disabled={busy || Boolean(schemaError)}
+            className="btn btn-primary btn-sm gap-1"
+            disabled={busy}
             onClick={() => {
-              setShowForm((v) => !v);
-              setForm((f) => ({ ...f, po_number: nextPoNumber() }));
+              if (showForm) {
+                setShowForm(false);
+                return;
+              }
+              openAddPoForm();
             }}
           >
-            <Plus className="h-4 w-4" /> New PO
+            <Plus className="h-4 w-4" /> {showForm ? "Close" : "Add PO"}
           </button>
         ) : null}
       </div>
@@ -374,13 +420,18 @@ export function PurchaseOrderPanel({
       {error ? <div className="alert alert-error text-sm">{error}</div> : null}
 
       {showForm && canEdit ? (
-        <form onSubmit={createPo} className="rounded-box border border-primary/30 bg-primary/5 p-4 space-y-3">
+        <form
+          ref={formRef}
+          onSubmit={createPo}
+          className="rounded-box border border-primary/30 bg-primary/5 p-4 space-y-3"
+        >
           <p className="text-sm opacity-70">
             Create a PO number, attach ordered parts, and upload receipt photos/PDFs for billing.
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <FormRow label="PO number" required>
               <input
+                name="po_number"
                 className="input input-bordered input-sm w-full font-mono"
                 value={form.po_number}
                 onChange={(e) => setForm({ ...form, po_number: e.target.value })}

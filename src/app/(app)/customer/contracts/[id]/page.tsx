@@ -87,7 +87,7 @@ function WhatsNextPanel({ contract }: { contract: CustomerContract }) {
       <p className="text-sm opacity-70">{contractStatusMessage(contract.status)}</p>
       {(status === "active" || status === "renewed") ? (
         <Link href="/customer/request-service" className="btn btn-outline btn-sm w-fit">
-          Request service
+          Request Service
         </Link>
       ) : null}
     </SectionCard>
@@ -189,7 +189,7 @@ export default function CustomerContractDetailPage() {
             </Link>
             {isActive ? (
               <Link href="/customer/request-service" className="btn btn-outline btn-sm">
-                Request service
+                Request Service
               </Link>
             ) : null}
           </div>
