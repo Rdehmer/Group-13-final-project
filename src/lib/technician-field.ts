@@ -205,12 +205,16 @@ export function phoneDigits(phone: string): string {
 
 /**
  * Show the full customer number clearly, including area code.
- * US 10-digit (or 11 with leading 1) → (XXX) XXX-XXXX. Otherwise keep original.
+ * US 10-digit (or 11 with leading 1) → (XXX) XXX-XXXX.
+ * 7-digit local numbers get Austin TX (512) for demo display.
  */
 export function formatCustomerPhone(phone: string): string {
   const digits = phoneDigits(phone).replace(/^\+/, "");
-  const national =
+  let national =
     digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (national.length === 7) {
+    national = `512${national}`;
+  }
   if (national.length === 10) {
     return `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`;
   }

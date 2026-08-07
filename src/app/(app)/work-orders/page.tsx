@@ -9,13 +9,23 @@ import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
-import type { Customer, Equipment, Profile, WorkOrder } from "@/lib/types";
+import type { Customer, Equipment, Profile, Vendor, WorkOrder } from "@/lib/types";
 import { WORK_ORDER_TYPES } from "@/lib/work-order-types";
 import {
   WO_STATUSES,
   scheduleFieldsForStatusChange,
   statusForNewWorkOrder,
 } from "@/lib/work-order-status";
+import {
+  assignmentPatchFromTarget,
+  decodeAssignTarget,
+  encodeAssignTarget,
+  hasAssignee,
+} from "@/lib/work-order-assign";
+import {
+  STAFF_DELINQUENCY_LOCK_MESSAGE,
+  isDelinquencyLockError,
+} from "@/lib/contract-billing";
 
 type WorkOrderRow = WorkOrder & { customers?: { id: string; name: string } | null };
 
@@ -42,7 +52,7 @@ const emptyWorkOrderForm = {
   equipment_id: "",
   work_order_type: "Preventive Maintenance",
   priority: "Normal" as WorkOrder["priority"],
-  assigned_technician_id: "",
+  assign_target: "",
   scheduled_date: "",
   problem_description: "",
   completion_proof_requirement: "photo_or_signature" as WorkOrder["completion_proof_requirement"],
@@ -63,6 +73,7 @@ export default function WorkOrdersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
+  const [portalVendors, setPortalVendors] = useState<Vendor[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,18 +101,25 @@ export default function WorkOrdersPage() {
   const today = startOfDay(new Date());
 
   async function load() {
-    const [{ data: wo }, { data: cust }, { data: tech }, { data: { user } }] = await Promise.all([
+    const [{ data: wo }, { data: cust }, { data: tech }, { data: vendors }, { data: { user } }] = await Promise.all([
       supabase
         .from("work_orders")
         .select("*, customers(id, name)")
         .order("created_at", { ascending: false }),
       supabase.from("customers").select("*").order("name"),
       supabase.from("profiles").select("*").eq("role", "technician").eq("is_active", true),
+      supabase
+        .from("vendors")
+        .select("id, name, approval_status, is_active")
+        .eq("is_active", true)
+        .eq("approval_status", "Approved")
+        .order("name"),
       supabase.auth.getUser(),
     ]);
     setWorkOrders((wo as WorkOrderRow[]) ?? []);
     setCustomers((cust as Customer[]) ?? []);
     setTechnicians((tech as Profile[]) ?? []);
+    setPortalVendors((vendors as Vendor[]) ?? []);
     if (user) {
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(p as Profile);
@@ -351,23 +369,28 @@ export default function WorkOrdersPage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const target = decodeAssignTarget(form.assign_target);
+    const assignee = assignmentPatchFromTarget(target);
+    const assigned = hasAssignee(target);
     const payload = {
       work_order_number: nextWoNumber(),
       customer_id: form.customer_id,
       equipment_id: form.equipment_id || null,
       work_order_type: form.work_order_type,
       priority: form.priority,
-      assigned_technician_id: form.assigned_technician_id || null,
+      ...assignee,
       scheduled_date: form.scheduled_date || null,
       problem_description: form.problem_description || null,
       completion_proof_requirement: form.completion_proof_requirement,
       status: isManager
         ? statusForNewWorkOrder({
             scheduled_date: form.scheduled_date || null,
-            assigned_technician_id: form.assigned_technician_id || null,
+            ...assignee,
           })
-        : form.assigned_technician_id
+        : assigned && target.kind !== "vendor"
           ? "Assigned"
+          : assigned && target.kind === "vendor"
+            ? "Requested"
           : "Requested",
     };
     const { data, error: insertError } = await supabase
@@ -376,7 +399,11 @@ export default function WorkOrdersPage() {
       .select()
       .single();
     if (insertError) {
-      setError(insertError.message);
+      setError(
+        isDelinquencyLockError(insertError.message)
+          ? STAFF_DELINQUENCY_LOCK_MESSAGE
+          : insertError.message,
+      );
       return;
     }
     await logActivity(supabase, {
@@ -682,18 +709,27 @@ export default function WorkOrdersPage() {
                   ))}
                 </select>
               </FormRow>
-              <FormRow label="Technician">
+              <FormRow label="Assigned to">
                 <select
                   className="select select-bordered w-full"
-                  value={form.assigned_technician_id}
-                  onChange={(e) => setForm({ ...form, assigned_technician_id: e.target.value })}
+                  value={form.assign_target}
+                  onChange={(e) => setForm({ ...form, assign_target: e.target.value })}
                 >
                   <option value="">Unassigned</option>
-                  {technicians.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.full_name ?? t.email}
-                    </option>
-                  ))}
+                  <optgroup label="Technicians">
+                    {technicians.map((t) => (
+                      <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                        {t.full_name ?? t.email}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Vendors (portal)">
+                    {portalVendors.map((v) => (
+                      <option key={v.id} value={encodeAssignTarget({ kind: "vendor", id: v.id })}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </FormRow>
               <FormRow label="Scheduled">

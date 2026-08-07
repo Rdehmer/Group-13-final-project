@@ -2,18 +2,21 @@
 
 /**
  * Vendors directory — mgmt/admin create & approve; billing uses approved suppliers for AP.
+ * Includes a product-vendor preference matrix (cost, lead time, stars).
  */
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { EmptyState, StatusBadge, statusTone } from "@/components/ui";
 import { ScrollableOverlay } from "@/components/ScrollableOverlay";
+import { VendorMatrixPanel } from "@/components/VendorMatrixPanel";
 import { formatMoney } from "@/lib/calculations";
-import type { Profile, Vendor, VendorBill } from "@/lib/types";
+import type { CompanySettings, Profile, Vendor, VendorBill, VendorRating } from "@/lib/types";
 import {
   canApproveVendors,
   canCreateVendor,
@@ -22,6 +25,12 @@ import {
   openBalanceForBills,
   worstAgingHint,
 } from "@/lib/vendors";
+import {
+  DEFAULT_VENDOR_MATRIX_SETTINGS,
+  buildProductVendorMatrix,
+  normalizeMatrixSettings,
+  type VendorMatrixSettings,
+} from "@/lib/vendor-matrix";
 
 const ALLOWED_ROLES = new Set(["administrator", "service_manager", "billing"]);
 
@@ -45,9 +54,17 @@ type VendorRow = Vendor & {
 
 export default function VendorsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [bills, setBills] = useState<VendorBill[]>([]);
+  const [ratings, setRatings] = useState<VendorRating[]>([]);
+  const [matrixSettings, setMatrixSettings] = useState<VendorMatrixSettings>(
+    DEFAULT_VENDOR_MATRIX_SETTINGS,
+  );
+  const [view, setView] = useState<"directory" | "matrix">(
+    searchParams.get("view") === "matrix" ? "matrix" : "directory",
+  );
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
@@ -77,11 +94,17 @@ export default function VendorsPage() {
     const { data: prof } = await supabase.from("profiles").select("*").eq("id", user.id).single();
     setProfile((prof as Profile) ?? null);
 
-    const [{ data: vendorRows, error: vendorError }, { data: billRows, error: billError }] =
-      await Promise.all([
-        supabase.from("vendors").select("*").order("name"),
-        supabase.from("vendor_bills").select("*"),
-      ]);
+    const [
+      { data: vendorRows, error: vendorError },
+      { data: billRows, error: billError },
+      { data: ratingRows, error: ratingError },
+      { data: settingsRow },
+    ] = await Promise.all([
+      supabase.from("vendors").select("*").order("name"),
+      supabase.from("vendor_bills").select("*"),
+      supabase.from("vendor_ratings").select("*"),
+      supabase.from("company_settings").select("*").limit(1).maybeSingle(),
+    ]);
 
     if (vendorError || billError) {
       const msg = vendorError?.message ?? billError?.message ?? "Failed to load vendors.";
@@ -95,17 +118,28 @@ export default function VendorsPage() {
       }
       setVendors([]);
       setBills([]);
+      setRatings([]);
     } else {
       setSchemaMissing(false);
       setVendors((vendorRows as Vendor[]) ?? []);
       setBills((billRows as VendorBill[]) ?? []);
+      // Ratings table may be missing on older DBs; treat as empty.
+      if (ratingError) setRatings([]);
+      else setRatings((ratingRows as VendorRating[]) ?? []);
     }
+    setMatrixSettings(
+      normalizeMatrixSettings((settingsRow as CompanySettings | null) ?? undefined),
+    );
     setLoading(false);
   }
 
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    setView(searchParams.get("view") === "matrix" ? "matrix" : "directory");
+  }, [searchParams]);
 
   const rows: VendorRow[] = useMemo(() => {
     return vendors.map((v) => {
@@ -118,6 +152,16 @@ export default function VendorsPage() {
     });
   }, [vendors, bills]);
 
+  const matrixRows = useMemo(
+    () =>
+      buildProductVendorMatrix({
+        vendors,
+        ratings,
+        bills,
+        settings: matrixSettings,
+      }),
+    [vendors, ratings, bills, matrixSettings],
+  );
   const pending = useMemo(
     () => rows.filter((v) => (v.approval_status ?? "Approved") === "Pending"),
     [rows],
@@ -241,6 +285,65 @@ export default function VendorsPage() {
     await load();
   }
 
+  async function togglePreferred(vendorId: string, next: boolean) {
+    if (!profile || !isManager) return;
+    setBusyId(vendorId);
+    setError(null);
+    const preferredCount = vendors.filter((v) => v.is_preferred && v.id !== vendorId).length;
+    const { error: updErr } = await supabase
+      .from("vendors")
+      .update({
+        is_preferred: next,
+        preferred_rank: next ? preferredCount + 1 : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", vendorId);
+    if (updErr) {
+      setError(updErr.message);
+      setBusyId(null);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: profile.id,
+      action: next ? "vendor_preferred" : "vendor_unpreferred",
+      recordType: "vendor",
+      recordId: vendorId,
+      newValue: next ? "preferred" : "not preferred",
+    });
+    setBusyId(null);
+    await load();
+  }
+
+  async function deactivateVendor(vendorId: string) {
+    if (!profile || !isManager) return;
+    setBusyId(vendorId);
+    setError(null);
+    const { error: updErr } = await supabase
+      .from("vendors")
+      .update({
+        is_active: false,
+        is_preferred: false,
+        preferred_rank: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", vendorId);
+    if (updErr) {
+      setError(updErr.message);
+      setBusyId(null);
+      return;
+    }
+    await logActivity(supabase, {
+      userId: profile.id,
+      action: "vendor_deactivated",
+      recordType: "vendor",
+      recordId: vendorId,
+      newValue: "pruned via product matrix",
+    });
+    setSuccess("Supplier deactivated (pruned from active directory).");
+    setBusyId(null);
+    await load();
+  }
+
   if (loading) {
     return <div className="p-8 text-center opacity-60">Loading vendors…</div>;
   }
@@ -257,18 +360,32 @@ export default function VendorsPage() {
   return (
     <div>
       <PageHeader
-        title="Suppliers"
+        title={view === "matrix" ? "Vendor Matrix" : "Vendor Suppliers"}
         description={
-          isManager
-            ? "Parts and materials suppliers, approvals, bills, and payables"
-            : "Enter bills and track payables for approved suppliers"
+          view === "matrix"
+            ? "Ranked preference scorecard — switch Product / Service with the tabs below"
+            : isManager
+              ? "Parts and materials suppliers directory"
+              : "Enter bills and track payables for approved suppliers"
         }
         actions={
           <div className="flex flex-wrap gap-2">
-            <Link href="/vendors/aging" className="btn btn-outline btn-sm">
-              A/P Aging
-            </Link>
-            {canCreate ? (
+            {view === "directory" ? (
+              <>
+                <Link href="/vendors?view=matrix" className="btn btn-outline btn-sm">
+                  Open matrix
+                </Link>
+                <Link href="/vendors/aging" className="btn btn-outline btn-sm">
+                  A/P Aging
+                </Link>
+              </>
+            ) : null}
+            {profile.role === "administrator" ? (
+              <Link href="/settings/vendor-matrix" className="btn btn-outline btn-sm">
+                Customize
+              </Link>
+            ) : null}
+            {view === "directory" && canCreate ? (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
@@ -285,13 +402,15 @@ export default function VendorsPage() {
         }
       />
 
-      <p className="mb-4 text-sm opacity-70">
-        Parts &amp; materials AP. For specialty subcontractors, see{" "}
-        <Link href="/service-vendors" className="link link-hover font-medium">
-          Service Vendors
-        </Link>
-        .
-      </p>
+      {view === "directory" ? (
+        <p className="mb-4 text-sm opacity-70">
+          Parts &amp; materials AP. Specialty subcontractors are under{" "}
+          <Link href="/service-vendors" className="link link-hover font-medium">
+            Vendor Services
+          </Link>
+          .
+        </p>
+      ) : null}
 
       {error ? (
         <div role="alert" className="alert alert-error mb-4">
@@ -304,6 +423,22 @@ export default function VendorsPage() {
         </div>
       ) : null}
 
+      {view === "matrix" ? (
+        <div className="mb-8">
+          <VendorMatrixPanel
+            rows={matrixRows}
+            settings={matrixSettings}
+            family="product"
+            canEditPreferred={isManager}
+            busyId={busyId}
+            onTogglePreferred={(id, next) => void togglePreferred(id, next)}
+            onDeactivate={(id) => void deactivateVendor(id)}
+          />
+        </div>
+      ) : null}
+
+      {view === "directory" ? (
+        <>
       {isManager && pending.length > 0 ? (
         <section className="mb-6 rounded-xl border border-warning/40 bg-warning/5 p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -445,6 +580,8 @@ export default function VendorsPage() {
           </table>
         </DualHorizontalScroll>
       )}
+        </>
+      ) : null}
 
       {showForm && canCreate ? (
         <ScrollableOverlay title="New supplier" onClose={() => setShowForm(false)}>

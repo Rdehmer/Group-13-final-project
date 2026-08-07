@@ -18,7 +18,16 @@ import {
   parseCustomerContracts,
   type CustomerContract,
 } from "@/lib/contracts";
-import type { Equipment, Profile, WorkOrder } from "@/lib/types";
+import {
+  CUSTOMER_DELINQUENCY_LOCK_MESSAGE,
+  DEFAULT_DELINQUENCY_GRACE_DAYS,
+  customerIsDelinquencyLocked,
+  findDelinquentMonthlyInvoices,
+  isDelinquencyLockError,
+  type DelinquencyLockPolicy,
+  type DelinquentMonthlyInvoice,
+} from "@/lib/contract-billing";
+import type { Equipment, Invoice, Profile, WorkOrder } from "@/lib/types";
 import type { WorkOrderType } from "@/lib/work-order-types";
 
 type ServiceKind = "repair" | "follow_up" | "routine" | "emergency_repair";
@@ -195,9 +204,16 @@ function RequestServicePageInner() {
   const [oneOffOutsideContract, setOneOffOutsideContract] = useState(false);
   const [blockingContract, setBlockingContract] = useState<CustomerContract | null>(null);
   const [waitDays, setWaitDays] = useState(CONTRACT_SERVICE_REQUEST_WAIT_DAYS);
+  const [delinquencyPolicy, setDelinquencyPolicy] = useState<DelinquencyLockPolicy>({
+    enabled: true,
+    graceDays: DEFAULT_DELINQUENCY_GRACE_DAYS,
+  });
+  const [delinquentInvoices, setDelinquentInvoices] = useState<DelinquentMonthlyInvoice[]>([]);
+  const [delinquencyLocked, setDelinquencyLocked] = useState(false);
 
   const loadData = useCallback(async (customerId: string) => {
-    const [{ data: eq }, { data: sc }, { data: customer }, { data: settings }] = await Promise.all([
+    const [{ data: eq }, { data: sc }, { data: customer }, { data: settings }, { data: inv }] =
+      await Promise.all([
       supabase.from("equipment").select("*").eq("customer_id", customerId).order("name"),
       supabase
         .from("service_contracts")
@@ -211,18 +227,40 @@ function RequestServicePageInner() {
       supabase.from("customers").select("phone").eq("id", customerId).single(),
       supabase
         .from("company_settings")
-        .select("contract_service_request_wait_days")
+        .select(
+          "contract_service_request_wait_days, delinquency_service_request_grace_days, delinquency_service_request_lock_enabled",
+        )
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from("invoices")
+        .select("*")
+        .eq("customer_id", customerId)
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0),
     ]);
     setEquipment((eq as Equipment[]) ?? []);
-    setContracts(parseCustomerContracts(sc ?? []));
+    const parsedContracts = parseCustomerContracts(sc ?? []);
+    setContracts(parsedContracts);
     const loadedWait = settings?.contract_service_request_wait_days;
     setWaitDays(
       typeof loadedWait === "number" && Number.isFinite(loadedWait)
         ? Math.max(0, Math.floor(loadedWait))
         : CONTRACT_SERVICE_REQUEST_WAIT_DAYS,
     );
+    const policy: DelinquencyLockPolicy = {
+      enabled: settings?.delinquency_service_request_lock_enabled ?? true,
+      graceDays:
+        typeof settings?.delinquency_service_request_grace_days === "number" &&
+        Number.isFinite(settings.delinquency_service_request_grace_days)
+          ? Math.max(0, Math.floor(settings.delinquency_service_request_grace_days))
+          : DEFAULT_DELINQUENCY_GRACE_DAYS,
+    };
+    setDelinquencyPolicy(policy);
+    const invoices = (inv as Invoice[]) ?? [];
+    const delinquent = findDelinquentMonthlyInvoices(parsedContracts, invoices, policy.graceDays);
+    setDelinquentInvoices(delinquent);
+    setDelinquencyLocked(customerIsDelinquencyLocked(parsedContracts, invoices, policy));
     const phone = customer?.phone ?? "";
     setCustomerPhone(phone);
     if (phone) {
@@ -349,6 +387,11 @@ function RequestServicePageInner() {
       return;
     }
 
+    if (delinquencyLocked && delinquencyPolicy.enabled) {
+      setError(CUSTOMER_DELINQUENCY_LOCK_MESSAGE);
+      return;
+    }
+
     const blocking = findBlockingContractForServiceRequest(
       contracts,
       form.equipment_id || null,
@@ -399,7 +442,10 @@ function RequestServicePageInner() {
       .single();
 
     if (insertError) {
-      if (isContractStartDateBlockError(insertError.message) && !useOneOff) {
+      if (isDelinquencyLockError(insertError.message)) {
+        setDelinquencyLocked(true);
+        setError(CUSTOMER_DELINQUENCY_LOCK_MESSAGE);
+      } else if (isContractStartDateBlockError(insertError.message) && !useOneOff) {
         setBlockingContract(
           blocking ??
             findBlockingContractForServiceRequest(contracts, form.equipment_id || null, waitDays),
@@ -465,7 +511,34 @@ function RequestServicePageInner() {
               <li className={`step ${stepIndex >= 3 ? "step-primary" : ""}`}>Confirm</li>
             </ul>
 
-            {error && isContractStartDateBlockError(error) && !oneOffOutsideContract ? (
+            {delinquencyLocked && delinquencyPolicy.enabled ? (
+              <div role="alert" className="alert alert-error text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <div className="flex w-full flex-col gap-3">
+                  <div>
+                    <p className="font-semibold">{CUSTOMER_DELINQUENCY_LOCK_MESSAGE}</p>
+                    {delinquentInvoices[0] ? (
+                      <p className="mt-1 opacity-80">
+                        {delinquentInvoices[0].contractName ? (
+                          <>
+                            Contract <span className="font-medium">{delinquentInvoices[0].contractName}</span>
+                            {" · "}
+                          </>
+                        ) : null}
+                        Invoice {delinquentInvoices[0].invoiceNumber} was due{" "}
+                        {delinquentInvoices[0].dueDate} ({delinquentInvoices[0].daysPastDue} days past due).
+                        {delinquencyPolicy.graceDays > 0
+                          ? ` Grace period is ${delinquencyPolicy.graceDays} days after the due date.`
+                          : null}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Link href="/customer/pay" className="btn btn-primary btn-sm w-fit">
+                    Pay outstanding balance
+                  </Link>
+                </div>
+              </div>
+            ) : error && isContractStartDateBlockError(error) && !oneOffOutsideContract ? (
               <div role="alert" className="alert alert-warning text-sm">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <div className="flex w-full flex-col gap-3">
@@ -838,7 +911,7 @@ function RequestServicePageInner() {
                   Continue
                 </button>
               ) : (
-                <button type="button" className="btn btn-primary" onClick={() => void submitRequest()} disabled={busy}>
+                <button type="button" className="btn btn-primary" onClick={() => void submitRequest()} disabled={busy || (delinquencyLocked && delinquencyPolicy.enabled)}>
                   {busy ? "Submitting…" : oneOffOutsideContract ? `Submit ${CONTRACT_START_DATE_ONE_OFF_TITLE}` : "Submit service request"}
                 </button>
               )}

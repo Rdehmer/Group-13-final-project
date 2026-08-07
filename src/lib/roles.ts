@@ -67,6 +67,11 @@ export const NAV_ITEMS: NavItem[] = [
             label: "Contract Plans",
             roles: ["administrator"],
           },
+          {
+            href: "/settings/vendor-matrix",
+            label: "Vendor Matrix",
+            roles: ["administrator"],
+          },
         ],
       },
     ],
@@ -213,13 +218,18 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["service_manager", "billing"],
         children: [
           {
+            href: "/vendors?view=matrix",
+            label: "Vendor Matrix",
+            roles: ["service_manager", "billing"],
+          },
+          {
             href: "/vendors",
-            label: "Suppliers",
+            label: "Vendor Suppliers",
             roles: ["service_manager", "billing"],
           },
           {
             href: "/service-vendors",
-            label: "Service Vendors",
+            label: "Vendor Services",
             roles: ["service_manager", "billing"],
           },
         ],
@@ -275,6 +285,11 @@ export const NAV_ITEMS: NavItem[] = [
   {
     href: "/vendor",
     label: "Vendor Home",
+    roles: ["vendor"],
+  },
+  {
+    href: "/vendor/jobs",
+    label: "Jobs",
     roles: ["vendor"],
   },
   {

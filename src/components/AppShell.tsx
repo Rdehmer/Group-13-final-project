@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { LogOut, Mail, Menu, Search, Settings } from "lucide-react";
 import { useCustomerRatingGate } from "@/contexts/CustomerRatingGateContext";
 import { type NavItem } from "@/lib/roles";
@@ -33,14 +33,61 @@ function sidebarInboxBadge(href: string, unreadInbox: number): number {
   return 0;
 }
 
+function navHrefParts(href: string): { path: string; view: string | null } {
+  const q = href.indexOf("?");
+  if (q === -1) return { path: href, view: null };
+  const path = href.slice(0, q);
+  const view = new URLSearchParams(href.slice(q + 1)).get("view");
+  return { path, view };
+}
+
+/** Path-only match for badges / coarse “under this section” checks. */
 function isPathActive(pathname: string, href: string) {
-  if (href === "/vendors") {
+  const { path } = navHrefParts(href);
+  if (path === "/vendors") {
     return (
       pathname === "/vendors" ||
       (pathname.startsWith("/vendors/") && !pathname.startsWith("/vendors/aging"))
     );
   }
-  return pathname === href || pathname.startsWith(`${href}/`);
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
+
+/**
+ * Leaf-nav active state.
+ * Vendors → Vendor Matrix | Vendor Suppliers | Vendor Services
+ * Matrix stays active for both product and service matrix URLs.
+ */
+function isNavItemActive(pathname: string, search: string, href: string) {
+  if (href === CUSTOMER_HOME) return pathname === CUSTOMER_HOME;
+
+  const { path, view: hrefView } = navHrefParts(href);
+  const currentView = new URLSearchParams(
+    search.startsWith("?") ? search.slice(1) : search,
+  ).get("view");
+  const onMatrixView = currentView === "matrix";
+
+  // Vendor Matrix — product or service matrix
+  if (path === "/vendors" && hrefView === "matrix") {
+    return (
+      (pathname === "/vendors" && onMatrixView) ||
+      (pathname === "/service-vendors" && onMatrixView)
+    );
+  }
+
+  // Vendor Suppliers — product directory (and supplier detail pages)
+  if (path === "/vendors" && !hrefView) {
+    if (pathname === "/vendors") return !onMatrixView;
+    return pathname.startsWith("/vendors/") && !pathname.startsWith("/vendors/aging");
+  }
+
+  // Vendor Services — service directory (and service vendor detail pages)
+  if (path === "/service-vendors") {
+    if (pathname === "/service-vendors") return !onMatrixView;
+    return pathname.startsWith("/service-vendors/");
+  }
+
+  return pathname === path || pathname.startsWith(`${path}/`);
 }
 
 function gatedNavClassName(isBlocked: boolean, active: boolean, className?: string) {
@@ -91,6 +138,7 @@ function NavLabelWithBadge({ label, count }: { label: string; count?: number }) 
 function GatedNavLink({
   item,
   pathname,
+  search,
   className,
   isGateActive,
   blockNavigation,
@@ -98,14 +146,14 @@ function GatedNavLink({
 }: {
   item: NavItem;
   pathname: string;
+  search: string;
   className?: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeCount?: number;
 }) {
   const router = useRouter();
-  const active =
-    item.href === CUSTOMER_HOME ? pathname === CUSTOMER_HOME : isPathActive(pathname, item.href);
+  const active = isNavItemActive(pathname, search, item.href);
   const isBlocked = isGateActive && item.href !== CUSTOMER_HOME;
   const label = <NavLabelWithBadge label={item.label} count={badgeCount} />;
 
@@ -140,12 +188,14 @@ function GatedNavLink({
 function NavChildList({
   items,
   pathname,
+  search,
   isGateActive,
   blockNavigation,
   badgeForHref,
 }: {
   items: NavItem[];
   pathname: string;
+  search: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeForHref?: (href: string) => number;
@@ -160,6 +210,7 @@ function NavChildList({
               <NavChildList
                 items={child.children}
                 pathname={pathname}
+                search={search}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 badgeForHref={badgeForHref}
@@ -172,6 +223,7 @@ function NavChildList({
             <GatedNavLink
               item={child}
               pathname={pathname}
+              search={search}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
               badgeCount={badgeForHref?.(child.href)}
@@ -186,12 +238,14 @@ function NavChildList({
 function NavDetailsGroup({
   item,
   pathname,
+  search,
   isGateActive,
   blockNavigation,
   badgeForHref,
 }: {
   item: NavItem;
   pathname: string;
+  search: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   badgeForHref: (href: string) => number;
@@ -199,9 +253,7 @@ function NavDetailsGroup({
   const router = useRouter();
   const childActive = item.children!.some(function walk(child): boolean {
     if (child.children?.length) return child.children.some(walk);
-    return child.href === CUSTOMER_HOME
-      ? pathname === CUSTOMER_HOME
-      : isPathActive(pathname, child.href);
+    return isNavItemActive(pathname, search, child.href);
   });
   const sectionOpen =
     childActive ||
@@ -241,6 +293,7 @@ function NavDetailsGroup({
       <NavChildList
         items={item.children!}
         pathname={pathname}
+        search={search}
         isGateActive={isGateActive}
         blockNavigation={blockNavigation}
         badgeForHref={badgeForHref}
@@ -252,6 +305,7 @@ function NavDetailsGroup({
 function NavSection({
   item,
   pathname,
+  search,
   isGateActive,
   blockNavigation,
   unreadInbox,
@@ -259,6 +313,7 @@ function NavSection({
 }: {
   item: NavItem;
   pathname: string;
+  search: string;
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
   unreadInbox: number;
@@ -274,13 +329,13 @@ function NavSection({
               key={`${child.href}-${child.label}`}
               item={child}
               pathname={pathname}
+              search={search}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
               badgeForHref={badgeForHref}
             />
           );
         }
-        const active = isPathActive(pathname, child.href);
         const badgeCount =
           sidebarInboxBadge(child.href, unreadInbox) || badgeForHref(child.href);
         return (
@@ -288,7 +343,7 @@ function NavSection({
             <GatedNavLink
               item={child}
               pathname={pathname}
-              className={active ? "eq-nav-item--active" : ""}
+              search={search}
               isGateActive={isGateActive}
               blockNavigation={blockNavigation}
               badgeCount={badgeCount}
@@ -500,6 +555,7 @@ function AppTopBar({
 
 function SidebarNavBody({
   pathname,
+  search,
   navItems,
   isGateActive,
   blockNavigation,
@@ -508,6 +564,7 @@ function SidebarNavBody({
   profileEmail,
 }: {
   pathname: string;
+  search: string;
   navItems: NavItem[];
   isGateActive: boolean;
   blockNavigation: (event: React.MouseEvent<HTMLElement>) => void;
@@ -535,6 +592,7 @@ function SidebarNavBody({
                 key={item.href}
                 item={item}
                 pathname={pathname}
+                search={search}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 unreadInbox={unreadInbox}
@@ -549,6 +607,7 @@ function SidebarNavBody({
                 key={item.href}
                 item={item}
                 pathname={pathname}
+                search={search}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
                 badgeForHref={badgeForHref}
@@ -571,6 +630,7 @@ function SidebarNavBody({
               <GatedNavLink
                 item={item}
                 pathname={pathname}
+                search={search}
                 className={active ? "eq-nav-item--active" : ""}
                 isGateActive={isGateActive}
                 blockNavigation={blockNavigation}
@@ -597,6 +657,8 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const search = searchParams.toString();
   const router = useRouter();
   const { isGateActive, blockNavigation } = useCustomerRatingGate();
   const [mounted, setMounted] = useState(false);
@@ -708,8 +770,10 @@ export function AppShell({
   const gateActive = mounted && isGateActive;
 
   function badgeForHref(href: string) {
-    if (sidebarInboxBadge(href, unreadInbox) > 0) return unreadInbox;
-    return pendingByHref[href] ?? 0;
+    const { path, view } = navHrefParts(href);
+    if (view === "matrix") return 0;
+    if (sidebarInboxBadge(path, unreadInbox) > 0) return unreadInbox;
+    return pendingByHref[path] ?? pendingByHref[href] ?? 0;
   }
 
   function toggleSidebarCollapsed() {
@@ -740,6 +804,7 @@ export function AppShell({
 
   const sidebarBodyProps = {
     pathname,
+    search,
     navItems,
     isGateActive: gateActive,
     blockNavigation,

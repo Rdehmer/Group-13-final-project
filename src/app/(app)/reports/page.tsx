@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Download,
   Printer,
@@ -58,6 +59,7 @@ import {
   type TechProfile,
   type TimesheetSummaryReport,
 } from "@/lib/reports";
+import { pmObligationStatsForContracts, type PmObligationStats } from "@/lib/pm-scheduler";
 import { contractAssetRollforward } from "@/lib/accounting/earned-revenue";
 import { trialBalance } from "@/lib/accounting/ledger-local";
 import type {
@@ -81,6 +83,7 @@ type PaymentRow = Payment & { customers?: { name: string } };
  */
 export default function ReportsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reportId, setReportId] = useState<ReportId>("executive");
@@ -99,6 +102,13 @@ export default function ReportsPage() {
   const [techFilter, setTechFilter] = useState<string>("");
   /** When viewing timesheet summary, prefer weekly pay periods. */
   const [payPeriodRange, setPayPeriodRange] = useState<DateRange>(() => defaultCurrentPayPeriod());
+
+  useEffect(() => {
+    const raw = searchParams.get("report");
+    if (!raw) return;
+    const known = Object.keys(REPORT_NAME) as ReportId[];
+    if (known.includes(raw as ReportId)) setReportId(raw as ReportId);
+  }, [searchParams]);
 
   async function load() {
     setLoading(true);
@@ -187,6 +197,10 @@ export default function ReportsPage() {
   const unbilled = useMemo(() => unbilledJobs(jobs, costs), [jobs, costs]);
   const invList = useMemo(() => invoicesInRange(invoices, range), [invoices, range]);
   const deferredRev = useMemo(() => deferredRevenueSchedule(contracts, asOf), [contracts, asOf]);
+  const pmStatsByContract = useMemo(
+    () => pmObligationStatsForContracts(contracts, jobs, asOf.slice(0, 7)),
+    [contracts, jobs, asOf],
+  );
   const contractAsset = useMemo(() => contractAssetRollforward(jobs, invoices, asOf), [jobs, invoices, asOf]);
   const glTrial = useMemo(() => trialBalance(asOf), [asOf, invoices, contracts]); // refresh with data loads
   const executive = useMemo(
@@ -903,7 +917,9 @@ export default function ReportsPage() {
               {reportId === "tech_labor" ? <TechLaborReport data={techLabor} /> : null}
               {reportId === "inventory" ? <InventoryReport data={inventory} /> : null}
               {reportId === "invoice_list" ? <InvoiceListReport rows={invList} /> : null}
-              {reportId === "deferred_revenue" ? <DeferredRevenueReport data={deferredRev} /> : null}
+              {reportId === "deferred_revenue" ? (
+                <DeferredRevenueReport data={deferredRev} pmStats={pmStatsByContract} />
+              ) : null}
               {reportId === "contract_asset" ? <ContractAssetReport data={contractAsset} asOf={asOf} /> : null}
               {reportId === "trial_balance" ? <TrialBalanceReport data={glTrial} asOf={asOf} /> : null}
               {reportId === "policies" ? <PoliciesReport /> : null}
@@ -2453,7 +2469,13 @@ function TrialBalanceReport({
   );
 }
 
-function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredRevenueSchedule> }) {
+function DeferredRevenueReport({
+  data,
+  pmStats,
+}: {
+  data: ReturnType<typeof deferredRevenueSchedule>;
+  pmStats: Map<string, PmObligationStats>;
+}) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (data.contractCount === 0) {
@@ -2467,6 +2489,14 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
 
   return (
     <div className="space-y-6">
+      <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
+        <p className="font-medium">GAAP recognition + PM obligations</p>
+        <p className="mt-1 opacity-70">
+          Prepaid contracts recognize deferred revenue straight-line by month. Expand a row to see the
+          recognition schedule beside contractual PM visit status (scheduled / completed) from the PM
+          scheduler.
+        </p>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <ReportStat
           label="Deferred revenue"
@@ -2499,76 +2529,117 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
             "Monthly",
             "Earned to date",
             "Deferred",
+            "PM visits",
             "Current",
             "Noncurrent",
           ]}
         >
-          {data.rows.map((r) => (
-            <Fragment key={r.id}>
-              <tr
-                className="cursor-pointer hover:bg-base-200/60"
-                onClick={() => setExpandedId((id) => (id === r.id ? null : r.id))}
-              >
-                <td>
-                  <span className="font-medium">{r.name}</span>
-                  <span className="mt-0.5 block text-[11px] opacity-60">
-                    {r.billingMethod} · {r.status}
-                    {expandedId === r.id ? " · hide schedule" : " · view schedule"}
-                  </span>
-                </td>
-                <td>{r.customerName}</td>
-                <td className="whitespace-nowrap text-xs">
-                  {r.startDate} → {r.endDate}
-                  <span className="mt-0.5 block opacity-60">
-                    {r.monthsElapsed}/{r.monthsTotal} mo
-                  </span>
-                </td>
-                <MoneyCell n={r.contractPrice} />
-                <MoneyCell n={r.monthlyRecognition} />
-                <MoneyCell n={r.recognizedToDate} />
-                <MoneyCell n={r.deferredBalance} />
-                <MoneyCell n={r.currentPortion} />
-                <MoneyCell n={r.noncurrentPortion} />
-              </tr>
-              {expandedId === r.id ? (
-                <tr>
-                  <td colSpan={9} className="bg-base-200/40 p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-70">
-                      Recognition schedule
-                    </p>
-                    <div className="max-h-64 overflow-auto">
-                      <table className="table table-xs">
-                        <thead>
-                          <tr>
-                            <th>Month</th>
-                            <th className="text-right">Beginning</th>
-                            <th className="text-right">Recognized</th>
-                            <th className="text-right">Ending</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {r.schedule.map((m) => (
-                            <tr key={m.month}>
-                              <td>{monthLabel(m.month)}</td>
-                              <td className="text-right tabular-nums">{formatReportMoney(m.beginningBalance)}</td>
-                              <td className="text-right tabular-nums">{formatReportMoney(m.recognized)}</td>
-                              <td className="text-right tabular-nums">{formatReportMoney(m.endingBalance)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+          {data.rows.map((r) => {
+            const pm = pmStats.get(r.id);
+            return (
+              <Fragment key={r.id}>
+                <tr
+                  className="cursor-pointer hover:bg-base-200/60"
+                  onClick={() => setExpandedId((id) => (id === r.id ? null : r.id))}
+                >
+                  <td>
+                    <span className="font-medium">{r.name}</span>
+                    <span className="mt-0.5 block text-[11px] opacity-60">
+                      {r.billingMethod} · {r.status}
+                      {expandedId === r.id ? " · hide schedule" : " · view schedule"}
+                    </span>
                   </td>
+                  <td>{r.customerName}</td>
+                  <td className="whitespace-nowrap text-xs">
+                    {r.startDate} → {r.endDate}
+                    <span className="mt-0.5 block opacity-60">
+                      {r.monthsElapsed}/{r.monthsTotal} mo
+                    </span>
+                  </td>
+                  <MoneyCell n={r.contractPrice} />
+                  <MoneyCell n={r.monthlyRecognition} />
+                  <MoneyCell n={r.recognizedToDate} />
+                  <MoneyCell n={r.deferredBalance} />
+                  <td className="text-xs tabular-nums">
+                    {pm && pm.planned > 0
+                      ? `${pm.completed}/${pm.planned} done`
+                      : "—"}
+                    {pm && pm.scheduledOpen > 0 ? (
+                      <span className="mt-0.5 block opacity-60">{pm.scheduledOpen} open</span>
+                    ) : null}
+                  </td>
+                  <MoneyCell n={r.currentPortion} />
+                  <MoneyCell n={r.noncurrentPortion} />
                 </tr>
-              ) : null}
-            </Fragment>
-          ))}
+                {expandedId === r.id ? (
+                  <tr>
+                    <td colSpan={10} className="bg-base-200/40 p-3">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-70">
+                        Recognition schedule & PM obligations
+                      </p>
+                      <div className="max-h-64 overflow-auto">
+                        <table className="table table-xs">
+                          <thead>
+                            <tr>
+                              <th>Month</th>
+                              <th className="text-right">Beginning</th>
+                              <th className="text-right">Recognized</th>
+                              <th className="text-right">Ending</th>
+                              <th>PM visit</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {r.schedule.map((m) => {
+                              const visit = pm?.months[m.month];
+                              const visitLabel = !visit?.planned && !visit
+                                ? "—"
+                                : visit?.status === "completed"
+                                  ? "Completed"
+                                  : visit?.status === "open"
+                                    ? "Scheduled"
+                                    : visit?.status === "canceled"
+                                      ? "Canceled"
+                                      : visit?.planned
+                                        ? "Due"
+                                        : "—";
+                              return (
+                                <tr key={m.month}>
+                                  <td>{monthLabel(m.month)}</td>
+                                  <td className="text-right tabular-nums">{formatReportMoney(m.beginningBalance)}</td>
+                                  <td className="text-right tabular-nums">{formatReportMoney(m.recognized)}</td>
+                                  <td className="text-right tabular-nums">{formatReportMoney(m.endingBalance)}</td>
+                                  <td>
+                                    <span
+                                      className={
+                                        visit?.status === "completed"
+                                          ? "text-success"
+                                          : visit?.status === "open"
+                                            ? "text-warning"
+                                            : "opacity-60"
+                                      }
+                                    >
+                                      {visitLabel}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
+            );
+          })}
           <tr className="border-t-2 font-bold">
             <td colSpan={3}>Total</td>
             <MoneyCell n={data.totalContractPrice} bold />
             <td />
             <MoneyCell n={data.totalRecognized} bold />
             <MoneyCell n={data.totalDeferred} bold />
+            <td />
             <MoneyCell n={data.totalCurrent} bold />
             <MoneyCell n={data.totalNoncurrent} bold />
           </tr>
@@ -2577,7 +2648,7 @@ function DeferredRevenueReport({ data }: { data: ReturnType<typeof deferredReven
 
       <section>
         <h3 className="mb-2 border-b border-base-300 pb-1 text-sm font-bold uppercase tracking-wide">
-          Consolidated monthly rollforward
+          Consolidated rollforward
         </h3>
         <div id="report-detail" className="scroll-mt-4"><ReportTable headers={["Month", "Beginning deferred", "Billings", "Recognized", "Ending deferred"]}>
           {data.consolidated.map((m) => (

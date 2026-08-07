@@ -3,14 +3,22 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader, FormRow } from "@/components/PageHeader";
 import { DualHorizontalScroll } from "@/components/DualHorizontalScroll";
 import { StatusBadge, statusTone, EmptyState } from "@/components/ui";
 import { ActivityFeed } from "@/components/ActivityFeed";
-import type { Customer, Equipment, WorkOrder, ServiceContract, Invoice } from "@/lib/types";
+import type { Customer, Equipment, WorkOrder, ServiceContract, Invoice, CompanySettings } from "@/lib/types";
 import { formatMoney } from "@/lib/calculations";
 import { formatCustomerAddress, hasCustomerAddress } from "@/lib/customer-address";
+import {
+  DEFAULT_DELINQUENCY_GRACE_DAYS,
+  STAFF_DELINQUENCY_LOCK_MESSAGE,
+  customerIsDelinquencyLocked,
+  findDelinquentMonthlyInvoices,
+  type DelinquentMonthlyInvoice,
+} from "@/lib/contract-billing";
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -21,20 +29,52 @@ export default function CustomerDetailPage() {
   const [contracts, setContracts] = useState<ServiceContract[]>([]);
   const [invoices, setInvoices] = useState<Pick<Invoice, "id" | "invoice_number" | "invoice_total" | "remaining_balance" | "status">[]>([]);
   const [saving, setSaving] = useState(false);
+  const [delinquencyLocked, setDelinquencyLocked] = useState(false);
+  const [delinquentInvoices, setDelinquentInvoices] = useState<DelinquentMonthlyInvoice[]>([]);
+  const [graceDays, setGraceDays] = useState(DEFAULT_DELINQUENCY_GRACE_DAYS);
 
   async function load() {
-    const [{ data: c }, { data: eq }, { data: wo }, { data: sc }, { data: inv }] = await Promise.all([
+    const [{ data: c }, { data: eq }, { data: wo }, { data: sc }, { data: inv }, { data: settings }, { data: monthlyInv }] =
+      await Promise.all([
       supabase.from("customers").select("*").eq("id", id).single(),
       supabase.from("equipment").select("*").eq("customer_id", id).order("name"),
       supabase.from("work_orders").select("*").eq("customer_id", id).order("created_at", { ascending: false }).limit(10),
       supabase.from("service_contracts").select("*").eq("customer_id", id).order("start_date", { ascending: false }),
       supabase.from("invoices").select("id, invoice_number, invoice_total, remaining_balance, status").eq("customer_id", id).order("created_at", { ascending: false }).limit(8),
+      supabase
+        .from("company_settings")
+        .select("delinquency_service_request_grace_days, delinquency_service_request_lock_enabled")
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("invoices")
+        .select("*")
+        .eq("customer_id", id)
+        .is("work_order_id", null)
+        .gt("recurring_service_charge", 0),
     ]);
     setCustomer(c as Customer);
     setEquipment((eq as Equipment[]) ?? []);
     setWorkOrders((wo as WorkOrder[]) ?? []);
-    setContracts((sc as ServiceContract[]) ?? []);
+    const contractRows = (sc as ServiceContract[]) ?? [];
+    setContracts(contractRows);
     setInvoices((inv as typeof invoices) ?? []);
+    const settingsRow = settings as Pick<
+      CompanySettings,
+      "delinquency_service_request_grace_days" | "delinquency_service_request_lock_enabled"
+    > | null;
+    const policy = {
+      enabled: settingsRow?.delinquency_service_request_lock_enabled ?? true,
+      graceDays:
+        typeof settingsRow?.delinquency_service_request_grace_days === "number"
+          ? Math.max(0, Math.floor(settingsRow.delinquency_service_request_grace_days))
+          : DEFAULT_DELINQUENCY_GRACE_DAYS,
+    };
+    setGraceDays(policy.graceDays);
+    const monthly = (monthlyInv as Invoice[]) ?? [];
+    const delinquent = findDelinquentMonthlyInvoices(contractRows, monthly, policy.graceDays);
+    setDelinquentInvoices(delinquent);
+    setDelinquencyLocked(customerIsDelinquencyLocked(contractRows, monthly, policy));
   }
 
   useEffect(() => {
@@ -72,6 +112,34 @@ export default function CustomerDetailPage() {
         description="Customer profile and service history"
         actions={<Link href="/customers" className="btn btn-ghost btn-sm">← Back</Link>}
       />
+
+      {delinquencyLocked ? (
+        <div role="alert" className="alert alert-error mb-6 text-sm">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold">Delinquency lock active</p>
+              <p className="opacity-80">{STAFF_DELINQUENCY_LOCK_MESSAGE}</p>
+              {delinquentInvoices[0] ? (
+                <p className="mt-1 opacity-80">
+                  {delinquentInvoices[0].invoiceNumber} due {delinquentInvoices[0].dueDate} (
+                  {delinquentInvoices[0].daysPastDue} days past due
+                  {graceDays > 0 ? `, grace ${graceDays} days` : ""}). Balance{" "}
+                  {formatMoney(delinquentInvoices[0].remainingBalance)}.
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/billing" className="btn btn-sm btn-outline">
+                Open billing
+              </Link>
+              <Link href="/settings" className="btn btn-sm btn-ghost">
+                Delinquency settings
+              </Link>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <form onSubmit={onSave} className="card bg-base-100 shadow lg:col-span-1">

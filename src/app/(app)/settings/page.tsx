@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BookOpen, ClipboardList, Users } from "lucide-react";
+import { BookOpen, ClipboardList, LayoutGrid, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import { PageHeader, FormRow } from "@/components/PageHeader";
@@ -21,6 +21,9 @@ export default function SettingsPage() {
       setSettings({
         ...row,
         contract_service_request_wait_days: row.contract_service_request_wait_days ?? 45,
+        delinquency_service_request_grace_days: row.delinquency_service_request_grace_days ?? 0,
+        delinquency_service_request_lock_enabled:
+          row.delinquency_service_request_lock_enabled ?? true,
       });
     });
   }, []);
@@ -39,6 +42,13 @@ export default function SettingsPage() {
       contract_service_request_wait_days: Math.max(
         0,
         Math.floor(Number(settings.contract_service_request_wait_days) || 0),
+      ),
+      delinquency_service_request_grace_days: Math.max(
+        0,
+        Math.floor(Number(settings.delinquency_service_request_grace_days) || 0),
+      ),
+      delinquency_service_request_lock_enabled: Boolean(
+        settings.delinquency_service_request_lock_enabled,
       ),
       updated_at: new Date().toISOString(),
     }).eq("id", settings.id);
@@ -67,6 +77,9 @@ export default function SettingsPage() {
             </Link>
             <Link href="/settings/contract-plans" className="btn btn-outline btn-sm gap-1">
               <ClipboardList className="h-4 w-4" /> Contract Plans
+            </Link>
+            <Link href="/settings/vendor-matrix" className="btn btn-outline btn-sm gap-1">
+              <LayoutGrid className="h-4 w-4" /> Vendor Matrix
             </Link>
           </div>
         }
@@ -107,6 +120,45 @@ export default function SettingsPage() {
               disable the lock.
             </p>
           </FormRow>
+          <FormRow label="Delinquency service lock">
+            <label className="label cursor-pointer justify-start gap-3 px-0">
+              <input
+                type="checkbox"
+                className="toggle toggle-primary"
+                checked={settings.delinquency_service_request_lock_enabled ?? true}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    delinquency_service_request_lock_enabled: e.target.checked,
+                  })
+                }
+              />
+              <span className="label-text">
+                Block new service requests when a monthly contract fee is past due
+              </span>
+            </label>
+          </FormRow>
+          <FormRow label="Delinquency grace days">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className="input input-bordered w-full"
+              value={settings.delinquency_service_request_grace_days ?? 0}
+              disabled={!(settings.delinquency_service_request_lock_enabled ?? true)}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  delinquency_service_request_grace_days: Number(e.target.value),
+                })
+              }
+            />
+            <p className="mt-1 text-xs opacity-60">
+              Extra days after the invoice due date before the lock applies. 0 locks as soon as the
+              monthly fee is past due. Turn the lock off above to unlock all customers without
+              changing grace days.
+            </p>
+          </FormRow>
           <button type="submit" className="btn btn-primary btn-sm w-fit" disabled={saving}>{saving ? "Saving…" : "Save Settings"}</button>
         </div>
       </form>
@@ -119,6 +171,19 @@ export default function SettingsPage() {
           </p>
           <Link href="/settings/employees" className="btn btn-primary btn-sm w-fit gap-1">
             <Users className="h-4 w-4" /> Open Employees
+          </Link>
+        </div>
+      </div>
+
+      <div className="card max-w-xl border border-base-300 bg-base-100 shadow-sm">
+        <div className="card-body gap-2">
+          <h2 className="card-title text-base">Vendor Matrix</h2>
+          <p className="text-sm opacity-70">
+            Customize ranking weights for third-party technicians and materials vendors (repair cost,
+            response speed, star ratings) and prune thresholds for underperformers.
+          </p>
+          <Link href="/settings/vendor-matrix" className="btn btn-primary btn-sm w-fit gap-1">
+            <LayoutGrid className="h-4 w-4" /> Open Vendor Matrix Settings
           </Link>
         </div>
       </div>

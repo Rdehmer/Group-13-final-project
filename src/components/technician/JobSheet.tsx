@@ -16,6 +16,12 @@ import { PurchaseOrderPanel } from "@/components/PurchaseOrderPanel";
 import { createClient } from "@/lib/supabase/client";
 import { logActivity } from "@/lib/activity";
 import {
+  AWR_STATUS_PENDING,
+  isAwrPending,
+} from "@/lib/additional-work";
+import type { AdditionalWorkRequest } from "@/lib/types";
+import { formatMoney } from "@/lib/calculations";
+import {
   canPauseDispatch,
   dispatchStatusTone,
   getNextDispatchStatus,
@@ -56,6 +62,8 @@ type Props = {
   usedParts: (WorkOrderPart & { parts?: Part | null })[];
   onBack: () => void;
   onRefresh: () => Promise<void>;
+  /** Vendor portal: same dispatch steps, no day/job clock-in; manual billable hours. */
+  mode?: "technician" | "vendor";
 };
 
 export function JobSheet({
@@ -65,8 +73,10 @@ export function JobSheet({
   usedParts,
   onBack,
   onRefresh,
+  mode = "technician",
 }: Props) {
   const supabase = useMemo(() => createClient(), []);
+  const isVendor = mode === "vendor";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -76,6 +86,15 @@ export function JobSheet({
   const [pendingPart, setPendingPart] = useState<{ partId: string; quantity: number } | null>(
     null,
   );
+  const [awrs, setAwrs] = useState<AdditionalWorkRequest[]>([]);
+  const [awrBusy, setAwrBusy] = useState(false);
+  const [awrForm, setAwrForm] = useState({
+    description: "",
+    recommended_repair: "",
+    estimated_labor_hours: "",
+    estimated_additional_charge: "",
+    supporting_notes: "",
+  });
   const diagnostics = parseDiagnosticNotes(job);
   const [notes, setNotes] = useState(diagnostics);
 
@@ -92,6 +111,78 @@ export function JobSheet({
   useEffect(() => {
     setNotes(parseDiagnosticNotes(job));
   }, [job.id, job.technician_notes, job.work_performed, job.equipment_condition]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAwrs() {
+      const { data } = await supabase
+        .from("additional_work_requests")
+        .select("*")
+        .eq("work_order_id", job.id)
+        .order("created_at", { ascending: false });
+      if (!cancelled) setAwrs((data as AdditionalWorkRequest[]) ?? []);
+    }
+    void loadAwrs();
+    return () => {
+      cancelled = true;
+    };
+  }, [job.id, supabase]);
+
+  const pendingAwrCount = awrs.filter((a) => isAwrPending(a.approval_status)).length;
+
+  async function submitScopeChange(e: React.FormEvent) {
+    e.preventDefault();
+    if (!awrForm.description.trim()) {
+      setError("Describe the out-of-scope work.");
+      return;
+    }
+    setAwrBusy(true);
+    setError(null);
+    try {
+      const hours = awrForm.estimated_labor_hours
+        ? Number(awrForm.estimated_labor_hours)
+        : null;
+      const charge = awrForm.estimated_additional_charge
+        ? Number(awrForm.estimated_additional_charge)
+        : 0;
+      const { error: insertError } = await supabase.from("additional_work_requests").insert({
+        work_order_id: job.id,
+        description: awrForm.description.trim(),
+        recommended_repair: awrForm.recommended_repair.trim() || null,
+        estimated_labor_hours: Number.isFinite(hours) ? hours : null,
+        estimated_additional_charge: Number.isFinite(charge) ? charge : 0,
+        supporting_notes: awrForm.supporting_notes.trim() || null,
+        approval_status: AWR_STATUS_PENDING,
+        requested_by: profile.id,
+      });
+      if (insertError) throw new Error(insertError.message);
+      await logActivity(supabase, {
+        userId: profile.id,
+        action: "awr_submitted",
+        recordType: "work_order",
+        recordId: job.id,
+        newValue: awrForm.description.trim().slice(0, 120),
+      });
+      setAwrForm({
+        description: "",
+        recommended_repair: "",
+        estimated_labor_hours: "",
+        estimated_additional_charge: "",
+        supporting_notes: "",
+      });
+      setMessage("Scope-change request sent — waiting on manager approval.");
+      const { data } = await supabase
+        .from("additional_work_requests")
+        .select("*")
+        .eq("work_order_id", job.id)
+        .order("created_at", { ascending: false });
+      setAwrs((data as AdditionalWorkRequest[]) ?? []);
+    } catch (err) {
+      setError(humanizeFieldError(err instanceof Error ? err.message : String(err)));
+    } finally {
+      setAwrBusy(false);
+    }
+  }
 
   async function runStatus(status: DispatchStatus) {
     if (busy || done) return;
@@ -213,10 +304,12 @@ export function JobSheet({
         date_used: todayIso(),
       });
       if (insertError) throw new Error(insertError.message);
-      await supabase
-        .from("parts")
-        .update({ quantity_on_hand: Math.max(0, part.quantity_on_hand - quantity) })
-        .eq("id", partId);
+      if (!isVendor) {
+        await supabase
+          .from("parts")
+          .update({ quantity_on_hand: Math.max(0, part.quantity_on_hand - quantity) })
+          .eq("id", partId);
+      }
       await logActivity(supabase, {
         userId: profile.id,
         action: "part_used",
@@ -259,15 +352,17 @@ export function JobSheet({
       <div className="flex items-center gap-2">
         <button type="button" className="btn btn-ghost btn-sm min-h-11 gap-1" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
-          My Day
+          {isVendor ? "Jobs" : "My Day"}
         </button>
-        <Link
-          href={timesheetHref({ wo: job.id, tech: profile.id, week: todayIso() })}
-          className="btn btn-ghost btn-sm min-h-11 gap-1 ml-auto"
-        >
-          <Timer className="h-4 w-4" />
-          Timesheet
-        </Link>
+        {!isVendor ? (
+          <Link
+            href={timesheetHref({ wo: job.id, tech: profile.id, week: todayIso() })}
+            className="btn btn-ghost btn-sm min-h-11 gap-1 ml-auto"
+          >
+            <Timer className="h-4 w-4" />
+            Timesheet
+          </Link>
+        ) : null}
       </div>
 
       <header className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
@@ -373,7 +468,9 @@ export function JobSheet({
           {done
             ? "Job complete"
             : nextStatus
-              ? "Next step"
+              ? isVendor
+                ? "Time starts at En Route and stops when you finish."
+                : "Next step"
               : "Marked Done"}
         </p>
         <div className="flex flex-col gap-2">
@@ -444,23 +541,131 @@ export function JobSheet({
         )}
       </section>
 
-      <section
-        className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4"
-        aria-labelledby="po-heading"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 id="po-heading" className="text-base font-semibold">
-            Purchase orders
-          </h3>
-          <Link href={`/work-orders/${job.id}`} className="link link-hover text-xs">
-            Open full job
-          </Link>
-        </div>
-        <p className="text-xs opacity-60">
-          Log field POs and receipts. When this job is invoiced, the PO number opens that invoice in Billing.
-        </p>
-        <PurchaseOrderPanel workOrderId={job.id} canEdit compact />
-      </section>
+      {!isVendor ? (
+        <section
+          className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4"
+          aria-labelledby="po-heading"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 id="po-heading" className="text-base font-semibold">
+              Purchase orders
+            </h3>
+            <Link href={`/work-orders/${job.id}`} className="link link-hover text-xs">
+              Open full job
+            </Link>
+          </div>
+          <p className="text-xs opacity-60">
+            Log field POs and receipts. When this job is invoiced, the PO number opens that invoice in
+            Billing.
+          </p>
+          <PurchaseOrderPanel workOrderId={job.id} canEdit compact />
+        </section>
+      ) : null}
+
+      {!isVendor && !done ? (
+        <section
+          className="space-y-3 rounded-2xl border border-warning/30 bg-base-100 p-4"
+          aria-labelledby="scope-change-heading"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="scope-change-heading" className="text-base font-semibold">
+              Scope change / ad hoc work
+            </h2>
+            {pendingAwrCount > 0 ? (
+              <span className="badge badge-warning badge-sm">{pendingAwrCount} pending</span>
+            ) : null}
+          </div>
+          <p className="text-xs opacity-70">
+            Found repairs beyond the contract? Submit like a parts request — manager must approve
+            before extra work is billed.
+          </p>
+          <form onSubmit={(e) => void submitScopeChange(e)} className="space-y-3">
+            <label className="form-control w-full">
+              <span className="label-text text-xs">What did you find?</span>
+              <textarea
+                className="textarea textarea-bordered textarea-sm w-full"
+                rows={2}
+                required
+                value={awrForm.description}
+                onChange={(e) => setAwrForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="e.g. Compressor clutch failing — not covered under PM"
+              />
+            </label>
+            <label className="form-control w-full">
+              <span className="label-text text-xs">Recommended repair</span>
+              <input
+                className="input input-bordered input-sm w-full"
+                value={awrForm.recommended_repair}
+                onChange={(e) => setAwrForm((f) => ({ ...f, recommended_repair: e.target.value }))}
+                placeholder="Replace clutch assembly"
+              />
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="form-control w-full">
+                <span className="label-text text-xs">Est. labor hours</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  className="input input-bordered input-sm w-full"
+                  value={awrForm.estimated_labor_hours}
+                  onChange={(e) =>
+                    setAwrForm((f) => ({ ...f, estimated_labor_hours: e.target.value }))
+                  }
+                />
+              </label>
+              <label className="form-control w-full">
+                <span className="label-text text-xs">Est. additional charge ($)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input-bordered input-sm w-full"
+                  value={awrForm.estimated_additional_charge}
+                  onChange={(e) =>
+                    setAwrForm((f) => ({ ...f, estimated_additional_charge: e.target.value }))
+                  }
+                />
+              </label>
+            </div>
+            <label className="form-control w-full">
+              <span className="label-text text-xs">Notes for manager</span>
+              <textarea
+                className="textarea textarea-bordered textarea-sm w-full"
+                rows={2}
+                value={awrForm.supporting_notes}
+                onChange={(e) => setAwrForm((f) => ({ ...f, supporting_notes: e.target.value }))}
+              />
+            </label>
+            <button type="submit" className="btn btn-warning btn-sm" disabled={awrBusy || busy}>
+              {awrBusy ? "Submitting…" : "Submit for approval"}
+            </button>
+          </form>
+          {awrs.length > 0 ? (
+            <ul className="space-y-2 border-t border-base-300 pt-3">
+              {awrs.map((a) => (
+                <li key={a.id} className="rounded-box bg-base-200/70 p-3 text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-medium">{a.description}</p>
+                      {a.recommended_repair ? (
+                        <p className="text-xs opacity-70">Repair: {a.recommended_repair}</p>
+                      ) : null}
+                      {a.estimated_additional_charge != null &&
+                      Number(a.estimated_additional_charge) > 0 ? (
+                        <p className="text-xs opacity-70">
+                          Est. {formatMoney(Number(a.estimated_additional_charge))}
+                        </p>
+                      ) : null}
+                    </div>
+                    <StatusBadge label={a.approval_status} tone={statusTone(a.approval_status)} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4" aria-labelledby="notes-heading">
         <h2 id="notes-heading" className="text-base font-semibold">

@@ -232,7 +232,8 @@ export const REPORT_CATALOG: ReportGroup[] = [
       {
         id: "deferred_revenue",
         name: "Deferred Revenue Schedule",
-        description: "Unearned prepaid contract balances with monthly recognition rollforward.",
+        description:
+          "Unearned prepaid balances with monthly GAAP recognition, plus contractual PM visit completion status.",
       },
       {
         id: "contract_asset",

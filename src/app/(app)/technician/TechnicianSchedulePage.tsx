@@ -255,9 +255,9 @@ export default function TechnicianSchedulePage() {
     setPrefsHydrated(true);
   }, [isManager]);
 
-  /** Deep-link from Dashboard daily schedule: /technician?day=YYYY-MM-DD&wo=… */
+  /** Deep-link from Contracts “Schedule routine visit”: /technician?wo=…&schedule=1&suggestDay=… */
   useEffect(() => {
-    const dayParam = searchParams.get("day");
+    const dayParam = searchParams.get("day") || searchParams.get("suggestDay");
     const woParam = searchParams.get("wo");
     if (dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam)) {
       try {
@@ -273,15 +273,36 @@ export default function TechnicianSchedulePage() {
     if (woParam) {
       setSelectedId(woParam);
     }
-    if (!dayParam && !woParam) return;
-    const t = window.setTimeout(() => {
-      if (dayParam || woParam) {
-        dayCalendarRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        dayCalendarRef.current?.focus({ preventScroll: true });
-      }
-    }, 160);
-    return () => window.clearTimeout(t);
   }, [searchParams]);
+
+  /** After the deep-linked WO is in the list, open the assign panel and prefill suggested day. */
+  useEffect(() => {
+    const woParam = searchParams.get("wo");
+    const scheduleParam = searchParams.get("schedule");
+    const suggestDay = searchParams.get("suggestDay") || searchParams.get("day");
+    if (!woParam || scheduleParam !== "1") return;
+    if (!workOrders.some((w) => w.id === woParam)) return;
+
+    setSelectedId(woParam);
+
+    const wo = workOrders.find((w) => w.id === woParam);
+    if (wo && !wo.scheduled_date && suggestDay && /^\d{4}-\d{2}-\d{2}$/.test(suggestDay)) {
+      setScheduleDirty(true);
+      setScheduleForm((prev) => ({
+        ...prev,
+        scheduled_date: suggestDay,
+        assigned_technician_id: prev.assigned_technician_id || wo.assigned_technician_id || "",
+      }));
+    }
+
+    const t = window.setTimeout(() => {
+      document.getElementById("schedule-assign-panel")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [searchParams, workOrders]);
 
   useEffect(() => {
     if (!prefsHydrated) return;
@@ -1431,6 +1452,7 @@ export default function TechnicianSchedulePage() {
   async function cloneNextWeek(wo: TimedWo) {
     if (!isManager || !wo.scheduled_date) return;
     setBusy(true);
+    setScheduleError(null);
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -1456,7 +1478,13 @@ export default function TechnicianSchedulePage() {
           : "Requested",
     };
     const { data, error } = await supabase.from("work_orders").insert(insertPayload).select().single();
-    if (!error && data) {
+    if (error) {
+      setScheduleError(
+        /past-due monthly contract payment|service requests are locked/i.test(error.message)
+          ? "Service requests are locked because this customer has a past-due monthly contract payment. Collect payment or adjust delinquency settings before filing a new request."
+          : error.message,
+      );
+    } else if (data) {
       await logActivity(supabase, {
         userId: user?.id ?? null,
         action: "cloned",
@@ -1530,6 +1558,7 @@ export default function TechnicianSchedulePage() {
       work_order_id: selectedId,
       description: awrForm.description,
       estimated_additional_charge: Number(awrForm.estimated_additional_charge),
+      approval_status: "Pending",
       requested_by: profile.id,
     });
     setAwrForm({ description: "", estimated_additional_charge: "0" });
@@ -1540,6 +1569,18 @@ export default function TechnicianSchedulePage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Technician Schedule" />
+
+      {searchParams.get("schedule") === "1" && searchParams.get("wo") && isManager ? (
+        <div className="alert alert-info text-sm print:hidden">
+          <span>
+            Routine visit from Contracts — review the Gold/Silver/Bronze checkup criteria in{" "}
+            <a href="#schedule-assign-panel" className="link font-medium">
+              Schedule &amp; assign
+            </a>
+            , set the preferred date/time, then pick a technician.
+          </span>
+        </div>
+      ) : null}
 
       {/* Work order list + filters */}
       <section className="card bg-base-100 shadow print:hidden">
@@ -2740,8 +2781,17 @@ export default function TechnicianSchedulePage() {
                 <div className="card-body">
                   <h3 className="font-semibold">Schedule & assign technician</h3>
                   <p className="text-sm opacity-70">
-                    Set when this job should run and which technician completes it. Calendars update when you save.
+                    Use the contract checkup criteria below (Gold / Silver / Bronze frequency), set the
+                    customer’s preferred date &amp; time, then assign a technician.
                   </p>
+                  {selected?.manager_notes ? (
+                    <div className="rounded-box border border-warning/30 bg-warning/10 px-3 py-2 text-sm whitespace-pre-line">
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide opacity-70">
+                        Contract checkup criteria
+                      </p>
+                      {selected.manager_notes}
+                    </div>
+                  ) : null}
                   {scheduleError ? <div className="alert alert-error text-sm">{scheduleError}</div> : null}
                   {scheduleSaved ? (
                     <div className="alert alert-success text-sm">Schedule updated. Calendars refreshed.</div>
@@ -2991,7 +3041,10 @@ export default function TechnicianSchedulePage() {
 
             <div className="card bg-base-100 shadow">
               <div className="card-body">
-                <h3 className="font-semibold">Additional Work Request</h3>
+                <h3 className="font-semibold">Scope change / Additional Work Request</h3>
+                <p className="text-xs opacity-70">
+                  Prefer submitting from My Day Job Sheet for fuller detail. Manager approves on the work order Approvals tab.
+                </p>
                 <form onSubmit={addAdditionalWork} className="mt-2 space-y-3">
                   <FormRow label="Description">
                     <textarea

@@ -45,6 +45,9 @@ import {
   WO_STATUSES,
   scheduleFieldsForStatusChange,
 } from "@/lib/work-order-status";
+import {
+  isAwrPending,
+} from "@/lib/additional-work";
 import type {
   AdditionalWorkRequest,
   EmergencyPurchase,
@@ -53,10 +56,17 @@ import type {
   Profile,
   ServiceVendor,
   TechnicianLabor,
+  Vendor,
   WorkOrder,
   WorkOrderPart,
   WorkOrderServiceRating,
 } from "@/lib/types";
+import {
+  assignTargetFromWorkOrder,
+  assignmentPatchFromTarget,
+  decodeAssignTarget,
+  encodeAssignTarget,
+} from "@/lib/work-order-assign";
 
 const PRIORITIES: WorkOrder["priority"][] = ["Low", "Normal", "High", "Critical"];
 
@@ -81,6 +91,7 @@ export default function JobDetailPage() {
   const [wo, setWo] = useState<JobDetail | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [technicians, setTechnicians] = useState<Profile[]>([]);
+  const [portalVendors, setPortalVendors] = useState<Vendor[]>([]);
   const [serviceVendors, setServiceVendors] = useState<ServiceVendor[]>([]);
   const [techName, setTechName] = useState<string>("—");
   const [labor, setLabor] = useState<TechnicianLabor[]>([]);
@@ -94,7 +105,7 @@ export default function JobDetailPage() {
   const [managerNotes, setManagerNotes] = useState("");
   const [workPerformed, setWorkPerformed] = useState("");
   const [techNotes, setTechNotes] = useState("");
-  const [assignTech, setAssignTech] = useState("");
+  const [assignTarget, setAssignTarget] = useState("");
   const [assignServiceVendor, setAssignServiceVendor] = useState("");
   const [scheduleDate, setScheduleDate] = useState("");
   const [problemDescription, setProblemDescription] = useState("");
@@ -137,7 +148,7 @@ export default function JobDetailPage() {
       setManagerNotes(w.manager_notes ?? "");
       setWorkPerformed(w.work_performed ?? "");
       setTechNotes(w.technician_notes ?? "");
-      setAssignTech(w.assigned_technician_id ?? "");
+      setAssignTarget(encodeAssignTarget(assignTargetFromWorkOrder(w)));
       setAssignServiceVendor(w.service_vendor_id ?? "");
       setScheduleDate(w.scheduled_date ?? "");
       setProblemDescription(w.problem_description ?? "");
@@ -152,7 +163,7 @@ export default function JobDetailPage() {
       setProfile(p as Profile);
     }
 
-    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }, { data: sv }] =
+    const [{ data: tech }, { data: lab }, { data: pts }, { data: awr }, { data: inv }, { data: stock }, { data: rating }, { data: sv }, { data: pv }] =
       await Promise.all([
         supabase.from("profiles").select("*").eq("role", "technician").eq("is_active", true),
         supabase.from("technician_labor").select("*").eq("work_order_id", id).order("work_date", { ascending: false }),
@@ -171,10 +182,17 @@ export default function JobDetailPage() {
           .eq("is_active", true)
           .eq("approval_status", "Approved")
           .order("name"),
+        supabase
+          .from("vendors")
+          .select("id, name, approval_status, is_active")
+          .eq("is_active", true)
+          .eq("approval_status", "Approved")
+          .order("name"),
       ]);
 
     const techs = (tech as Profile[]) ?? [];
     setTechnicians(techs);
+    setPortalVendors((pv as Vendor[]) ?? []);
     setServiceVendors((sv as ServiceVendor[]) ?? []);
     setLabor((lab as TechnicianLabor[]) ?? []);
     setParts((pts as typeof parts) ?? []);
@@ -202,7 +220,18 @@ export default function JobDetailPage() {
       setCustomerEquipment([]);
     }
 
-    if (w?.assigned_technician_id) {
+    if (w?.assigned_vendor_id) {
+      const found = ((pv as Vendor[]) ?? []).find((v) => v.id === w.assigned_vendor_id);
+      if (found) setTechName(`Vendor · ${found.name}`);
+      else {
+        const { data: named } = await supabase
+          .from("vendors")
+          .select("name")
+          .eq("id", w.assigned_vendor_id)
+          .maybeSingle();
+        setTechName(named?.name ? `Vendor · ${named.name}` : "Vendor");
+      }
+    } else if (w?.assigned_technician_id) {
       const found = techs.find((t) => t.id === w.assigned_technician_id);
       if (found) setTechName(found.full_name || found.email);
       else {
@@ -266,41 +295,58 @@ export default function JobDetailPage() {
   }
 
   async function saveJobDetails() {
+    const target = decodeAssignTarget(assignTarget);
+    const assignee = assignmentPatchFromTarget(target, wo ?? undefined);
+    const vendorPending = target.kind === "vendor" && assignee.vendor_assignment_status === "Pending";
+    const fullyAssigned =
+      target.kind === "tech" ||
+      (target.kind === "vendor" && assignee.vendor_assignment_status === "Accepted");
     await patchJob(
       {
         problem_description: problemDescription || null,
         requested_service: requestedService || null,
         work_order_type: workOrderType,
         priority,
-        assigned_technician_id: assignTech || null,
+        ...assignee,
         service_vendor_id: assignServiceVendor || null,
         scheduled_date: scheduleDate || null,
         status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
           ? wo?.status
-          : assignTech && scheduleDate
-            ? "Scheduled"
-            : assignTech
-              ? "Assigned"
-              : wo?.status ?? "Requested",
+          : vendorPending
+            ? "Requested"
+            : fullyAssigned && scheduleDate
+              ? "Scheduled"
+              : fullyAssigned
+                ? "Assigned"
+                : wo?.status ?? "Requested",
       },
       "job_details_saved",
-      workOrderType,
+      target.kind === "vendor" && vendorPending ? "Offered to vendor" : workOrderType,
     );
-    setSavedMsg("Job details saved");
+    setSavedMsg(
+      vendorPending ? "Job offered to vendor — waiting for accept/reject" : "Job details saved",
+    );
   }
 
   async function saveAssignment() {
-    const status =
-      assignTech && scheduleDate
+    const target = decodeAssignTarget(assignTarget);
+    const assignee = assignmentPatchFromTarget(target, wo ?? undefined);
+    const vendorPending = target.kind === "vendor" && assignee.vendor_assignment_status === "Pending";
+    const fullyAssigned =
+      target.kind === "tech" ||
+      (target.kind === "vendor" && assignee.vendor_assignment_status === "Accepted");
+    const status = vendorPending
+      ? "Requested"
+      : fullyAssigned && scheduleDate
         ? "Scheduled"
-        : assignTech
+        : fullyAssigned
           ? "Assigned"
           : wo?.status === "Requested"
             ? "Requested"
             : wo?.status ?? "Requested";
     await patchJob(
       {
-        assigned_technician_id: assignTech || null,
+        ...assignee,
         service_vendor_id: assignServiceVendor || null,
         scheduled_date: scheduleDate || null,
         status: ["Completed", "Closed", "Canceled", "Ready for Review", "In Progress"].includes(wo?.status ?? "")
@@ -308,7 +354,13 @@ export default function JobDetailPage() {
           : status,
       },
       "dispatch_update",
-      assignTech ? "Assigned/Scheduled" : "Unassigned",
+      target.kind === "vendor"
+        ? vendorPending
+          ? "Offered to vendor (pending)"
+          : "Vendor accepted"
+        : fullyAssigned
+          ? "Assigned/Scheduled"
+          : "Unassigned",
     );
   }
 
@@ -392,7 +444,9 @@ export default function JobDetailPage() {
     const techId =
       profile.role === "technician"
         ? profile.id
-        : assignTech || wo?.assigned_technician_id || profile.id;
+        : decodeAssignTarget(assignTarget).kind === "tech"
+          ? decodeAssignTarget(assignTarget).id
+          : wo?.assigned_technician_id || profile.id;
     const techProfile =
       technicians.find((t) => t.id === techId) ||
       (techId === profile.id ? profile : null);
@@ -669,6 +723,13 @@ export default function JobDetailPage() {
 
   async function createInvoiceFromJob(asDraft: boolean) {
     if (!wo) return;
+    const pendingAwrs = additional.filter((a) => isAwrPending(a.approval_status));
+    if (pendingAwrs.length > 0) {
+      setError(
+        `Approve or reject ${pendingAwrs.length} pending scope-change request${pendingAwrs.length === 1 ? "" : "s"} before invoicing.`,
+      );
+      return;
+    }
     setSaving(true);
     setError(null);
     const preview = buildWorkOrderPreview(labor, parts as WorkOrderPart[], taxRate);
@@ -904,7 +965,7 @@ export default function JobDetailPage() {
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm sm:min-w-[16rem]">
             <div className="rounded-box bg-base-200/60 p-3">
-              <p className="opacity-60">Technician</p>
+              <p className="opacity-60">Assigned to</p>
               {wo.assigned_technician_id && profile?.role !== "customer" ? (
                 <div className="space-y-1">
                   <p className="font-medium">{techName}</p>
@@ -918,6 +979,17 @@ export default function JobDetailPage() {
                   >
                     View timesheet
                   </Link>
+                </div>
+              ) : wo.assigned_vendor_id && profile?.role !== "customer" ? (
+                <div className="space-y-1">
+                  <p className="font-medium">{techName}</p>
+                  <p className="text-xs opacity-60">
+                    {wo.vendor_assignment_status === "Pending"
+                      ? "Awaiting vendor accept/reject"
+                      : wo.vendor_assignment_status === "Accepted"
+                        ? "Vendor accepted — visible in Vendor → Jobs"
+                        : "Visible in Vendor → Jobs"}
+                  </p>
                 </div>
               ) : (
                 <p className="font-medium">{techName}</p>
@@ -1116,20 +1188,35 @@ export default function JobDetailPage() {
                           <option value="Critical">Critical</option>
                         </select>
                       </FormRow>
-                      <FormRow label="Technician">
+                      <FormRow label="Assigned to">
                         <select
                           className="select select-bordered w-full"
-                          value={assignTech}
-                          onChange={(e) => setAssignTech(e.target.value)}
+                          value={assignTarget}
+                          onChange={(e) => setAssignTarget(e.target.value)}
                           disabled={wo.status === "Closed"}
                         >
                           <option value="">Unassigned</option>
-                          {technicians.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.full_name ?? t.email}
-                            </option>
-                          ))}
+                          <optgroup label="Technicians">
+                            {technicians.map((t) => (
+                              <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                                {t.full_name ?? t.email}
+                              </option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Vendors (portal)">
+                            {portalVendors.map((v) => (
+                              <option
+                                key={v.id}
+                                value={encodeAssignTarget({ kind: "vendor", id: v.id })}
+                              >
+                                {v.name}
+                              </option>
+                            ))}
+                          </optgroup>
                         </select>
+                        <p className="mt-1 text-xs opacity-50">
+                          Choose a technician or offer the job to a vendor (they must accept).
+                        </p>
                       </FormRow>
                       <FormRow label="Service vendor">
                         <select
@@ -1730,12 +1817,13 @@ export default function JobDetailPage() {
                   <CheckCircle2 className="h-4 w-4" /> Additional work
                 </h2>
                 <p className="text-sm opacity-70">
-                  Unapproved extra work is blocked from casual billing until a manager decides.
+                  Unapproved extra work is blocked from billing until a manager decides. Technicians
+                  submit from My Day (Job Sheet) when repairs exceed contract scope.
                 </p>
                 {additional.length === 0 ? (
                   <EmptyState
                     title="No additional work requests"
-                    description="Technicians submit AWR from the field schedule when extra repairs are found."
+                    description="Technicians submit scope-change requests from the field Job Sheet when extra repairs are found."
                   />
                 ) : (
                   <ul className="space-y-3">
@@ -1744,13 +1832,22 @@ export default function JobDetailPage() {
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
                             <p className="font-medium">{a.description}</p>
+                            {a.recommended_repair ? (
+                              <p className="text-sm opacity-70">Repair: {a.recommended_repair}</p>
+                            ) : null}
                             <p className="text-sm opacity-70">
-                              Est. charge {formatMoney(a.estimated_additional_charge)}
+                              Est. charge {formatMoney(a.estimated_additional_charge ?? 0)}
+                              {a.estimated_labor_hours != null
+                                ? ` · ${a.estimated_labor_hours} hr labor`
+                                : ""}
                             </p>
+                            {a.supporting_notes ? (
+                              <p className="mt-1 text-xs opacity-60">{a.supporting_notes}</p>
+                            ) : null}
                           </div>
                           <StatusBadge label={a.approval_status} tone={statusTone(a.approval_status)} />
                         </div>
-                        {isManager && a.approval_status === "Pending" ? (
+                        {isManager && isAwrPending(a.approval_status) ? (
                           <div className="mt-3 flex gap-2">
                             <button
                               type="button"
@@ -1801,6 +1898,11 @@ export default function JobDetailPage() {
 
                 {wo.status === "Completed" && wo.billing_status === "Unbilled" && isBilling ? (
                   <div className="flex flex-wrap gap-2">
+                    {additional.some((a) => isAwrPending(a.approval_status)) ? (
+                      <p className="w-full text-sm text-warning">
+                        Resolve pending scope-change requests on the Approvals tab before invoicing.
+                      </p>
+                    ) : null}
                     <button type="button" className="btn btn-outline btn-sm" disabled={saving} onClick={() => createInvoiceFromJob(true)}>
                       Save draft invoice
                     </button>
@@ -1918,19 +2020,34 @@ export default function JobDetailPage() {
               </h2>
               {canEditJobDetails && openForField ? (
                 <>
-                  <FormRow label="Technician">
+                  <FormRow label="Assigned to">
                     <select
                       className="select select-bordered w-full"
-                      value={assignTech}
-                      onChange={(e) => setAssignTech(e.target.value)}
+                      value={assignTarget}
+                      onChange={(e) => setAssignTarget(e.target.value)}
                     >
                       <option value="">Unassigned</option>
-                      {technicians.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.full_name ?? t.email}
-                        </option>
-                      ))}
+                      <optgroup label="Technicians">
+                        {technicians.map((t) => (
+                          <option key={t.id} value={encodeAssignTarget({ kind: "tech", id: t.id })}>
+                            {t.full_name ?? t.email}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Vendors (portal)">
+                        {portalVendors.map((v) => (
+                          <option
+                            key={v.id}
+                            value={encodeAssignTarget({ kind: "vendor", id: v.id })}
+                          >
+                            {v.name}
+                          </option>
+                        ))}
+                      </optgroup>
                     </select>
+                    <p className="mt-1 text-xs opacity-50">
+                      Vendor offers appear under Vendor Home for accept/reject first.
+                    </p>
                   </FormRow>
                   <FormRow label="Schedule date">
                     <input
@@ -1947,7 +2064,7 @@ export default function JobDetailPage() {
               ) : (
                 <div className="text-sm">
                   <p>
-                    <span className="opacity-60">Tech:</span> {techName}
+                    <span className="opacity-60">Assigned:</span> {techName}
                   </p>
                   <p>
                     <span className="opacity-60">Date:</span> {wo.scheduled_date ?? "—"}

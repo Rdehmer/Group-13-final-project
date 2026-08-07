@@ -1500,7 +1500,7 @@ export async function clockIn(
   const { data: wo, error: woErr } = await supabase
     .from("work_orders")
     .select(
-      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, customers(id, name, service_address, city, state)",
+      "id, status, customer_id, equipment_id, work_order_number, work_order_type, problem_description, assigned_technician_id, assigned_vendor_id, customers(id, name, service_address, city, state)",
     )
     .eq("id", input.workOrderId)
     .single();
@@ -1516,10 +1516,17 @@ export async function clockIn(
     throw new Error("Work order must have a valid customer before time can be recorded.");
   }
 
-  const assignedId = (wo as { assigned_technician_id?: string | null }).assigned_technician_id ?? null;
-  const unassigned = Boolean(assignedId && assignedId !== input.profile.id);
-  // if no assignment, allow but flag manager override
-  const needsOverride = !assignedId || unassigned;
+  const assignedTechId =
+    (wo as { assigned_technician_id?: string | null }).assigned_technician_id ?? null;
+  const assignedVendorId =
+    (wo as { assigned_vendor_id?: string | null }).assigned_vendor_id ?? null;
+  const selfAssigned =
+    assignedTechId === input.profile.id ||
+    (input.profile.role === "vendor" &&
+      !!input.profile.vendor_id &&
+      assignedVendorId === input.profile.vendor_id);
+  // Unassigned or assigned to someone else → flag manager override (still allow punch).
+  const needsOverride = !selfAssigned;
 
   const loc = locationFromJob(
     wo as {
@@ -1887,33 +1894,37 @@ export async function applyDispatchStatusTransition(
     workOrderId: string;
     workOrderNumber?: string;
     nextStatus: DispatchFlowStatus;
+    /** When true, advance status without opening/closing timesheet punches. */
+    skipTimePunches?: boolean;
   },
 ): Promise<{ dispatchStatus: string; message: string | null }> {
   // Close any open punch first (best-effort — never block status advance).
-  try {
-    await clockOutIfActive(supabase, {
-      profile: input.profile,
-      notes: `Dispatch → ${input.nextStatus}`,
-      skipWorkOrderDispatchUpdate: true,
-    });
-  } catch (err) {
-    // Force-close stuck DB active clocks so En Route can proceed.
-    const active = await getActiveClock(supabase, input.profile.id);
-    if (active && !active.id.startsWith("active-wo-") && !active.id.startsWith("labor-")) {
-      const nowIso = new Date().toISOString();
-      await supabase
-        .from("time_entries")
-        .update({
-          clock_out_at: nowIso,
-          approval_status: "complete",
-          notes: active.notes ?? `Force-closed for dispatch → ${input.nextStatus}`,
-          updated_at: nowIso,
-          updated_by: input.profile.id,
-        })
-        .eq("id", active.id)
-        .eq("approval_status", "active");
-    } else {
-      throw err instanceof Error ? err : new Error(String(err));
+  if (!input.skipTimePunches) {
+    try {
+      await clockOutIfActive(supabase, {
+        profile: input.profile,
+        notes: `Dispatch → ${input.nextStatus}`,
+        skipWorkOrderDispatchUpdate: true,
+      });
+    } catch (err) {
+      // Force-close stuck DB active clocks so En Route can proceed.
+      const active = await getActiveClock(supabase, input.profile.id);
+      if (active && !active.id.startsWith("active-wo-") && !active.id.startsWith("labor-")) {
+        const nowIso = new Date().toISOString();
+        await supabase
+          .from("time_entries")
+          .update({
+            clock_out_at: nowIso,
+            approval_status: "complete",
+            notes: active.notes ?? `Force-closed for dispatch → ${input.nextStatus}`,
+            updated_at: nowIso,
+            updated_by: input.profile.id,
+          })
+          .eq("id", active.id)
+          .eq("approval_status", "active");
+      } else {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     }
   }
 
@@ -1955,7 +1966,7 @@ export async function applyDispatchStatusTransition(
 
   const activity = activityForDispatchStatus(input.nextStatus);
   let timeWarning: string | null = null;
-  if (activity) {
+  if (activity && !input.skipTimePunches) {
     try {
       await clockIn(supabase, {
         profile: input.profile,
