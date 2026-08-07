@@ -204,7 +204,7 @@ export default function SettingsPage() {
               <ClipboardList className="h-4 w-4" /> Contract Plans
             </Link>
             <Link href="/settings/vendor-matrix" className="btn btn-outline btn-sm gap-1">
-              <LayoutGrid className="h-4 w-4" /> Vendor Matrix
+              <LayoutGrid className="h-4 w-4" /> Matrix Settings
             </Link>
             <Link href="/settings/risk-controls" className="btn btn-outline btn-sm gap-1">
               <ShieldCheck className="h-4 w-4" /> Risk Controls
@@ -341,13 +341,13 @@ export default function SettingsPage() {
 
       <div className="card max-w-xl border border-base-300 bg-base-100 shadow-sm">
         <div className="card-body gap-2">
-          <h2 className="card-title text-base">Vendor Matrix</h2>
+          <h2 className="card-title text-base">Matrix Settings</h2>
           <p className="text-sm opacity-70">
             Customize ranking weights for third-party technicians and materials vendors (repair cost,
             response speed, star ratings) and prune thresholds for underperformers.
           </p>
           <Link href="/settings/vendor-matrix" className="btn btn-primary btn-sm w-fit gap-1">
-            <LayoutGrid className="h-4 w-4" /> Open Vendor Matrix Settings
+            <LayoutGrid className="h-4 w-4" /> Open Matrix Settings
           </Link>
         </div>
       </div>

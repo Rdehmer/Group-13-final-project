@@ -404,6 +404,7 @@ export default function ServiceVendorsPage() {
             category={matrixCategory}
             onCategoryChange={setMatrixCategory}
             canEditPreferred={isManager}
+            canCustomizeScorecard={profile.role === "administrator"}
             busyId={busyId}
             onTogglePreferred={(id, next) => void togglePreferred(id, next)}
             onDeactivate={(id) => void deactivateVendor(id)}

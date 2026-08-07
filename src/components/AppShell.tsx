@@ -42,7 +42,7 @@ function navHrefParts(href: string): { path: string; view: string | null } {
   return { path, view };
 }
 
-/** Path-only match for badges / coarse ΓÇ£under this sectionΓÇ¥ checks. */
+/** Path-only match for badges / coarse "under this section" checks. */
 function isPathActive(pathname: string, href: string) {
   const { path } = navHrefParts(href);
   if (path === CUSTOMER_HOME) {
@@ -59,7 +59,7 @@ function isPathActive(pathname: string, href: string) {
 
 /**
  * Leaf-nav active state.
- * Vendors ΓåÆ Vendor Matrix | Vendor Suppliers | Vendor Services
+ * Vendor -> Matrix | Service | Supplies
  * Matrix stays active for both product and service matrix URLs.
  */
 function isNavItemActive(pathname: string, search: string, href: string) {
@@ -71,7 +71,7 @@ function isNavItemActive(pathname: string, search: string, href: string) {
   ).get("view");
   const onMatrixView = currentView === "matrix";
 
-  // Vendor Matrix ΓÇö product or service matrix
+  // Vendor > Matrix — product or service matrix
   if (path === "/vendors" && hrefView === "matrix") {
     return (
       (pathname === "/vendors" && onMatrixView) ||
@@ -79,13 +79,13 @@ function isNavItemActive(pathname: string, search: string, href: string) {
     );
   }
 
-  // Vendor Suppliers ΓÇö product directory (and supplier detail pages)
+  // Vendor > Supplies — product directory (and supplier detail pages)
   if (path === "/vendors" && !hrefView) {
     if (pathname === "/vendors") return !onMatrixView;
     return pathname.startsWith("/vendors/") && !pathname.startsWith("/vendors/aging");
   }
 
-  // Vendor Services ΓÇö service directory (and service vendor detail pages)
+  // Vendor > Service — service directory (and service vendor detail pages)
   if (path === "/service-vendors") {
     if (pathname === "/service-vendors") return !onMatrixView;
     return pathname.startsWith("/service-vendors/");
@@ -634,7 +634,7 @@ function SidebarNavBody({
 
       <div className="eq-sidebar-foot">
         <p className="text-[11px] font-medium text-white/45">EquipmentIQ</p>
-        <p className="mt-0.5 text-[10px] text-white/30">Field Service ┬╖ Billing ┬╖ Operations</p>
+        <p className="mt-0.5 text-[10px] text-white/30">Field Service · Billing · Operations</p>
       </div>
     </>
   );

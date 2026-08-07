@@ -653,6 +653,8 @@ export type CompanySettings = {
   vendor_matrix_max_response_hours?: number | null;
   /** Hide prune-flagged vendors from the matrix list. */
   vendor_matrix_hide_pruned?: boolean;
+  /** Full admin customization for the vendor matrix scorecard (labels, toggles, prune). */
+  vendor_matrix_config?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };

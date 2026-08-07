@@ -430,6 +430,7 @@ export default function VendorsPage() {
             settings={matrixSettings}
             family="product"
             canEditPreferred={isManager}
+            canCustomizeScorecard={profile.role === "administrator"}
             busyId={busyId}
             onTogglePreferred={(id, next) => void togglePreferred(id, next)}
             onDeactivate={(id) => void deactivateVendor(id)}

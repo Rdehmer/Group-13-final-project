@@ -69,7 +69,7 @@ export const NAV_ITEMS: NavItem[] = [
           },
           {
             href: "/settings/vendor-matrix",
-            label: "Vendor Matrix",
+            label: "Matrix Settings",
             roles: ["administrator"],
           },
           {
@@ -178,7 +178,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/technician",
-        /** Managers see full schedule; techs land on “My Day” (label overridden in AppShell). */
+        /** Managers see full schedule; techs land on "My Day" (label overridden in AppShell). */
         label: "Technician Schedule",
         roles: ["service_manager", "technician"],
       },
@@ -193,6 +193,15 @@ export const NAV_ITEMS: NavItem[] = [
         label: "Dispatch",
         roles: ["service_manager"],
       },
+    ],
+  },
+  // ── Manager / tech / billing: Time ─────────────────────────────────
+  {
+    section: true,
+    href: "#nav-time",
+    label: "Time",
+    roles: ["service_manager", "technician", "billing"],
+    children: [
       {
         href: "/timesheets",
         label: "Timesheets",
@@ -205,7 +214,7 @@ export const NAV_ITEMS: NavItem[] = [
       },
       {
         href: "/time-off",
-        label: "Time Off Requests",
+        label: "Time Off",
         roles: ["service_manager", "technician"],
       },
     ],
@@ -223,51 +232,34 @@ export const NAV_ITEMS: NavItem[] = [
         roles: ["service_manager", "technician", "billing"],
       },
       {
-        href: "/vendors",
-        label: "Vendors",
-        roles: ["service_manager", "billing"],
-        children: [
-          {
-            href: "/vendors?view=matrix",
-            label: "Vendor Matrix",
-            roles: ["service_manager", "billing"],
-          },
-          {
-            href: "/vendors",
-            label: "Vendor Suppliers",
-            roles: ["service_manager", "billing"],
-          },
-          {
-            href: "/service-vendors",
-            label: "Vendor Services",
-            roles: ["service_manager", "billing"],
-          },
-        ],
-      },
-      {
         href: "/emergency-purchases",
-        /** Manager inbox for technician “I bought a part” emergency buys. */
+        /** Manager inbox for technician "I bought a part" emergency buys. */
         label: "Reimbursements",
         roles: ["service_manager"],
       },
     ],
   },
-  // ── Manager / billing: Vendors ─────────────────────────────────────
+  // ── Manager / billing / admin: Vendor ──────────────────────────────
   {
     section: true,
     href: "#nav-vendors",
-    label: "Vendors",
-    roles: ["service_manager", "billing"],
+    label: "Vendor",
+    roles: ["administrator", "service_manager", "billing"],
     children: [
       {
-        href: "/vendors",
-        label: "Product Vendors",
-        roles: ["service_manager", "billing"],
+        href: "/vendors?view=matrix",
+        label: "Matrix",
+        roles: ["administrator", "service_manager", "billing"],
       },
       {
         href: "/service-vendors",
-        label: "Service Vendors",
-        roles: ["service_manager", "billing"],
+        label: "Service",
+        roles: ["administrator", "service_manager", "billing"],
+      },
+      {
+        href: "/vendors",
+        label: "Supplies",
+        roles: ["administrator", "service_manager", "billing"],
       },
     ],
   },
@@ -417,10 +409,11 @@ export function homeForRole(role: UserRole): string {
 
 function itemMatchesHref(item: NavItem, href: string, role: UserRole): boolean {
   const path = href.split("?")[0] || href;
+  const itemPath = item.href.split("?")[0] || item.href;
   if (
     !item.section &&
     item.roles.includes(role) &&
-    (path === item.href || path.startsWith(`${item.href}/`))
+    (path === itemPath || path.startsWith(`${itemPath}/`))
   ) {
     return true;
   }
@@ -429,7 +422,7 @@ function itemMatchesHref(item: NavItem, href: string, role: UserRole): boolean {
 }
 
 export function canAccess(role: UserRole, href: string): boolean {
-  // Administrators retain deep-link access to ops pages even when the sidebar is lean.
+  // Administrators retain deep-link access to ops pages (sidebar is lean but not exclusive).
   if (role === "administrator") {
     const path = href.split("?")[0] || href;
     if (
